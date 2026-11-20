@@ -10,6 +10,8 @@ Use one coordinator for a batch and one owner per independent player-facing outc
 
 ## Start or resume
 
+Use the [coordinator prompt](templates/COORDINATOR.md) to start a new Echoes command-centre chat or resume a batch from its saved records.
+
 Read the [project rules](../../AGENTS.md) and [build and harness guide](../../README.md). Verify the checkout's physical path, origin, branch and HEAD, working changes, linked worktrees and open Echoes PRs. Check active Echoes chats for overlapping paths or a shared game, companion, database fixture or validation run. Resume the assigned owner when appropriate. An idle chat can still own a handoff.
 
 Keep the live [programme, ledger and checklist](templates) together **outside** the checkout. On Windows, the default is the current user's Documents folder under `Codex/Mirthwood-Echoes-Command-Centre`. Keep source and portable templates here and local task IDs, decisions and receipts in that folder. Record the user's current scope, authority, owners, dependencies, last evidence and next deliverable. Reuse existing records across restarts. Give each worker its own brief and exact released paths. Check new handoffs when reported.
@@ -45,12 +47,25 @@ py -3 scripts/validate-change.py status
 py -3 scripts/validate-change.py run --base origin/unstable
 ```
 
-A push uploads a branch. A draft PR presents its commits for review. Record an independent Claude verdict on the exact head. A merge puts that reviewed change on the target branch after user authorisation. The coordinator verifies the remote head, merge commit, measured outcome and open acceptance items. Fast-forward a clean shared checkout, remove the finished worktree with Git, and retire only verified merged branches. Archive finished chats under the applicable storage policy when authorised.
+A push uploads a branch. A draft PR presents its commits for review. Record an independent Claude verdict on the exact head. A merge puts that reviewed change on the target branch after user authorisation. The coordinator verifies the remote head, merge commit, measured outcome and open acceptance items.
+
+Before removing a finished worktree, retain its receipt outside the worktree. If deployment, tester distribution or a handoff needs the candidate, retain the complete run directory, including the server package. Verify the destination against the receipt, record both locations and the receipt's SHA-256 in the ledger, and keep the last verified copy. Fast-forward a clean shared checkout, remove the released worktree with Git and retire its verified merged branch. Archive finished chats under the applicable storage policy when authorised.
 
 ## How the module reaches the player
 
-`scripts/Build-Server.ps1` compiles the BepInEx module, publishes the server and launcher, and writes a versioned manifest and file hashes into `app/bundle` inside `Mirthwood-Echoes-Server`. For an authorised installation, pass the **same verified package** to its `Update-Server.ps1`. The installed server checks the manifest and installs `BepInEx/plugins/MirthwoodEchoes/Mirthwood.Echoes.dll` in the discovered Steam game directory. Module changes ship this way too. Compare the compiled, bundled and installed module hashes and distinguish a pending game exit or foreign-file conflict from a completed install.
+`scripts/Build-Server.ps1` compiles the BepInEx module, publishes the server and launcher, and writes a versioned manifest and file hashes into `app/bundle` inside `Mirthwood-Echoes-Server`. Use a fresh worktree for an installation or distribution candidate to exclude stale build outputs. The validator prints the path to `receipt.json`. The validated package is the sibling `Mirthwood-Echoes-Server` directory. For an authorised installation, select that run (or its verified retained copy) and pass the package's absolute path to its own updater.
+
+```powershell
+$run = Get-Item -LiteralPath ".work/validation/<run-id>"
+$receipt = Join-Path $run.FullName 'receipt.json'
+$package = Join-Path $run.FullName 'Mirthwood-Echoes-Server'
+py -3 scripts/validate-change.py verify-package $receipt $package
+if ($LASTEXITCODE) { throw 'The selected package failed verification.' }
+& (Join-Path $package 'Update-Server.ps1') -Package $package
+```
+
+The installed server checks the manifest and installs `BepInEx/plugins/MirthwoodEchoes/Mirthwood.Echoes.dll` in the discovered Steam game directory. Module changes ship this way too. Compare the compiled, bundled and installed module hashes and distinguish a pending game exit or foreign-file conflict from a completed install.
 
 The prepared WSL distro can host other products. Operate only the Echoes unit, console and database. Honour the companion's start, minimize and close behavior. For approved gameplay checks, use the copied-save harness, verify the original save and backup afterward, and distinguish native observation, fixture output and live-provider results. Keep a release candidate's package receipt until its deployment or handoff is complete.
 
-For a requested unstable tester distribution, deliver one `Mirthwood-Echoes-Server-<version>.zip` containing the qualified server, bundled module and loader, companion, updater, player instructions and the package's required assets. Verify the ZIP's contents against the package receipt. Record the source SHA, package SHA-256 and verified distribution link in the ledger. When the batch includes the user's Google Drive, use the Echoes destination and keep its sharing settings. Exclude worktrees, saves, provider configuration, databases and diagnostics.
+For a requested unstable tester distribution, deliver one `Mirthwood-Echoes-Server-<version>.zip` containing the qualified server, bundled module and loader, companion, updater, player instructions and the package's required assets. Extract the resulting ZIP to an empty directory and run `verify-package` on the extracted package with the retained receipt. Record the source SHA, ZIP SHA-256 and verified distribution link in the ledger. When the batch includes the user's Google Drive, use the Echoes destination and keep its sharing settings. Exclude worktrees, saves, provider configuration, databases and diagnostics.
