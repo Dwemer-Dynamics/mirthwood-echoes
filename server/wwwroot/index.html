@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#23362e">
+  <meta name="application-name" content="Mirthwood: Echoes">
+  <title>Mirthwood: Echoes</title>
+  <link rel="stylesheet" href="/style.css"><script defer src="/journal.js"></script><script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="mast"><div class="mast-inner">
+    <div class="wordmark"><h1>Mirthwood: <span>Echoes</span></h1></div>
+    <div class="launch-menu">
+      <button id="start-game" type="button" autofocus>Start Game</button>
+      <button id="exit-echoes" type="button">Exit</button>
+      <span id="launch-notice" role="status"></span>
+    </div>
+  </div></header>
+  <nav aria-label="Mirthwood: Echoes sections"><div class="nav-inner">
+    <a href="#options" data-tab="options">Options</a>
+    <a href="#providers" data-tab="providers">LLM Provider / Models</a>
+    <a href="#voices" data-tab="voices">VOICE TTS</a>
+    <a href="#characters" data-tab="characters">Characters</a>
+    <a href="#diagnostics" data-tab="diagnostics">Diagnostics</a>
+  </div></nav>
+  <div class="control-wrap" id="server-controls" hidden><div class="control-inner">
+    <button type="button" id="server-switch" role="switch" aria-label="Echoes server" aria-checked="false"><i aria-hidden="true"></i>Server <strong id="switch-state">Off</strong></button>
+    <span id="module-state"></span><button type="button" id="module-install">Check module</button>
+    <span id="control-notice" role="status"></span>
+  </div></div>
+  <main id="main" aria-busy="true"></main>
+  <div id="notice" role="status" aria-live="polite"></div>
+</body></html>

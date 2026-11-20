@@ -1,0 +1,17 @@
+**/bin/
+**/obj/
+.work/
+*.user
+__pycache__/
+.pytest_cache/
+.env
+.env.*
+*.savegame
+*.savegame.b
+*.log
+*.pdb
+*.dll
+*.dump
+*.zip
+!voices/Mirthwood-Echoes-Alignment-linux-x64.zip
+!voices/Mirthwood-Echoes-Voices.zip

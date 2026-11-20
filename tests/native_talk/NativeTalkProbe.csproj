@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>Mirthwood.Echoes.NativeTalkProbe</AssemblyName>
+    <GameDir Condition="'$(GameDir)' == ''">C:\SteamLibrary\steamapps\common\Mirthwood</GameDir>
+    <Managed>$(GameDir)\Mirthwood_Data\Managed</Managed>
+    <Loader>$(GameDir)\BepInEx\core</Loader>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="BepInEx" HintPath="$(Loader)\BepInEx.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="$(Loader)\0Harmony.dll" Private="false" />
+    <Reference Include="Assembly-CSharp" HintPath="$(Managed)\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="Assembly-ComponentSaveSystem" HintPath="$(Managed)\Assembly-ComponentSaveSystem.dll" Private="false" />
+    <Reference Include="UnityEngine" HintPath="$(Managed)\UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(Managed)\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="Unity.InputSystem" HintPath="$(Managed)\Unity.InputSystem.dll" Private="false" />
+    <Reference Include="Unity.TextMeshPro" HintPath="$(Managed)\Unity.TextMeshPro.dll" Private="false" />
+    <Reference Include="UnityEngine.UI" HintPath="$(Managed)\UnityEngine.UI.dll" Private="false" />
+    <Reference Include="UnityEngine.IMGUIModule" HintPath="$(Managed)\UnityEngine.IMGUIModule.dll" Private="false" />
+    <Reference Include="UnityEngine.ScreenCaptureModule" HintPath="$(Managed)\UnityEngine.ScreenCaptureModule.dll" Private="false" />
+    <Reference Include="Newtonsoft.Json" HintPath="$(Managed)\Newtonsoft.Json.dll" Private="false" />
+    <Reference Include="netstandard" HintPath="$(Managed)\netstandard.dll" Private="false" />
+  </ItemGroup>
+</Project>

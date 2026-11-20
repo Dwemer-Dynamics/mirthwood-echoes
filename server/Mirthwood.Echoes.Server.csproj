@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Description>The Mirthwood: Echoes companion server.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../shared/ActionNotation.cs" Link="ActionNotation.cs" />
+    <Compile Include="../shared/VoiceAssignment.cs" Link="VoiceAssignment.cs" />
+    <PackageReference Include="Npgsql" Version="8.0.9" />
+  </ItemGroup>
+</Project>

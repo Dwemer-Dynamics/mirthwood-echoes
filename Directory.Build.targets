@@ -1,0 +1,19 @@
+<Project>
+  <Target Name="GenerateModIdentity" BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <ModIdentitySource>$(IntermediateOutputPath)ModIdentity.g.cs</ModIdentitySource>
+    </PropertyGroup>
+    <ItemGroup>
+      <_IdentityLine Include="internal static class ModIdentity" />
+      <_IdentityLine Include="{" />
+      <_IdentityLine Include="    public const string Name = &quot;$(Product)&quot;%3B" />
+      <_IdentityLine Include="    public const string Id = &quot;$(ModId)&quot;%3B" />
+      <_IdentityLine Include="    public const string Version = &quot;$(Version)&quot;%3B" />
+      <_IdentityLine Include="}" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(ModIdentitySource)" Lines="@(_IdentityLine)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <Compile Include="$(ModIdentitySource)" />
+    </ItemGroup>
+  </Target>
+</Project>

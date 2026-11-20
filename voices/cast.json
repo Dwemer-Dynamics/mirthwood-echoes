@@ -1,0 +1,231 @@
+{
+  "version": 1,
+  "language": "English",
+  "referenceText": "When the rain clears, I'll carry the fresh bread across the bridge and leave a warm loaf by your door.",
+  "voices": [
+    {
+      "id": "us-m01",
+      "name": "Alder",
+      "accent": "American",
+      "sex": "Male",
+      "direction": "Young adult from the Pacific Northwest. Clear mid tenor, easy soft attack, relaxed falling cadence."
+    },
+    {
+      "id": "us-m02",
+      "name": "Bram",
+      "accent": "American",
+      "sex": "Male",
+      "direction": "Middle-aged Upper Midwestern American. Round mid-low baritone, deliberate vowels and friendly steady pacing."
+    },
+    {
+      "id": "us-m03",
+      "name": "Clay",
+      "accent": "American",
+      "sex": "Male",
+      "direction": "Adult from the American upland South. Warm smooth bass-baritone with a light natural drawl and unhurried consonants."
+    },
+    {
+      "id": "us-m04",
+      "name": "Ellis",
+      "accent": "American",
+      "sex": "Male",
+      "direction": "Younger Northeastern American. Lighter forward tenor, clear rhotic speech and a quick, attentive rhythm."
+    },
+    {
+      "id": "us-m05",
+      "name": "Hollis",
+      "accent": "American",
+      "sex": "Male",
+      "direction": "Older American from the Mountain West. Low, dry, slightly textured speaking voice with generous pauses."
+    },
+    {
+      "id": "us-m06",
+      "name": "Reed",
+      "accent": "American",
+      "sex": "Male",
+      "direction": "Adult Mid-Atlantic American. Clear, resonant middle register with measured rhythm and gentle emphasis."
+    },
+    {
+      "id": "us-f01",
+      "name": "Wren",
+      "accent": "American",
+      "sex": "Female",
+      "direction": "Young adult on the American West Coast. Bright, clear middle-to-high register, flowing plain conversational delivery."
+    },
+    {
+      "id": "us-f02",
+      "name": "Mara",
+      "accent": "American",
+      "sex": "Female",
+      "direction": "Middle-aged Great Lakes American. Grounded alto with clear consonants and patient, even phrasing."
+    },
+    {
+      "id": "us-f03",
+      "name": "June",
+      "accent": "American",
+      "sex": "Female",
+      "direction": "Adult in the American upland South. Warm lyrical middle register with a mild drawl and an easy rhythm."
+    },
+    {
+      "id": "us-f04",
+      "name": "Nell",
+      "accent": "American",
+      "sex": "Female",
+      "direction": "Older Northeastern American. Low, slightly husky adult voice with economical phrasing and narrow pitch movement."
+    },
+    {
+      "id": "us-f05",
+      "name": "Sylvie",
+      "accent": "American",
+      "sex": "Female",
+      "direction": "Adult American from the Rocky Mountain region. Airy light mezzo, steady delivery and a gentle question-like lift."
+    },
+    {
+      "id": "us-f06",
+      "name": "Adeline",
+      "accent": "American",
+      "sex": "Female",
+      "direction": "Adult from the American Mid-Atlantic. Full, clear contralto, precise diction and an alert speaking pace."
+    },
+    {
+      "id": "gb-m01",
+      "name": "Rowan",
+      "accent": "British",
+      "sex": "Male",
+      "direction": "British from southern England. Non-rhotic southern English speech; mellow, low middle register, calm measured pace."
+    },
+    {
+      "id": "gb-m02",
+      "name": "Kit",
+      "accent": "British",
+      "sex": "Male",
+      "direction": "British from northern England. A natural Yorkshire English accent, lighter tenor, gently brisk and conversational."
+    },
+    {
+      "id": "gb-f01",
+      "name": "Tamsin",
+      "accent": "British",
+      "sex": "Female",
+      "direction": "British from southern England. Clear lightly non-rhotic southern English, soft mature alto with deliberate phrasing."
+    },
+    {
+      "id": "gb-f02",
+      "name": "Fern",
+      "accent": "British",
+      "sex": "Female",
+      "direction": "British from northern England. A natural North Yorkshire English accent, young adult mezzo with a bright, direct cadence."
+    },
+    {
+      "id": "es-m01",
+      "name": "Mateo",
+      "accent": "Spanish",
+      "sex": "Male",
+      "direction": "Native Castilian Spanish speaker from Madrid speaking fluent English with a clearly audible Spanish accent. Warm adult baritone, calm even rhythm."
+    },
+    {
+      "id": "es-m02",
+      "name": "Rafael",
+      "accent": "Spanish",
+      "sex": "Male",
+      "direction": "Native speaker of Spanish from southern Spain speaking fluent English with a natural Spanish accent. Mature low tenor, mellow and lightly textured."
+    },
+    {
+      "id": "es-f01",
+      "name": "Ines",
+      "accent": "Spanish",
+      "sex": "Female",
+      "direction": "Native Castilian Spanish speaker from central Spain speaking fluent English with a clearly audible Spanish accent. Warm light alto, evenly paced."
+    },
+    {
+      "id": "es-f02",
+      "name": "Alba",
+      "accent": "Spanish",
+      "sex": "Female",
+      "direction": "Native Spanish speaker from southern Spain speaking fluent English with a natural Spanish accent. Clear adult mezzo, lively but measured."
+    },
+    {
+      "id": "de-m01",
+      "name": "Oskar",
+      "accent": "German",
+      "sex": "Male",
+      "direction": "Native German speaker from northern Germany speaking fluent English with a clearly audible German accent. Clear mid tenor, precise and relaxed."
+    },
+    {
+      "id": "de-m02",
+      "name": "Felix",
+      "accent": "German",
+      "sex": "Male",
+      "direction": "Native German speaker from southern Germany speaking fluent English with a natural German accent. Mature, warm lower baritone with rounded resonant vowels."
+    },
+    {
+      "id": "de-f01",
+      "name": "Anke",
+      "accent": "German",
+      "sex": "Female",
+      "direction": "Native German speaker from northern Germany speaking fluent English with a clearly audible German accent. Full warm adult alto, patient diction."
+    },
+    {
+      "id": "de-f02",
+      "name": "Leni",
+      "accent": "German",
+      "sex": "Female",
+      "direction": "Native German speaker from southern Germany speaking fluent English with a natural German accent. Young adult mezzo, light and conversational."
+    },
+    {
+      "id": "ru-m01",
+      "name": "Lev",
+      "accent": "Russian",
+      "sex": "Male",
+      "direction": "Native Russian speaker from Moscow speaking fluent English with a clearly audible Russian accent. Quiet resonant adult baritone, measured and warm."
+    },
+    {
+      "id": "ru-m02",
+      "name": "Anton",
+      "accent": "Russian",
+      "sex": "Male",
+      "direction": "Native Russian speaker from Saint Petersburg speaking fluent English with a natural Russian accent. Clear adult mid tenor, conversational and brisk."
+    },
+    {
+      "id": "ru-f01",
+      "name": "Vera",
+      "accent": "Russian",
+      "sex": "Female",
+      "direction": "Native Russian speaker from Moscow speaking fluent English with a clearly audible Russian accent. Low adult alto, gentle and steady."
+    },
+    {
+      "id": "ru-f02",
+      "name": "Nina",
+      "accent": "Russian",
+      "sex": "Female",
+      "direction": "Native Russian speaker from Saint Petersburg speaking fluent English with a natural Russian accent. Young adult mezzo, light pitch movement and clear speech."
+    },
+    {
+      "id": "cn-m01",
+      "name": "Jian",
+      "accent": "Chinese",
+      "sex": "Male",
+      "direction": "A Mandarin-speaking man from mainland China speaking fluent English with a natural, audible Mandarin-influenced accent. Warm middle register, clear and measured."
+    },
+    {
+      "id": "cn-m02",
+      "name": "Wai",
+      "accent": "Chinese",
+      "sex": "Male",
+      "direction": "A Cantonese-speaking man from Hong Kong speaking fluent English with a natural, audible Cantonese-influenced accent. Mature lower register with an easy pace."
+    },
+    {
+      "id": "cn-f01",
+      "name": "Lin",
+      "accent": "Chinese",
+      "sex": "Female",
+      "direction": "A Mandarin-speaking woman from mainland China speaking fluent English with a natural, audible Mandarin-influenced accent. Clear light mezzo and thoughtful rhythm."
+    },
+    {
+      "id": "cn-f02",
+      "name": "Yan",
+      "accent": "Chinese",
+      "sex": "Female",
+      "direction": "A Cantonese-speaking woman from Hong Kong speaking fluent English with a natural, audible Cantonese-influenced accent. Warm adult alto, relaxed and conversational."
+    }
+  ]
+}

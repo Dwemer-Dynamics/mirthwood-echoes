@@ -1,0 +1,33 @@
+name: Echoes promotion and version
+on:
+  pull_request:
+    branches: [unstable, dev, mirthwood-echoes]
+permissions:
+  contents: read
+jobs:
+  channels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify source channel and product identity
+        env:
+          SOURCE_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from xml.etree import ElementTree
+
+          target = os.environ["GITHUB_BASE_REF"]
+          upstream = {"dev": "unstable", "mirthwood-echoes": "dev"}.get(target)
+          if upstream and (os.environ["GITHUB_HEAD_REF"] != upstream
+                           or os.environ["SOURCE_REPO"] != os.environ["GITHUB_REPOSITORY"]):
+              raise SystemExit(f"Promote {upstream} to {target} from this repository.")
+          identity = ElementTree.parse("Directory.Build.props").find("PropertyGroup")
+          if (identity.findtext("ModId") != "mirthwood-echoes"
+                  or identity.findtext("Product") != "Mirthwood: Echoes"
+                  or not re.fullmatch(r"\d+\.\d+\.\d+", identity.findtext("Version", ""))):
+              raise SystemExit("Check the shared Echoes module and server identity.")
+          PY

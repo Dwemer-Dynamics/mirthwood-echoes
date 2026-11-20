@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <GameManaged>$(GameDir)\Mirthwood_Data\Managed</GameManaged>
+    <AssemblyName>Mirthwood.Echoes</AssemblyName>
+    <RootNamespace>Mirthwood.Echoes</RootNamespace>
+    <Description>The Mirthwood: Echoes game module for BepInEx.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../shared/ActionNotation.cs" Link="ActionNotation.cs" />
+    <Compile Include="../shared/VoiceAssignment.cs" Link="VoiceAssignment.cs" />
+    <Reference Include="BepInEx" HintPath="$(LoaderCore)\BepInEx.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="$(LoaderCore)\0Harmony.dll" Private="false" />
+    <Reference Include="Assembly-CSharp" HintPath="$(GameManaged)\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="FMODUnity" HintPath="$(GameManaged)\FMODUnity.dll" Private="false" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="Assembly-CSharp-firstpass" HintPath="$(GameManaged)\Assembly-CSharp-firstpass.dll" Private="false" />
+    <Reference Include="Febucci.TextAnimator.Runtime" HintPath="$(GameManaged)\Febucci.TextAnimator.Runtime.dll" Private="false" />
+    <Reference Include="Assembly-ComponentSaveSystem" HintPath="$(GameManaged)\Assembly-ComponentSaveSystem.dll" Private="false" />
+    <Reference Include="Newtonsoft.Json" HintPath="$(GameManaged)\Newtonsoft.Json.dll" Private="false" />
+    <Reference Include="spine-csharp" HintPath="$(GameManaged)\spine-csharp.dll" Private="false" />
+    <Reference Include="UnityEngine" HintPath="$(GameManaged)\UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(GameManaged)\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="UnityEngine.InputLegacyModule" HintPath="$(GameManaged)\UnityEngine.InputLegacyModule.dll" Private="false" />
+    <Reference Include="UnityEngine.IMGUIModule" HintPath="$(GameManaged)\UnityEngine.IMGUIModule.dll" Private="false" />
+    <Reference Include="UnityEngine.UnityWebRequestModule" HintPath="$(GameManaged)\UnityEngine.UnityWebRequestModule.dll" Private="false" />
+    <Reference Include="UnityEngine.UI" HintPath="$(GameManaged)\UnityEngine.UI.dll" Private="false" />
+    <Reference Include="UnityEngine.UIModule" HintPath="$(GameManaged)\UnityEngine.UIModule.dll" Private="false" />
+    <Reference Include="UnityEngine.TextRenderingModule" HintPath="$(GameManaged)\UnityEngine.TextRenderingModule.dll" Private="false" />
+    <Reference Include="UnityEngine.ScreenCaptureModule" HintPath="$(GameManaged)\UnityEngine.ScreenCaptureModule.dll" Private="false" />
+    <Reference Include="Unity.TextMeshPro" HintPath="$(GameManaged)\Unity.TextMeshPro.dll" Private="false" />
+    <Reference Include="netstandard" HintPath="$(GameManaged)\netstandard.dll" Private="false" />
+  </ItemGroup>
+</Project>

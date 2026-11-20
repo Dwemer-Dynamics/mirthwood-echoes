@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework><OutputType>Exe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../launcher/ProviderClipboard.cs" Link="ProviderClipboard.cs" />
+    <Using Include="Mirthwood.Echoes.Tests.PasteFixture" Alias="Clipboard" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
+  </ItemGroup>
+  <Target Name="UseWinFormsWebView" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup><Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" /></ItemGroup>
+  </Target>
+</Project>

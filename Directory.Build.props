@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <Version>0.9.0</Version>
+    <Product>Mirthwood: Echoes</Product>
+    <ModId>mirthwood-echoes</ModId>
+    <AssemblyTitle>$(Product)</AssemblyTitle>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>
