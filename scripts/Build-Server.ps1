@@ -10,7 +10,7 @@ $root=Split-Path $PSScriptRoot
 $identity=([xml](Get-Content -Raw -LiteralPath (Join-Path $root 'Directory.Build.props'))).Project.PropertyGroup
 if(!$Version){$Version=$identity.Version}
 $work=Join-Path $root '.work'
-$package=if($PackageDirectory){[IO.Path]::GetFullPath($PackageDirectory)}else{Join-Path $work 'Mirthwood-Echoes-Server'}
+$package=if($PackageDirectory){$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PackageDirectory)}else{Join-Path $work 'Mirthwood-Echoes-Server'}
 if ((Get-FileHash -LiteralPath $LoaderZip).Hash -ne '93DD0EB72106E42D84FCA0B35ADD863A59ABFB9A5D894D942DF4C41633CE5434') { throw 'The supplied loader differs from the verified Mirthwood archive.' }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $loader=Join-Path $work 'loader'

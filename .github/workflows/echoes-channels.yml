@@ -2,6 +2,7 @@ name: Echoes promotion and version
 on:
   pull_request:
     branches: [unstable, dev, mirthwood-echoes]
+    types: [opened, reopened, synchronize, edited, ready_for_review]
 permissions:
   contents: read
 jobs:
