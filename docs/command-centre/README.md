@@ -10,6 +10,8 @@ Use one coordinator for a batch and one owner per independent player-facing outc
 
 ## Start or resume
 
+Use the [coordinator prompt](templates/COORDINATOR.md) to start a new Echoes command-centre chat or resume a batch from its saved records.
+
 Read the [project rules](../../AGENTS.md) and [build and harness guide](../../README.md). Verify the checkout's physical path, origin, branch and HEAD, working changes, linked worktrees and open Echoes PRs. Check active Echoes chats for overlapping paths or a shared game, companion, database fixture or validation run. Resume the assigned owner when appropriate. An idle chat can still own a handoff.
 
 Keep the live [programme, ledger and checklist](templates) together **outside** the checkout. On Windows, the default is the current user's Documents folder under `Codex/Mirthwood-Echoes-Command-Centre`. Keep source and portable templates here and local task IDs, decisions and receipts in that folder. Record the user's current scope, authority, owners, dependencies, last evidence and next deliverable. Reuse existing records across restarts. Give each worker its own brief and exact released paths. Check new handoffs when reported.
