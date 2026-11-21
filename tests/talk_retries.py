@@ -139,12 +139,13 @@ def check_resident_speech(api, model, say, path, common):
 
 def check_topic_flow(api, model, say, common):
     history=[]
-    for words,cue,base,beat in (
-        ("How do you spend a quiet evening?","playing chess","I set out the board.","The carved knights are my favourites."),
-        ("What draws you to it?","playing chess","Finding a way out with one piece left.",""),
-        ("I enjoy a game too.","exploring old ruins","Then I'd fancy a match.","I'd also love to see inside the old ruins."),
-        ("What would you look for inside?","playing chess","A mark left by the mason.",""),
-        ("Do the fields need rain?","talking about hobbies","The soil could use a soaking.",""),
+    for words,cue,base,beat,fresh in (
+        ("How do you spend a quiet evening?","playing chess","I set out the board.","The carved knights are my favourites.",True),
+        ("What draws you to it?","playing chess","Finding a way out with one piece left.","I do enjoy chess.",False),
+        ("I enjoy a game too.","exploring old ruins","Then I'd fancy a match.","I'd also love to see inside the old ruins.",True),
+        ("What would you look for inside?","talking about hobbies","A mark left by the mason.","",True),
+        ("Do the fields need rain?","playing chess","The soil could use a soaking.","Wet days suit the chessboard.",False),
+        ("Would you take a free rook?","talking about hobbies","Only after looking for the trap.","",True),
     ):
         turn=dict(say(words),returnCues={"Leisure":cue,"Deep":"asking a question"})
         model.samples[words]=json.dumps(dict(common,warm=base,neutral=base,cool=base,
@@ -154,12 +155,16 @@ def check_topic_flow(api, model, say, common):
         assert ready["state"]=="ready"
         prompt=model.calls[-1]["messages"][0]["content"]
         recall=json.JSONDecoder().raw_decode(prompt.split("\nRecall: ",1)[1])[0]["recentSpeech"]
-        if history:
-            assert [(r["player"],r["npc"]) for r in recall[-len(history):]]==history
+        expected_history=history[-4:]
+        if expected_history:
+            assert [(r["player"],r["npc"]) for r in recall[-len(expected_history):]]==expected_history
         assert len(recall)<=4
+        offered=json.loads(prompt.split("\nReturn cards: ",1)[1])
+        assert ("Leisure" in offered)==fresh and ("Leisure" in ready["cardChoices"])==fresh
+        assert all("voicedCue" not in row for row in recall)
         event=dict(kind="followup",action="Leisure",cue=cue)
         done=api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=event))
-        assert done["reply"]==(base+" "+beat).strip() and api("/api/dialogue/prepare",turn)==done
+        assert done["reply"]==(base+" "+(beat if fresh else "")).strip() and api("/api/dialogue/prepare",turn)==done
         assert len(model.calls)==before+1
         history.append((words,done["reply"]))
 

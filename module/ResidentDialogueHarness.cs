@@ -89,7 +89,8 @@ namespace Mirthwood.Echoes
                     "What is it about chess that keeps you at the board?",
                     "That makes sense. I enjoy a game of chess myself.",
                     "What would you hope to find inside one of those ruins?",
-                    "Speaking of tomorrow, do you think the fields could use a little rain?"
+                    "Speaking of tomorrow, do you think the fields could use a little rain?",
+                    "Back to chess for a moment. If your opponent left a rook unguarded, would you take it at once?"
                 }:new[]{
                     "I miss my brother. We used to mend fishing nets together. What would you do with his old net?",
                     "It's the quiet by the water that I miss most. Could we sit with that a moment?",
@@ -97,7 +98,11 @@ namespace Mirthwood.Echoes
                 };
                 foreach(string words in messages){
                     if(topicFlow){
-                        replayLeisureCue=turns.Count<2?"Averil talks about playing chess":turns.Count==2?"Averil talks about exploring old ruins":null;
+                        switch(turns.Count){
+                            case 0: case 1: case 4: replayLeisureCue="Averil talks about playing chess";break;
+                            case 2: replayLeisureCue="Averil talks about exploring old ruins";break;
+                            default: replayLeisureCue=null;break;
+                        }
                         if(replayLeisureCue!=null)npc.CharacterInfo.personality.values[5]=1f;
                     }
                     bool opening=!Visible;

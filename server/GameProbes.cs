@@ -252,11 +252,14 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
         }
         if(p.Mode=="dialogueflow"){
             var turns=input["turns"] as JsonArray??[];
-            Check("Five spoken and recovered turns with Averil",input.S("resident")=="Averil"&&turns.Count==5&&
+            Check("Six spoken and recovered turns with Averil",input.S("resident")=="Averil"&&turns.Count==6&&
                 turns.All(t=>t?["matched"]?.GetValue<bool>()==true),input.S("probeError"));
-            string[] cues=["Averil talks about playing chess","Averil talks about playing chess","Averil talks about exploring old ruins"];
-            Check("Recorded Leisure draws followed by unrestricted native draws",turns.Take(3).Select(t=>t?["handoff"].S("cue")).SequenceEqual(cues)&&
-                turns.Skip(3).All(t=>t?["replayedCue"]==null),input.S("probeError"));
+            const string chess="Averil talks about playing chess";
+            string?[] replay=[chess,chess,"Averil talks about exploring old ruins",null,chess,null];
+            Check("Replayed and unrestricted native draws",turns.Select(t=>(string?)t?["replayedCue"]).SequenceEqual(replay)&&
+                turns.All(t=>t?["replayedCue"]==null||t.S("replayedCue")==t?["handoff"].S("cue")),input.S("probeError"));
+            string rain=turns.Count>4?turns[4].S("reply"):"";
+            Check("A repeated chess draw lets the rain answer stand",rain.Length>0&&!rain.Contains("chess",StringComparison.OrdinalIgnoreCase),rain);
         }
         if(p.Mode=="quests"){
             Check("Talk recovery and native Speak through a backend outage",input["outage"]?["passed"]?.GetValue<bool>()==true,input.S("probeError"));

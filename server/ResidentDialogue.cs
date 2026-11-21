@@ -18,7 +18,7 @@ public sealed partial class Conversation
         Read recentSpeech in order, keeping each speaker's words separate. Something you already told the player is shared knowledge. Your own repeated mention of a subject is no evidence the player wants more of it.
         Does the player's last line still need an answer? Answer their actual question or take up the detail they offered. For a follow-up, go straight to a fresh reason, experience grounded in recall, or concrete opinion. If the world fact is unknown, a resident can still say what they would look for. Let a request for quiet stand.
         An ordinary agreement needs at most one short clause of acknowledgment. Pick a single reaction with some character. Cut a second sentence that merely confirms the same feeling. When the player has already heard that you enjoy something, start with the particular thing about it that holds your interest.
-        Respect a correction, "you already said that", or a change of subject immediately. Let that point rest until the player brings it back. A later question about it invites a real answer. Before speaking, drop any sentence whose only contribution is a paraphrase of a point you already made. Keep necessary facts consistent when the player asks for them again.
+        Respect a correction, "you already said that", or a change of subject immediately. Let that point rest until the player brings it back. A later question about it invites a full answer in the base reply, including when that subject has no continuation card. Before speaking, drop any sentence whose only contribution is a paraphrase of a point you already made. Keep necessary facts consistent when the player asks for them again.
         """;
     const string Steering = """
         Is there a natural opening for the card Mirthwood draws? Plan each supplied card independently after the base answer. For each usable card write one short continuation under its own key in "continuations". Only the chosen card will be heard.
@@ -54,6 +54,20 @@ public sealed partial class Conversation
                 throw new UserError("Invalid return card description.");
         }
         return cues;
+    }
+    static JsonObject? FreshReturnCues(JsonObject? cards,JsonArray recentSpeech)
+    {
+        // The game still draws from its full deck. A recently used cue can receive
+        // a direct player-led answer without appending the same suggestion again.
+        var heard=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach(var row in recentSpeech.OfType<JsonObject>()){
+            if(row.Remove("voicedCue",out var cue)&&cue!=null)heard.Add(cue.GetValue<string>());
+        }
+        if(cards==null||heard.Count==0)return cards;
+        var fresh=new JsonObject();
+        foreach(var (card,cue) in cards)
+            if(!heard.Contains(cue!.GetValue<string>()))fresh[card]=cue.DeepClone();
+        return fresh;
     }
     static JsonObject? ReadContinuations(JsonObject packet,JsonObject? cues,string topic,string resident)
     {

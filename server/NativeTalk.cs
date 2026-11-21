@@ -34,7 +34,9 @@ public sealed partial class Conversation
         var timer=Stopwatch.StartNew();
         try{
             var head=CueHistory.OptionalId(binding?["head"]);
-            var facts=await Recall(c,a,day,opt,words,binding!=null,head,recentTurns:4);
+            var cues=ReadReturnCues(n["returnCues"]);
+            var facts=await Recall(c,a,day,opt,words,binding!=null,head,recentTurns:4,includeVoicedCues:cues!=null);
+            var freshCues=FreshReturnCues(cues,facts["recentSpeech"]!.AsArray());
             if(cue!=null)facts["currentInteraction"]=cue;
             if(binding?["cards"] is JsonArray cards && cards.Count>0)facts["availableExtraCards"]=cards.DeepClone();
             var disposition=await journal.DialogueProfile(c,a,day,actor.AsObject(),binding!=null,head);
@@ -44,8 +46,7 @@ public sealed partial class Conversation
             var impression=TalkImpressions.ForResident(n["playerImpression"],words);
             var prompt=TalkInstructions+"\n"+SpokenStyle+"\n"+ConversationFlow+"\n"+TalkEndings.Instructions+"\n"+TalkTopics.Instructions+"\nGame day "+day+". Character: "+disposition.ToJsonString()+"\nRecall: "+facts.ToJsonString();
             if(impression!=null)prompt+="\n"+TalkImpressions.Instructions+"\nPlayer impression: "+impression.ToJsonString();
-            var cues=ReadReturnCues(n["returnCues"]);
-            if(cues!=null)prompt+="\n"+Steering+"\nReturn cards: "+cues.ToJsonString();
+            if(freshCues!=null)prompt+="\n"+Steering+"\nReturn cards: "+freshCues.ToJsonString();
             if(cue?.S("kind")=="card")prompt+="\nThe resident was about to act on currentInteraction.observedAction. Work it into their words if it still fits what the player said.";
             var wire=new StringBuilder();
             var model=await providers.Generate(opt with {ReplyTokens=3*opt.ReplyTokens+DialogueOutput.AnnotationTokens+48+36*(cues?.Count??0)},prompt,words,part=>{
@@ -69,7 +70,7 @@ public sealed partial class Conversation
                 var lines=TalkEndings.Prepare(answer,farewells?[key]);
                 choices[key]=lines.Continuing;endingChoices[key]=lines.Ending;
             }
-            var continuations=ReadContinuations(packet,cues,topic,actor.S("name"));
+            var continuations=ReadContinuations(packet,freshCues,topic,actor.S("name"));
             // A short acceptance can refer to a proposal in the preceding two exchanges.
             var recentProposals=facts["recentSpeech"]!.AsArray().TakeLast(2).ToArray();
             var saved=new {topic,choices,endingChoices,continuations,returnCues=cues,playerImpression=impression,commitments=packet["commitments"],recentSpeech=recentProposals,provider=opt.Provider,model,opt.PositiveDesireCostPercent};
@@ -155,6 +156,8 @@ public sealed partial class Conversation
         // Old prepared turns keep the wording that their client may already have shown.
         var endings=handoff.S("kind")=="ended"?p["endingChoices"] as JsonObject:null;
         var reply=endings==null?WithContinuation(p,key,handoff?.S("action")):endings.S(key);
+        var selectedBeat=p["continuations"].S(handoff.S("action"));
+        bool delivered=handoff.S("kind")=="followup"&&selectedBeat.Length!=0&&reply.EndsWith(selectedBeat,StringComparison.OrdinalIgnoreCase);
         var marks=p["commitments"]?.DeepClone();
         if(marks is JsonArray entries)
             foreach(var mark in entries.ToArray()){
@@ -177,7 +180,7 @@ public sealed partial class Conversation
                 talk=(talk-'choices'-'endingChoices'-'continuations'-'returnCues'-'commitments'-'recentSpeech') || @handoff::jsonb,total_ms=least(2147483647,extract(epoch FROM (clock_timestamp()-started))*1000)::int
             WHERE id=@id
             """,("reply",reply),("branch",branch),("review",review.Status),("id",id),
-            ("handoff",new JsonObject{["handoff"]=handoff?.DeepClone(),["spokenReturn"]=p["continuations"] is JsonObject}.ToJsonString()));
+            ("handoff",new JsonObject{["handoff"]=handoff?.DeepClone(),["spokenReturn"]=p["continuations"] is JsonObject,["deliveredContinuation"]=delivered}.ToJsonString()));
         await update.ExecuteNonQueryAsync();await tx.CommitAsync();
         if(handoff!=null)p["handoff"]=handoff;
         row["state"]="complete";row["reply"]=reply;row["reaction"]=branch;return PublicTalk(row);
