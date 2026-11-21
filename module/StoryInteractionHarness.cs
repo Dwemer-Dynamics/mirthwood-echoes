@@ -159,6 +159,7 @@ namespace Mirthwood.Echoes
                 var reply=(IEnumerator)AccessTools.Method(typeof(PlayerChat),"ReceiveChat",new[]{typeof(DnaData.Dna),typeof(ChatController),typeof(bool)}).Invoke(chat,new object[]{card,brain,false});
                 while(reply.MoveNext()){}
                 Require(!ChatMenuController.IsOpen()&&!Visible&&NativeCues.Take(npc)?["remark"]?["kind"]?.ToString()=="card","An NPC approach reopened the old deck or lost its subject.");
+                DismissPassingLine();
             });
             yield return PassingGestures(report,npc);
             Case(report,"Special conversation cards match the native unlocked deck",()=>{

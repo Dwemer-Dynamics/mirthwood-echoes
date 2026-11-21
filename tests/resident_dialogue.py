@@ -163,6 +163,10 @@ def run(package):
             time.sleep(.5)
         write(work/"journal.json",entries)
         subprocess.run(["node","tests/journal_browser.cjs",str(work),"--averil"],check=True,timeout=90)
+        log=(work/"server.log").read_text(encoding="utf-8",errors="replace")
+        calls={kind:log.count("Echoes Codex "+kind+" accepted: model=gpt-6.1-terra effort=medium") for kind in ("turn","opener")}
+        write(work/"calls.json",calls)
+        assert calls=={"turn":len(result["turns"]),"opener":len(result["openers"])}, calls
     finally:
         if launched:
             (session/"quit.request").write_text(token)

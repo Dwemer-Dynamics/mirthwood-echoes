@@ -110,15 +110,16 @@ namespace Mirthwood.Echoes
                     if(remark.Kind=="address")remark.Bubble.Show(remark.Line);
                     else remark.Bubble.Show(value,partial);
                     remark.Expires=Time.unscaledTime+8f;
-                    if(!remark.Heard&&(remark.Kind=="address"||remark.CanReply&&(!partial||value!="…"))){
+                    if(remark.Kind=="address"&&!remark.Heard){
                         remark.Heard=true;
-                        if(remark.Kind=="address")remark.EventId=NativeCues.Fact(remark.Speaker,"address",remark.Line,false);
+                        remark.EventId=NativeCues.Fact(remark.Speaker,"address",remark.Line,false);
                         if(remark.EventId!=null)NativeCues.Recent(remark.Speaker,remark.EventId,remark.Kind,remark.Line);
                     }
                 });
                 passing.Bubble.Note(passing.CanReply?"Enter to reply":"");
                 passing.Expires=Time.unscaledTime+8f;
                 passing.Frame=Time.frameCount;
+                if(passing.CanReply&&passing.Kind!="address")NativeCues.Recent(passing.Speaker,passing.EventId,passing.Kind,passing.Line);
             }
             if(!passing.Bubble.Follow()||Input.GetKeyDown(KeyCode.Escape)){DismissPassingLine();return;}
             var menu=PlayerCharacterController.Instance.GetComponent<PlayerChat>()?.ContextMenuUI;

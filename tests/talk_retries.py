@@ -104,7 +104,7 @@ def check_talk_retries(api, model, say, twin, checked, legacy_packet):
 
 def check_resident_speech(api, model, say, path, common):
     cues={"Funny Joke":"Averil jokes about the tavern cook","Flirt":"Averil flirts nervously","Deep":"Averil asks about loss"}
-    opening="The bread would keep a cartwheel turning."
+    opening="*I smile at the lad who jokes about his bread.* The bread would keep a cartwheel turning."
     joke="The cook asked for a second opinion. The millstone chipped a tooth."
     promise="I will bring the cart tomorrow."
     for card,beat in (("Funny Joke",joke),("Flirt","*I smooth my sleeve.* I rather hoped you'd stay."),("Deep","")):
