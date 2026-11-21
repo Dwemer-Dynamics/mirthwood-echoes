@@ -16,15 +16,19 @@ public sealed partial class Conversation
         """;
     const string ConversationFlow = """
         Read recentSpeech in order, keeping each speaker's words separate. Something you already told the player is shared knowledge. Your own repeated mention of a subject is no evidence the player wants more of it.
-        Does the player's last line still need an answer? Answer their actual question or take up the detail they offered. For a follow-up, go straight to a fresh reason, experience grounded in recall, or concrete opinion. If the world fact is unknown, a resident can still say what they would look for. Let a request for quiet stand.
-        An ordinary agreement needs at most one short clause of acknowledgment. Pick a single reaction with some character. Cut a second sentence that merely confirms the same feeling. When the player has already heard that you enjoy something, start with the particular thing about it that holds your interest.
-        Respect a correction, "you already said that", or a change of subject immediately. Let that point rest until the player brings it back. A later question about it invites a full answer in the base reply, including when that subject has no continuation card. Before speaking, drop any sentence whose only contribution is a paraphrase of a point you already made. Keep necessary facts consistent when the player asks for them again.
+        earlierSpeech, when present, contains older words from these same two speakers that may explain a callback. Use them when the player returns to that detail. Leave an old subject alone when it has no bearing on what they are saying now. Say when you don't remember an unstated detail.
+        If the player plays along with a story you just told, stay in the story and follow its joke. They now know whatever you told them. A teasing question can take a teasing answer. Reserve uncertainty for facts that actually matter.
+        Does the player's last line still need an answer? Listen to the whole line, especially what the last clause asks of you. A greeting can be met simply. If they choose one of two things you mentioned, stay with the one they chose. "I love that too" invites a real exchange. A plain "fair enough" can let one finish.
+        Give them one thing only this resident might say here, such as a preference with a reason, a specific image, a concession or a bit of teasing. When someone tells you a story, respond to what happened to them. Use ordinary spoken words for this world. A quiet reply can be enough. Vary the rhythm. A string of questions, proverbs, names or "friend" feels rehearsed.
+        When the player gives you the floor ("what's on your mind?", "what's new?"), use it. Name a particular thought, interest, small problem or possible plan grounded in this resident. If you just greeted them or said you wanted company, they have already given you company. Tell them what you wanted to talk about, even if no card fits.
+        Listen back to both speakers' last lines. Answer from your own point of view. If the player asks whether you enjoy something, say what makes it worth doing or what puts you off. If they handed you a punchline, play along or let it land. Cut the sentence that simply hands their last few words back to them. Keep facts straight on callbacks, including who said what.
         """;
     const string Steering = """
-        Is there a natural opening for the card Mirthwood draws? Plan each supplied card independently after the base answer. For each usable card write one short continuation under its own key in "continuations". Only the chosen card will be heard.
-        After a shared interest is acknowledged or a question is settled, write a continuation for a card whose specific subject could naturally come next, even if the player has never mentioned it. One concrete desire, curiosity or image can introduce it. Let that sentence carry the transition. Skip a second introduction or declaration of liking it.
-        When the player is still exploring a subject, let a fitting card deepen it. Give them something they can respond to. When a separate card would interrupt an unfinished answer, a boundary or a personal disclosure, omit that continuation. If nothing fits, return an empty object. If the player introduces a new subject, follow it without steering them back.
-        A broad card supplies a manner or category. Deliver the actual joke, flirt or question in the resident's words. Keep the beat compatible with all three base replies and add just one new thought. Ask when the card calls for it or the answer truly matters. After your last reply ended in a question, normally finish this one with a statement the player can take up. Read each joined reply once, cut echoes of its own opening, and use the player's name sparingly. Reserve promises for the base exchange.
+        Is there a natural opening for the card Mirthwood draws? Consider each supplied card independently. Only one can be heard. Keep all new promises in the base answer.
+        For invite, the card can answer the invitation itself. In "continuations", under each card that offers a plausible subject, write an object {"warm":"...","neutral":"...","cool":"..."} with three short, complete replies. Each stands alone instead of being appended. Use the same concrete subject in all three, with the appropriate warmth. When asked what you fancy doing or what is on your mind, let a suitable native card suggest the actual plan, anecdote or opinion. A rumour is hearsay. Leave out cards that cannot answer the invitation honestly.
+        For follow or leave, write an empty continuations object. For open, write a continuation only if a person would move there from these particular words. Carry a detail across, let one plan lead to another, or answer an explicit invitation for news. Merely being in the same broad category is a weak reason. A new subject can be welcome once the old thought has landed.
+        Imagine the two sentences spoken aloud together. If the second restarts the greeting, repeats the point, sounds like a second answer to the same question, or could be pasted after any reply, leave that card out. An empty object is a normal outcome.
+        For open, each usable card maps to one short string compatible with all three base replies. A broad card supplies a manner or category. Deliver the actual joke, flirt or question. Ask when it matters. After a question, a statement often gives the other person more room.
         """;
     static readonly Regex SocialNarration=new(@"^(?:(?:I|she|he|they)\s+)?(?:(?:nervously|awkwardly|playfully|shyly)\s+)?(?:tell(?:s|ing)? (?:a|an|another) (?:joke|story)|(?:jokes?|joking) about|flirts?\b|changes? the subject|makes? (?:a joke|small talk)|talks? about|(?:say|says|ask|asks|think|wonder|explain|reassure)\b)",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant);
 
@@ -69,25 +73,40 @@ public sealed partial class Conversation
             if(!heard.Contains(cue!.GetValue<string>()))fresh[card]=cue.DeepClone();
         return fresh;
     }
-    static JsonObject? ReadContinuations(JsonObject packet,JsonObject? cues,string topic,string resident)
+    static JsonObject? ReadContinuations(JsonObject packet,JsonObject? cues,string topic,string resident,string flow)
     {
         if(cues==null)return null;
         var lines=new JsonObject();
-        if(topic=="None"||cues.Count==0)return lines;
-        if(packet["continuations"] is not JsonObject written)
-            throw new UserError("The resident returned an unreadable set of possible lines.",502);
+        if(topic=="None"||cues.Count==0||flow is "follow" or "leave")return lines;
+        if(packet["continuations"] is not JsonObject written)return lines;
         foreach(var (card,_) in cues){
             if(!written.ContainsKey(card))continue;
-            if(written[card] is not JsonValue value||!value.TryGetValue<string>(out var text)||text.Length>320)
-                throw new UserError("The model did not supply the resident's possible return lines.",502);
+            if(flow=="invite"){
+                if(written[card] is not JsonObject versions)continue;
+                var replies=new JsonObject();
+                foreach(string reaction in new[]{"warm","neutral","cool"}){
+                    if(versions[reaction] is not JsonValue v||!v.TryGetValue<string>(out var words)||words.Length>320)continue;
+                    var reply=CharacterLine(words,resident,cues.S(card));
+                    if(reply.Length>0)replies[reaction]=reply;
+                }
+                if(replies.Count>0)lines[card]=replies;
+                continue;
+            }
+            if(written[card] is not JsonValue value||!value.TryGetValue<string>(out var text)||text.Length>320)continue;
             lines[card]=CharacterLine(text,resident,cues.S(card));
         }
         return lines;
     }
+    static string CardLine(JsonNode packet,string branch,string? card)
+    {
+        var line=card==null?null:packet["continuations"]?[card];
+        return line is JsonObject?line.S(branch):line?.ToString()??"";
+    }
     static string WithContinuation(JsonNode packet,string branch,string? card)
     {
         string answer=packet["choices"].S(branch);
-        string beat=card==null?"":packet["continuations"].S(card);
+        string beat=CardLine(packet,branch,card);
+        if(packet.S("flow")=="invite")return beat.Length==0?answer:beat;
         return beat.Length==0||answer.EndsWith(beat,StringComparison.OrdinalIgnoreCase)?answer:answer+" "+beat;
     }
 

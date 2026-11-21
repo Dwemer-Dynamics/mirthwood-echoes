@@ -28,10 +28,10 @@ namespace Mirthwood.Echoes
             speech.Say(id+"/player",_Mirthwood.Scripts.Demo.Combat.PlayerCharacterController.Instance,text,
                 (value,partial)=>playerBubble.Show(value,partial));
         }
-        void DisplayTalk(string id,string reply,JObject handoff)
+        void DisplayTalk(string id,string reply,JObject handoff,bool playerLeaves=false)
         {
             string kind=(string)handoff?["kind"];
-            conversationOver=kind=="ended"||kind=="unknown";
+            conversationOver=playerLeaves||kind=="ended"||kind=="unknown";
             phase=Phase.Reading;phaseFrame=Time.frameCount;
             speech.Say(id+"/npc",resident,reply,ShowResidentReply,showPlaceholder:false);
             ReadingHint();
@@ -70,7 +70,7 @@ namespace Mirthwood.Echoes
                         yield return new WaitForSecondsRealtime(.4f);continue;
                     case "complete":
                         try{positiveRun=outbox.Acknowledge(id);}catch(Exception){RecoverTalk(message,"Your reply was saved. Enter to recover it.");yield break;}
-                        busy=false;accepted=null;DisplayTalk(id,(string)answer["reply"],answer["handoff"] as JObject);yield break;
+                        busy=false;accepted=null;DisplayTalk(id,(string)answer["reply"],answer["handoff"] as JObject,(bool?)answer["playerLeaves"]==true);yield break;
                     case "failed":case "interrupted":
                         try{outbox.Acknowledge(id);}catch(Exception){Retry(message,"Could not close the interrupted exchange.");yield break;}
                         Retry(message,((string)answer["error"]??"The reply was interrupted.")+" Enter to start a new exchange.");yield break;
@@ -85,7 +85,7 @@ namespace Mirthwood.Echoes
                             var cardChoices=answer["cardChoices"] as JObject;
                             var lines=(string)result.Handoff?["kind"]=="ended"?endings:
                                 (card==null?null:cardChoices?[card] as JObject)??choices;
-                            DisplayTalk(id,(string)lines[result.Reaction=="unknown"?"neutral":result.Reaction],result.Handoff);stage="finish";
+                            DisplayTalk(id,(string)lines[result.Reaction=="unknown"?"neutral":result.Reaction],result.Handoff,(bool?)answer["playerLeaves"]==true);stage="finish";
                         }catch(Exception){Retry(message,"Could not confirm the native reaction. Enter to recover this exchange.");yield break;}
                         if(IsolatedGameRun.Active?.TalkAddress!=null&&interruptBeforeFinish){
                             interruptBeforeFinish=false;yield return new WaitForEndOfFrame();

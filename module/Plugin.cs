@@ -253,8 +253,8 @@ namespace Mirthwood.Echoes
                     yield return dialogue.RunRelationships(report);
                 if(mode=="interactions"&&isolated?.TalkAddress!=null&&isolated.PathsMatch())
                     yield return dialogue.RunInteractions(report);
-                if((mode=="residentdialogue"||mode=="dialogueflow")&&isolated?.PrivateDiagnostics==true&&isolated.PathsMatch())
-                    yield return dialogue.RunResidentDialogue(report,mode=="dialogueflow");
+                if((mode=="residentdialogue"||mode=="dialogueflow"||mode=="roleplay")&&isolated?.PrivateDiagnostics==true&&isolated.PathsMatch())
+                    yield return dialogue.RunResidentDialogue(report,mode);
                 if(mode=="quests"&&isolated?.TalkAddress!=null&&isolated.PathsMatch())
                     yield return dialogue.RunQuests(report);
                 if(mode=="socialbalance"&&isolated?.PathsMatch()==true)
