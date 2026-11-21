@@ -51,7 +51,7 @@ public static class ConversationSessions
         )
         SELECT session AS id,max(day) AS day,max(at) AS at,jsonb_build_object('kind',mode,'entries',count(*),
             'knownStart',mode='group' OR bool_or(session<>source::text),
-            'fingerprint',md5(string_agg(source::text||'/'||n::text,',' ORDER BY seq,at,source,n)),
+            'fingerprint',md5(string_agg(jsonb_build_array(source,n,name,left(words,180),relevance<=4)::text,',' ORDER BY seq,at,source,n)),
             'body',string_agg(name||' — '||left(words,180),E'\n' ORDER BY seq,at,source,n)
                 FILTER(WHERE relevance<=4),'participants',
             (SELECT jsonb_agg(label ORDER BY label) FROM (
@@ -69,7 +69,7 @@ public static class ConversationSessions
             FROM daily_events WHERE actor=@a AND kind<>'address' AND day<=@day
         )
         SELECT day::text AS id,day,max(observed) AS at,jsonb_build_object('kind','daily','entries',count(*),
-            'fingerprint',md5(string_agg(id::text,',' ORDER BY observed,id)),
+            'fingerprint',md5(string_agg(jsonb_build_array(id,left(description,190))::text,',' ORDER BY observed,id)),
             'body',string_agg(left(description,190),E'\n' ORDER BY observed,id) FILTER(WHERE first<=2 OR last=1))
             AS doc FROM ordered GROUP BY day
         """;
@@ -89,7 +89,7 @@ public static class ConversationSessions
         SELECT coalesce(jsonb_agg(jsonb_strip_nulls(jsonb_build_object('speaker',l.name,'speakerKey',l.speaker,'text',l.words,'source',l.source,'sourceType',l.source_type,
             'day',l.day,'audience',(SELECT jsonb_agg(CASE WHEN k='player' THEN coalesce(nullif(c.player_name,''),'Player') ELSE a.name END ORDER BY k)
                 FROM unnest(l.audience) k JOIN campaigns c ON c.id=@c LEFT JOIN actors a ON a.campaign=@c AND a.key=k),
-            'to',CASE WHEN addressed='group' THEN 'Everyone' WHEN addressed='player' THEN (SELECT player_name FROM campaigns WHERE id=@c)
+            'to',CASE WHEN addressed='group' THEN 'Everyone' WHEN addressed='player' THEN (SELECT coalesce(nullif(player_name,''),'Player') FROM campaigns WHERE id=@c)
                 ELSE (SELECT a.name FROM actors a WHERE a.campaign=@c AND a.key=addressed) END,
             'nativeHandoff',CASE WHEN t.talk->>'spokenReturn' IS DISTINCT FROM 'true' THEN t.talk->'handoff'->>'cue' END,
             'questOutcome',CASE t.quest_offer->>'action' WHEN 'accept' THEN 'Quest accepted' WHEN 'decline' THEN 'Quest declined' END,

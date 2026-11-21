@@ -33,17 +33,18 @@ namespace Mirthwood.Echoes
             var card=matches[0];
             string key="mirthwood.echoes.group.score."+session;
             string source=player?"player":Plugin.Owner(speaker);
-            string saved=SaveMaster.GetString(key);
-            if(!string.IsNullOrEmpty(saved)){
-                var receipt=JObject.Parse(saved);
-                if((int)receipt["seq"]>=sequence)
-                    return (int)receipt["seq"]==sequence&&(string)receipt["speaker"]==source&&(string)receipt["listener"]==listener.Actor&&
-                        receipt["outcome"] is JObject outcome?TalkResult.Read(outcome):null;
-            }
-            // Main-thread dispatch and the marker share one save update. A retried line cannot spend the card again.
-            var record=new JObject{["seq"]=sequence,["speaker"]=source,["listener"]=listener.Actor};
-            SaveMaster.SetString(key,record.ToString(Formatting.None));
             try{
+                string saved=SaveMaster.GetString(key);
+                if(!string.IsNullOrEmpty(saved)){
+                    var receipt=JObject.Parse(saved);
+                    var previous=(int)receipt["seq"];
+                    if(previous>=sequence)
+                        return previous==sequence&&(string)receipt["speaker"]==source&&(string)receipt["listener"]==listener.Actor&&
+                            receipt["outcome"] is JObject outcome?TalkResult.Read(outcome):null;
+                }
+                // Main-thread dispatch and the marker share one save update. A retried line cannot spend the card again.
+                var record=new JObject{["seq"]=sequence,["speaker"]=source,["listener"]=listener.Actor};
+                SaveMaster.SetString(key,record.ToString(Formatting.None));
                 TalkResult result;
                 if(player)result=NativeSocialTurn.Play(speaker.GetComponent<PlayerChat>(),listener.Chat,card,positiveRun,minimumCost);
                 else{

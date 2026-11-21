@@ -97,6 +97,16 @@ namespace Mirthwood.Echoes
                 Close();
                 Require(!GroupActive&&approaching.All(g=>!GroupGathering.Holds(g.Chat)&&g.Agent.isStopped==g.WasStopped),
                     "Cancelling the approach did not release native movement.");
+                Require(StartGroup(),"Could not gather for the Escape check.");
+                yield return Await(()=>groupReady,"The residents did not arrive for the Escape check.",15);
+                playerBubble.Input.text="An unfinished thought";
+                yield return GroupEscape();
+                Require(GroupActive&&!groupTyping&&groupSequence==0&&!GameState.IsPaused,
+                    "Escape submitted the draft, closed the group or left the clock paused.");
+                yield return GroupEscape();
+                Require(!GroupActive&&!Visible&&!GameState.IsPaused&&GameState.GetCurrentState(1)==GameState.State.Gameplay,
+                    "Escape from the circle also opened a game menu or left its controls captured.");
+                report["escape"]=true;
                 Require(IsolatedGameRun.PostGroupKey(true),"The copied game could not receive the group key.");
                 yield return new WaitForSecondsRealtime(.18f);IsolatedGameRun.PostGroupKey(false);
                 float gatherUntil=Time.unscaledTime+14;
@@ -145,7 +155,11 @@ namespace Mirthwood.Echoes
                 int departedAfter=groupSequence;
                 StageGuest(late,lateStart);yield return Await(()=>!gathering.Guests.Contains(lateGuest),"The absent resident remained in the audience.",5);
                 report["attendance"]=new JObject{["late"]=lateGuest.Actor,["joinedAfter"]=joinedAfter,["departedAfter"]=departedAfter};
-                yield return GroupQuestion("I should head home. Thank you both, and good night.",null);
+                if(File.Exists(Path.Combine(IsolatedGameRun.Active.Root,"resident.txt"))){
+                    for(int turn=0;turn<8&&GroupActive&&!groupParting;turn++)
+                        yield return GroupQuestion(null,null,turn,seen);
+                }
+                if(!groupParting)yield return GroupQuestion("I should head home. Thank you both, and good night.",null);
                 Require(groupParting,"The group missed the player's spoken goodbye.");
                 report["totalMs"]=Mathf.RoundToInt((Time.unscaledTime-started)*1000);
                 yield return Await(()=>NativeCues.Pending==0,"The delivered group lines did not reach the server.",18);
@@ -198,6 +212,14 @@ namespace Mirthwood.Echoes
             Require(!StoryCardOpen,"A native story card still owns the screen.");
         }
 
+        static IEnumerator GroupEscape()
+        {
+            Require(IsolatedGameRun.PostTalkOrEscape(false,true),"Could not press Escape in the copied game.");
+            yield return new WaitForSecondsRealtime(.15f);
+            Require(IsolatedGameRun.PostTalkOrEscape(false,false),"Could not release Escape in the copied game.");
+            yield return new WaitForSecondsRealtime(.2f);
+        }
+
         static JObject ComparePairScores(GroupGathering.Guest speaker,GroupGathering.Guest listener,PlayerCharacterController player)
         {
             var self=listener.Npc.CharacterInfo;var other=speaker.Npc.CharacterInfo;
@@ -214,6 +236,10 @@ namespace Mirthwood.Echoes
                 Require(GroupSocialTurn.Apply(receipt,++seq,listener,speaker.Npc,"Leisure",100)==null&&
                     !self.relationships.GetSaveData().characterIDs.Contains(other.id),"An unknown relationship was created.");
                 var bond=self.relationships[other.id];bond.friendship=22;
+                string damaged=Guid.NewGuid().ToString();
+                SaveMaster.SetString("mirthwood.echoes.group.score."+damaged,"{truncated");
+                Require(GroupSocialTurn.Apply(damaged,1,listener,speaker.Npc,"Leisure",100)==null&&bond.friendship==22,
+                    "A damaged score receipt changed the relationship.");
                 listener.Unique=false;
                 Require(GroupSocialTurn.Apply(receipt,++seq,listener,speaker.Npc,"Leisure",100)==null&&bond.friendship==22,"A duplicate identity was graded.");
                 listener.Unique=true;
@@ -249,12 +275,25 @@ namespace Mirthwood.Echoes
             }finally{spouseField.SetValue(spouseManager,originalSpouse);self.relationships=original;self.mood=originalMood;listener.Unique=unique;UnityEngine.Random.state=random;}
         }
 
-        IEnumerator GroupQuestion(string words,string expectedSpeaker)
+        IEnumerator GroupQuestion(string words,string expectedSpeaker,int turn=-1,JArray heard=null)
         {
             int previous=groupSequence;
             yield return null;
             Require(IsolatedGameRun.PostReturn(),"Could not open the group draft.");
             yield return Await(()=>groupTyping,"Enter did not give the player the floor.",5);
+            if(turn>=0){
+                string folder=IsolatedGameRun.Active.Root;
+                var recent=heard.Where(e=>(string)e["kind"]=="group").Select(e=>e["line"]).Reverse().Take(3).Reverse().Select(line=>{
+                    string key=(string)line["speaker"];
+                    string name=Participants().FirstOrDefault(g=>g.Actor==key)?.Npc.CharacterInfo.name??"Player";
+                    return name+": "+(string)line["words"];
+                });
+                string output=Path.Combine(folder,"reply-"+turn+".json"),draft=Path.Combine(folder,"draft-"+turn+".txt");
+                File.WriteAllText(output+".tmp",new JObject{["reply"]=string.Join("\n",recent)}.ToString());File.Move(output+".tmp",output);
+                File.WriteAllText(Path.Combine(folder,"ready-"+turn),"Group");
+                yield return Await(()=>File.Exists(draft),"No player input for the copied group conversation.",180);
+                words=File.ReadAllText(draft);
+            }
             playerBubble.Input.text=words;yield return null;
             Require(IsolatedGameRun.PostReturn(),"Could not submit the group draft.");
             yield return Await(()=>groupSequence>=previous+2||!GroupActive,"The group did not answer "+words,95);

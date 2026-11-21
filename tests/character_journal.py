@@ -177,6 +177,12 @@ def main(package,game_assets):
                     else:raise AssertionError("The background worker did not persist the three audience recaps")
                     receipts.append(pg("psql","-XAt","-d",db,"-c","SELECT kind,entry,fingerprint,body FROM resident_recaps ORDER BY actor,kind,entry,fingerprint"))
                 assert receipts[0]==receipts[1] and "daily|" in receipts[0]
+                pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='Wren' WHERE player_name='Test player'")
+                renamed=next(item for item in api(right+"/history/sessions")["items"] if item["id"]==session)
+                assert "Wren — " in renamed["body"] and "Test player — " not in renamed["body"]
+                pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='' WHERE player_name='Wren'")
+                assert any(row.get("to")=="Player" for row in api(left+"/history/sessions/"+turn))
+                pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='Test player' WHERE player_name=''")
                 print("PASS two service restarts preserve the exact per-audience recaps and daily sources.",flush=True)
                 # A controller reused by a different native ID must start a separate journal.
                 for r in data["saveData"]:

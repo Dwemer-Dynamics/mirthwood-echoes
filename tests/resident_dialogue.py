@@ -3,6 +3,7 @@
 Runs the bundled module in Steam against a private WSL server and a copy of slot 0.
 The interface test uses the local fixture. The Averil test uses the selected Windows Codex subscription.
 Use --play PACKAGE RESIDENT [tired|eager] for an unscripted conversation and --say RUN "words" after each reply.
+Use --group PACKAGE for the attendance regression or --play-group PACKAGE to continue that gathering in your own words.
 """
 import hashlib
 import json
@@ -239,6 +240,8 @@ def run(package, mode, resident=None, starting_desire=None):
 if __name__=="__main__":
     modes={"--live-averil":"residentdialogue","--interface-fixture":"interface","--live-topic-flow":"dialogueflow","--group":"grouptalk"}
     if len(sys.argv)==3 and sys.argv[1] in modes:run(Path(sys.argv[2]).resolve(strict=True),modes[sys.argv[1]])
+    elif len(sys.argv)==3 and sys.argv[1]=="--play-group" and os.name=="nt":
+        run(Path(sys.argv[2]).resolve(strict=True),"grouptalk","Group")
     elif sys.argv[1:2]==["--play"] and os.name=="nt" and (len(sys.argv)==4 or len(sys.argv)==5 and sys.argv[4] in ("tired","eager")):
         run(Path(sys.argv[2]).resolve(strict=True),"roleplay",*sys.argv[3:])
     elif len(sys.argv)==4 and sys.argv[1]=="--say" and os.name=="nt":send_line(sys.argv[2],sys.argv[3])

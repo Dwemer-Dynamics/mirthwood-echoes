@@ -65,7 +65,13 @@ namespace Mirthwood.Echoes
             gathering.Tick();
             foreach(var g in gathering.Guests.ToArray())if(g.Actor==null&&!g.Resolving)host.StartCoroutine(ResolveGuest(g,gathering));
             var seated=Participants();
-            if(gathering.Guests.Count<2||groupReady&&seated.Length<2){groupProbe?.Invoke("Gathering ended with "+gathering.Guests.Count+" candidates and "+seated.Length+" seated.");Close();return;}
+            if(gathering.Guests.Count<2||groupReady&&seated.Length<2){
+                bool stillGathering=!groupReady;
+                groupProbe?.Invoke("Gathering ended with "+gathering.Guests.Count+" candidates and "+seated.Length+" seated.");
+                Close();
+                if(stillGathering)host.StartCoroutine(GroupNotice("Too few residents could join the conversation."));
+                return;
+            }
             if(!groupReady){
                 if(seated.Length<2)return;
                 if(!Build(seated[0].Npc)){Close();return;}

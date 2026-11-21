@@ -28,10 +28,9 @@ public sealed partial class Conversation
         var latest=heard!.AsArray().LastOrDefault();
         string question=latest.S("words");
         var opt=await providers.Options();
-        var recall=await Recall(c,a,day,opt,question,true,head);
+        var recall=await Recall(c,a,day,opt,question,true,head,groupOnly:true);
         var memory=new JsonObject{["daily"]=recall["daily"]?.DeepClone(),["olderActivity"]=recall["olderActivity"]?.DeepClone()};
-        if(recall["heardSpeech"] is JsonArray speech)
-            memory["heardSpeech"]=new JsonArray(speech.Where(x=>x.S("mode")=="group").Select(x=>x!.DeepClone()).ToArray());
+        if(recall["heardSpeech"]!=null)memory["heardSpeech"]=recall["heardSpeech"]!.DeepClone();
         var profile=await journal.DialogueProfile(c,a,day,actor.AsObject(),true,head);
         var player=await db.One("SELECT jsonb_build_object('name',player_name,'native',player)::text FROM campaigns WHERE id=@c",("c",c));
         var bonds=new JsonArray();

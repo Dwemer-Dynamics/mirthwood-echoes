@@ -102,13 +102,18 @@ def check_memories(api, beat, event, world, campaign, residents, legacy, calls):
     api("dialogue",{"campaign":campaign,"actor":listener,"id":str(uuid4()),"text":"Did someone tell you about keeping bees?"})
     context=json.loads(calls[-1]["messages"][0]["content"].split("\nRecall: ",1)[1])
     assert "Do you still keep bees?" not in str(context)
+    # Earlier private matches for the same subject must not displace shared knowledge.
+    for remark in ("Mill, mill, mill!", "Mill, mill, mill, mill!", "Mill, mill, mill, mill, mill!"):
+        api("dialogue",{"campaign":campaign,"actor":owner,"id":str(uuid4()),"text":remark})
     beat(18)
-    latest=line(4,"player",owner,[owner,listener],"What did you do yesterday?")
+    latest=line(4,"player",owner,[owner,listener],"What did you do at the mill yesterday?")
     for days,section in [(1,"olderActivity"),(7,"daily")]:
         api("options",{"provider":"openai_compatible","dailyDays":days,"replyTokens":80},"PUT",204)
         api("dialogue/group",{"campaign":campaign,"session":session,"head":latest,"actor":owner,"audience":[owner,listener]})
         memory=json.loads(calls[-1]["messages"][1]["content"])["yourMemory"]
         assert "Worked at the mill before the rain." in str(memory[section]) and "source" in str(memory[section])
+        accounts=memory["heardSpeech"]
+        assert any(item["source"]==first for item in accounts) and all(item["mode"]=="group" for item in accounts)
     print("PASS two private visits in one game day, an accepted proposal with its source, independent fulfillment on a saved branch, and dated firsthand recall at both window settings.",flush=True)
     print("PASS separate daily and conversation journals, legacy private lines, exact group attribution, late arrival, departure, scoped recall, duplicated native IDs, replay, and save rewind.", flush=True)
     return session

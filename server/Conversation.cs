@@ -73,7 +73,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
         if(d<0)throw new UserError("Load the save in Mirthwood to supply its current calendar day.",409);
         return(native.Describe(actor),d);
     }
-    public async Task<JsonNode> Recall(string c,string a,int day,Options opt,string question,bool scoped=false,Guid? head=null,int recentTurns=2,bool includeVoicedCues=false,bool relatedSpeech=false)
+    public async Task<JsonNode> Recall(string c,string a,int day,Options opt,string question,bool scoped=false,Guid? head=null,int recentTurns=2,bool includeVoicedCues=false,bool relatedSpeech=false,bool groupOnly=false)
     {
         var terms=Regex.Matches(question.ToLowerInvariant(),@"[\p{L}\p{N}]{3,}").Select(m=>m.Value).Where(w=>w is not ("the" or "and" or "you" or "what" or "did" or "that" or "about" or "for")).Distinct().Take(15);
         int? requestedDay=Regex.IsMatch(question,@"\byesterday\b",RegexOptions.IgnoreCase)?day-1:
@@ -97,7 +97,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                 WHERE actor=@a AND kind<>'address' AND day<@earliest AND (day=@requestedDay::int OR to_tsvector('english',description) @@ q.speech)
                 ORDER BY (day=@requestedDay::int) DESC,ts_rank(to_tsvector('english',description),q.speech) DESC,day DESC,observed DESC LIMIT 1)x),
               'heardSpeech',(SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT source,session,day,mode,name AS speaker,audience,addressed,left(words,360) AS quote
-                FROM named,q WHERE (mode='group' OR day<@earliest OR source_type='event') AND
+                FROM named,q WHERE (mode='group' OR (NOT @groupOnly AND (day<@earliest OR source_type='event'))) AND
                     to_tsvector('english',words||' '||name) @@ q.speech
                 ORDER BY ts_rank(to_tsvector('english',words||' '||name),q.speech) DESC,at DESC,seq DESC,n DESC LIMIT 3)x),
               'recentSpeech',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(r)-'started') ORDER BY r.started,r.turn),'[]') FROM recent r),
@@ -109,7 +109,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                   AND NOT EXISTS(SELECT FROM recent r WHERE r.turn=t.id) AND s.words @@ q.speech
                 ORDER BY ts_rank_cd(s.words,q.speech) DESC,t.started DESC,t.id DESC LIMIT 2)x)
             )::text
-            """,scoped,head,("terms",string.Join(" | ",terms)),("requestedDay",requestedDay),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech));
+            """,scoped,head,("terms",string.Join(" | ",terms)),("requestedDay",requestedDay),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech),("groupOnly",groupOnly));
         if(facts is JsonObject obj)foreach(var key in new[]{"earlierSpeech","heardSpeech","olderActivity"})
             if(obj[key]==null)obj.Remove(key);
         return facts!;

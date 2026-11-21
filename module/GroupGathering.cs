@@ -81,8 +81,8 @@ namespace Mirthwood.Echoes
         internal void Invite()
         {
             var player=PlayerCharacterController.Instance;
-            if(!player||!NavMesh.SamplePosition(player.transform.position,out var floor,1.5f,NavMesh.AllAreas)){trace?.Invoke("No navigable ground at the player.");return;}
-            var center=player.transform.position;
+            if(!player||!NavMesh.SamplePosition(Origin,out var floor,1.5f,NavMesh.AllAreas)){trace?.Invoke("No navigable ground at the gathering.");return;}
+            var center=Origin;
             var residents=UnityEngine.Object.FindObjectsOfType<NPCController>();
             var candidates=residents
                 .Where(n=>!Reserved(n)&&(n.transform.position-center).sqrMagnitude<=16f)
