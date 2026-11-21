@@ -21,7 +21,7 @@ namespace Mirthwood.Echoes
         {
             var brain=npc.GetComponent<NPCChatController>();
             var agent=npc.GetComponent<NavMeshAgent>();
-            var other=UnityEngine.Object.FindObjectsOfType<NPCChatController>().FirstOrDefault(c=>c!=brain);
+            var other=UnityEngine.Object.FindObjectsOfType<NPCChatController>().FirstOrDefault(c=>c!=brain&&!c.IsChatting);
             report["waitSelectedOnly"]=brain&&WaitingFor(brain)&&other&&!WaitingFor(other);
             if(!brain||!agent||!agent.isActiveAndEnabled||!agent.isOnNavMesh)yield break;
 
@@ -72,8 +72,9 @@ namespace Mirthwood.Echoes
                 report["waitRetry"]=phase==Phase.Draft&&!WaitingFor(brain)&&!npcBubble.Visible&&playerBubble.Input.text==rejected;
 
                 // The reply is selected now, but its first caption may still be queued for speech.
-                // Only the local interface fixture receives this audio request.
-                speech=new ConversationSpeech(host,url){Witness=_=>{}};
+                // Queue speech against the local fixture even when the player's voices are muted.
+                report["waitVoiceMuted"]=Plugin.Voices?.Enabled!=true;
+                speech=new ConversationSpeech(host,url,voicesEnabled:()=>true){Witness=_=>{}};
                 WaitForReply("Are you ready?");
                 const string reply="I am ready.";
                 DisplayTalk("interface-wait",reply,null);
@@ -86,8 +87,8 @@ namespace Mirthwood.Echoes
                     dots.Add(value);yield return null;
                 }
                 report["waitVoiceQueued"]=queued;
-                report["waitVoiceReply"]=!speech.Busy&&!WaitingFor(brain)&&npcBubble.ReadRenderedText()==reply&&
-                    (!queued||(keptDots&&dots.Count>=2&&speech.LastError!=null));
+                report["waitVoiceReply"]=queued&&keptDots&&dots.Count>=2&&speech.LastError=="The test voice is unavailable."&&
+                    !speech.Busy&&!WaitingFor(brain)&&npcBubble.ReadRenderedText()==reply;
             }finally{Close();}
         }
     }
