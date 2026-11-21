@@ -10,7 +10,7 @@ public sealed partial class Conversation
         Return one JSON object with topic, warm, neutral, cool (strings), farewells (an object with warm, neutral and cool strings), and commitments (one array).
         Use the supplied player impression for current clothes and public standing. When those details are missing, keep them unknown. Earlier outfits and narrated claims do not establish what is visible today.
         Write warm, neutral and cool alternatives with the same factual answer and consistent promises, differing in enthusiasm. A silent action or a direct non-chat interaction uses the neutral line. Be honest about what the resident knows; an open promise does not prove fulfillment. Do not volunteer promises to fill an array.
-        Let the resident's current desire for company color the length and tone. Each answer must stand as the resident's last word on the subject: answer the player's question if you can, otherwise briefly acknowledge what they said or decline in character. Leave no question, new subject or invitation for the player to answer. Mirthwood supplies the next subject when the resident stays. If the resident is ready to stop, they will speak that same answer and then say goodbye using the matching farewell. Reserve all parting words for farewells. In recalled turns, nativeHandoff describes what the resident did after speaking.
+        Let the resident's current desire for company color the length and tone. Each base answer settles the player's last point and can precede either a continuing conversation or a farewell. Answer a question directly or acknowledge it in character. Put any invitation or follow-up in the continuation when return cards are supplied. Reserve parting words for farewells. Recalled player and npc fields contain the words of the exchange.
         List only definite new promises for a specific future action in this exchange. Use [] for unaccepted offers, hypotheticals, quotes, past events and retractions. Each entry has speaker (player or npc), quote (their exact complete spoken sentence), and optionally proposal (the other person's exact proposal, if needed to explain a bare acceptance). Preserve punctuation. At most four entries.
         """;
 
@@ -42,11 +42,14 @@ public sealed partial class Conversation
             if(n["socialDesire"] is JsonValue desire && desire.TryGetValue<double>(out var level) && double.IsFinite(level))
                 disposition["currentDesireForCompany"]=level<-.5?"very low":level<0?"waning":level>.7?"eager for company":"willing to talk";
             var impression=TalkImpressions.ForResident(n["playerImpression"],words);
-            var prompt=TalkInstructions+"\n"+TalkEndings.Instructions+"\n"+TalkTopics.Instructions+"\nGame day "+day+". Character: "+disposition.ToJsonString()+"\nRecall: "+facts.ToJsonString();
+            var prompt=TalkInstructions+"\n"+SpokenStyle+"\n"+TalkEndings.Instructions+"\n"+TalkTopics.Instructions+"\nGame day "+day+". Character: "+disposition.ToJsonString()+"\nRecall: "+facts.ToJsonString();
             if(impression!=null)prompt+="\n"+TalkImpressions.Instructions+"\nPlayer impression: "+impression.ToJsonString();
+            var cues=ReadReturnCues(n["returnCues"]);
+            if(cues!=null)prompt+="\n"+Steering+"\nReturn cards: "+cues.ToJsonString();
+            if(cue?.S("kind")=="card")prompt+="\nThe resident was about to act on currentInteraction.observedAction. Work it into their words if it still fits what the player said.";
             var wire=new StringBuilder();
-            var model=await providers.Generate(opt with {ReplyTokens=3*opt.ReplyTokens+DialogueOutput.AnnotationTokens+48},prompt,words,part=>{
-                if(wire.Length+part.Length>12000)throw new UserError("The Talk reply was too long.",502);
+            var model=await providers.Generate(opt with {ReplyTokens=3*opt.ReplyTokens+DialogueOutput.AnnotationTokens+48+36*(cues?.Count??0)},prompt,words,part=>{
+                if(wire.Length+part.Length>12000+320*(cues?.Count??0))throw new UserError("The Talk reply was too long.",502);
                 wire.Append(part);return Task.CompletedTask;
             },CancellationToken.None);
             var packet=JsonNode.Parse(wire.ToString()) as JsonObject??throw new UserError("The model returned an unreadable Talk reply.",502);
@@ -58,11 +61,16 @@ public sealed partial class Conversation
             foreach(var key in new[]{"warm","neutral","cool"}){
                 if(packet[key] is not JsonValue v||!v.TryGetValue<string>(out _))throw new UserError("A Talk reply was missing.",502);
                 string answer=packet.Required(key,900);
+                if(cues!=null){
+                    answer=CharacterLine(answer,actor.S("name"));
+                    if(answer.Length==0)throw new UserError("The resident returned no words or gesture.",502);
+                }
                 if(endingChoices==null){choices[key]=answer;continue;}
                 var lines=TalkEndings.Prepare(answer,farewells?[key]);
                 choices[key]=lines.Continuing;endingChoices[key]=lines.Ending;
             }
-            var saved=new {topic,choices,endingChoices,playerImpression=impression,commitments=packet["commitments"],recentSpeech=facts["recentSpeech"],provider=opt.Provider,model,opt.PositiveDesireCostPercent};
+            var continuations=ReadContinuations(packet,cues,topic,actor.S("name"));
+            var saved=new {topic,choices,endingChoices,continuations,returnCues=cues,playerImpression=impression,commitments=packet["commitments"],recentSpeech=facts["recentSpeech"],provider=opt.Provider,model,opt.PositiveDesireCostPercent};
             await db.Run("UPDATE turns SET state='ready',talk=@packet::jsonb,first_ms=@ms WHERE id=@id AND state='pending'",
                 ("packet",JsonSerializer.Serialize(saved,Database.Json)),("ms",(int)timer.ElapsedMilliseconds),("id",id));
         }catch(Exception e){
@@ -84,6 +92,15 @@ public sealed partial class Conversation
         var result=new JsonObject{["state"]=state,["topic"]=packet?["topic"]?.DeepClone()};
         if(state=="ready"){
             result["choices"]=packet!["choices"]!.DeepClone();
+            if(packet["continuations"] is JsonObject beats){
+                var variants=new JsonObject();
+                foreach(var (card,_) in beats){
+                    var lines=new JsonObject();
+                    foreach(var (branch,_) in packet["choices"]!.AsObject())lines[branch]=WithContinuation(packet,branch,card);
+                    variants[card]=lines;
+                }
+                result["cardChoices"]=variants;
+            }
             if(packet["endingChoices"] is {} endings)result["endingChoices"]=endings.DeepClone();
             // A reply prepared on an earlier release keeps the native cost it was issued with.
             result["positiveDesireCostPercent"]=packet.I("positiveDesireCostPercent",100);
@@ -123,21 +140,27 @@ public sealed partial class Conversation
             if(kind=="unknown"&&branch=="unknown")handoff=new JsonObject{["kind"]=kind};
             else if((kind=="followup"||kind=="ended")&&p.S("topic")!="None"&&branch!="unknown"){
                 handoff=new JsonObject{["kind"]=kind,["cue"]=decision.Required("cue",600)};
-                if(kind=="followup")handoff["action"]=decision.Required("action",96);
+                if(kind=="followup"){
+                    string card=decision.Required("action",96);
+                    if(p["returnCues"] is JsonObject cues && cues.ContainsKey(card) && cues.S(card)!=handoff.S("cue"))
+                        throw new UserError("The return card differs from the prepared conversation.",409);
+                    handoff["action"]=card;
+                }
             }else throw new UserError("The native Talk decision does not match this exchange.");
         }
         var key=branch=="unknown"?"neutral":branch;
         var answer=choices.S(key);
         // Old prepared turns keep the wording that their client may already have shown.
         var endings=handoff.S("kind")=="ended"?p["endingChoices"] as JsonObject:null;
-        var reply=endings==null?answer:endings.S(key);
+        var reply=endings==null?WithContinuation(p,key,handoff?.S("action")):endings.S(key);
         var marks=p["commitments"]?.DeepClone();
         if(marks is JsonArray entries)
             foreach(var mark in entries.ToArray()){
                 string quote=mark.S("quote");
                 if(mark.S("speaker")!="npc"||quote=="")continue;
                 bool spoken=reply.Contains(quote,StringComparison.Ordinal);
-                bool unspokenAlternative=!spoken&&choices.AsObject().Any(line=>line.Value!.ToString().Contains(quote,StringComparison.Ordinal));
+                bool unspokenAlternative=!spoken&&(choices.AsObject().Any(line=>line.Value!.ToString().Contains(quote,StringComparison.Ordinal))||
+                    p["continuations"] is JsonObject beats&&beats.Any(line=>line.Value!.ToString().Contains(quote,StringComparison.Ordinal)));
                 bool partingOnly=p["endingChoices"]!=null&&TalkEndings.IsParting(quote)||
                     endings!=null&&spoken&&!answer.Contains(quote,StringComparison.Ordinal);
                 if(unspokenAlternative||partingOnly)entries.Remove(mark);
@@ -149,10 +172,10 @@ public sealed partial class Conversation
         // Release the unspoken alternatives and recall text once the selected line is durable.
         await using var update=Database.Command(conn,"""
             UPDATE turns SET state='complete',reply=@reply,reaction=@branch,commitment_review=@review,
-                talk=(talk-'choices'-'endingChoices'-'commitments'-'recentSpeech') || @handoff::jsonb,total_ms=least(2147483647,extract(epoch FROM (clock_timestamp()-started))*1000)::int
+                talk=(talk-'choices'-'endingChoices'-'continuations'-'returnCues'-'commitments'-'recentSpeech') || @handoff::jsonb,total_ms=least(2147483647,extract(epoch FROM (clock_timestamp()-started))*1000)::int
             WHERE id=@id
             """,("reply",reply),("branch",branch),("review",review.Status),("id",id),
-            ("handoff",handoff==null?"{}":new JsonObject{["handoff"]=handoff.DeepClone()}.ToJsonString()));
+            ("handoff",new JsonObject{["handoff"]=handoff?.DeepClone(),["spokenReturn"]=p["continuations"] is JsonObject}.ToJsonString()));
         await update.ExecuteNonQueryAsync();await tx.CommitAsync();
         if(handoff!=null)p["handoff"]=handoff;
         row["state"]="complete";row["reply"]=reply;row["reaction"]=branch;return PublicTalk(row);

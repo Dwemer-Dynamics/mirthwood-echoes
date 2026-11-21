@@ -132,7 +132,7 @@ function entryView(view,e,person,openTurningPoint,path) {
   if(view==='conversations'){
     for(const [name,text] of [[person,e.questTerms],['Player',e.player],[person,e.reply]])if(text)entry.append(attach(el('div','transcript-line'),el('strong','',name),roleplayLine(text)));
     if(e.questOutcome)entry.append(el('p','source',e.questOutcome));
-    if(e.nativeHandoff)entry.append(attach(el('p','journal-prose'),el('em','',e.nativeHandoff)));
+    if(e.nativeHandoff)entry.append(el('p','source','Native event · '+e.nativeHandoff));
     for(const p of e.promises||[])entry.append(el('p','source','Promise recorded · '+(p.speaker==='player'?'Player':person)+' · '+p.quote+(p.proposal?' In reply to “'+p.proposal+'”':'')));
     if(e.commitmentReview==='unavailable')entry.append(el('p','source','Echoes could not verify the model’s promise review for this exchange.'));
   }else if(view==='memories'){
@@ -152,8 +152,8 @@ function entryView(view,e,person,openTurningPoint,path) {
             for(const [label,text] of [[person,record.questTerms],['Player',record.player],[person,record.reply]])
               if(text)content.append(attach(el('div','transcript-line'),el('strong','',label),roleplayLine(text)));
             if(record.questOutcome)content.append(el('p','source',record.questOutcome));
-            if(record.nativeHandoff)content.append(attach(el('p','journal-prose'),el('em','',record.nativeHandoff)));
-          }else content.append(el('p','journal-prose',record.description));
+            if(record.nativeHandoff)content.append(el('p','source','Native event · '+record.nativeHandoff));
+          }else content.append(record.kind==='address'?roleplayLine(record.description,'journal-prose'):el('p','journal-prose',record.description));
         }
         loaded=true;
       }catch(error){content.textContent=error.message;}finally{loading=false;}
@@ -165,7 +165,7 @@ function entryView(view,e,person,openTurningPoint,path) {
     if(e.model)entry.append(el('small','source','Identified in conversation by '+e.model+'.'));
     if(e.resolvedDay!=null)entry.append(el('small','source','Reported fulfilled by the player on day '+e.resolvedDay+'.'));
   }else{
-    entry.append(el('p','journal-prose',e.description));
+    entry.append(e.kind==='address'?roleplayLine(e.description,'journal-prose'):el('p','journal-prose',e.description));
     if(e.speaker)entry.append(el('small','source','Promised by '+speaker));
   }
   if((view==='interactions'||view==='conversations')&&e.sourceId)

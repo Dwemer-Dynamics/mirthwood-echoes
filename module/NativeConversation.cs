@@ -204,9 +204,9 @@ namespace Mirthwood.Echoes
         {
             if(npc?.CharacterInfo==null||Visible||GameState.GetCurrentState(1)!=GameState.State.Gameplay)return;
             string opener=null;
-            if(passing?.Speaker==npc&&passing.Bubble!=null&&InReplyRange(npc)){
+            if(passing?.Speaker==npc&&passing.Heard&&passing.Bubble!=null&&InReplyRange(npc)){
                 opener=passing.Line;
-                NativeCues.Recent(npc,passing.Id,passing.Kind,passing.Line);
+                if(passing.EventId!=null)NativeCues.Recent(npc,passing.EventId,passing.Kind,passing.Line);
             }
             DismissPassingLine();
             if(!Build(npc))return;

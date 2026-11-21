@@ -1,7 +1,7 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{spawn}=require('node:child_process');
 const delay=n=>new Promise(r=>setTimeout(r,n)), root=path.resolve(process.argv[2]||path.join(__dirname,'../.work/browser'));fs.mkdirSync(root,{recursive:true});
-const voiceOnly=process.argv.includes('--voices'), playedTurn=process.argv.includes('--played-turn');
-const base=playedTurn?'http://127.0.0.1:17864':process.env.ECHOES_BROWSER_BASE||'http://127.0.0.1:17841';
+const voiceOnly=process.argv.includes('--voices'), playedTurn=process.argv.includes('--played-turn'), averil=process.argv.includes('--averil');
+const base=playedTurn||averil?'http://127.0.0.1:17864':process.env.ECHOES_BROWSER_BASE||'http://127.0.0.1:17841';
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'mirthwood-echoes-edge-'));
 const browser=spawn('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',['--headless=new','--disable-gpu','--disable-extensions','--disable-background-mode','--disable-background-networking','--no-first-run','--no-default-browser-check','--disable-component-update','--disk-cache-size=2097152','--renderer-process-limit=1','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{windowsHide:true,stdio:'ignore'});
 let socket,seq=0,startedBackend=false;const pending=new Map(),errors=[];
@@ -29,9 +29,10 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
   await cmd('Runtime.enable');await cmd('Page.enable');
   await cmd('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false});
   await cmd('Page.navigate',{url:base+(voiceOnly?'/#voices':'/')});
-  if(playedTurn){
-    const game=JSON.parse(fs.readFileSync(path.join(root,'game.json'),'utf8').replace(/^\uFEFF/,''))[0].result;
-    const turn=game.trials.find(t=>t.text.startsWith('I will bring flour'));
+  if(playedTurn||averil){
+    const game=averil?JSON.parse(fs.readFileSync(path.join(root,'probe.json'),'utf8')).result:
+      JSON.parse(fs.readFileSync(path.join(root,'game.json'),'utf8').replace(/^\uFEFF/,''))[0].result;
+    const turn=averil?{...game.turns[0],resident:game.resident}:game.trials.find(t=>t.text.startsWith('I will bring flour'));
     const roster=await (await fetch(base+'/api/saves/'+turn.campaign+'/characters')).json();
     const index=roster.findIndex(c=>c.key===turn.actor);
     if(index<0)throw Error('The resident played in Mirthwood is missing from the journal.');
@@ -39,15 +40,27 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
     await evaluate("document.querySelectorAll('.roster button')["+index+"].click()");
     await until("document.querySelector('.inspect-header h3')?.textContent==="+JSON.stringify(turn.resident));
     await evaluate("document.querySelector('#char-tab-conversations').click()");
+    if(averil){
+      const heard=[...game.turns.map(t=>t.reply),...game.openers.map(t=>t.line)];
+      const clean=heard.map(line=>line.replace(/\*([^*]+)\*/g,'$1'));
+      await until(JSON.stringify(clean)+".every(line=>[...document.querySelectorAll('.transcript-line p')].some(p=>p.textContent===line))");
+      if(await evaluate("[...document.querySelectorAll('.journal-entry')].some(entry=>"+JSON.stringify(clean)+".some(line=>entry.textContent.includes(line))&&entry.textContent.includes('Native event ·'))"))throw Error('A spoken reply also displayed an internal return card');
+      const italics=await evaluate("[...document.querySelectorAll('.transcript-line em')].map(e=>e.textContent)");
+      for(const line of heard)for(const act of line.matchAll(/\*([^*]+)\*/g))if(!italics.includes(act[1]))throw Error('Missing physical gesture: '+act[1]);
+      await capture('averil-journal.png');
+      if(errors.length)throw Error(errors.join(', '));
+      console.log('PASS Averil’s heard lines and physical gestures in the journal.');
+      await cmd('Browser.close');return;
+    }
     const spoken=turn.spoken.replaceAll('*','');
-    const transcript=JSON.stringify([turn.text,spoken,turn.handoff.cue]);
+    const transcript=JSON.stringify([turn.text,spoken]);
     await until("[...document.querySelectorAll('.journal-entry')].some(entry=>"+transcript+".every(line=>entry.textContent.includes(line)))");
     await capture('played-conversation.png');
     await evaluate("document.querySelector('#char-tab-commitments').click()");
     await until("[...document.querySelectorAll('.journal-entry')].some(entry=>['I will bring flour to the mill tomorrow.','Promised by Player','Open promise'].every(line=>entry.textContent.includes(line)))");
     await capture('played-commitment.png');
     if(errors.length)throw Error(errors.join(', '));
-    console.log('PASS the actual copied-save Talk, native exit and attributed promise appear in the selected resident’s journal after a backend restart.');
+    console.log('PASS the copied-save spoken farewell and attributed promise appear in the selected resident’s journal after a backend restart.');
     await cmd('Browser.close');
     return;
   }
@@ -111,7 +124,7 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
       const scroll=mount.querySelector('.journal-scroll');
       const first=scroll.querySelector('.journal-entry');
       if([...first.querySelectorAll('.transcript-line em')].map(e=>e.textContent).join('|')!=='I doff my hat.|Nods.|smiles.'||first.querySelector('b')||!first.textContent.includes('<b>plain</b>'))throw Error('Action italics or literal dialogue markup failed');
-      if(first.querySelector('.journal-prose em')?.textContent!==turns[0].nativeHandoff)throw Error('Missing native ending beside the spoken reply');
+      if(![...first.querySelectorAll('.source')].some(source=>source.textContent.endsWith(turns[0].nativeHandoff)&&!source.querySelector('em')))throw Error('Missing plain historical native event');
       if(scroll.scrollHeight<=scroll.clientHeight)throw Error('Populated transcript cannot scroll');
       mount.querySelector('.load-older').click();await waitFor(()=>scroll.textContent.includes('Oldest recorded line'));
       if(!scroll.textContent.includes('Resident reply 0'))throw Error('Earlier page replaced the current transcript');
@@ -121,7 +134,7 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
       pick('Memory summaries');await waitFor(()=>mount.querySelector('.memory-originals summary'));
       if([...mount.querySelectorAll('.journal-prose em')].map(e=>e.textContent).join('|')!=='I look toward the road…|Nods.')throw Error('Truncated actions crossed speaker boundaries');
       mount.querySelector('.memory-originals summary').click();await waitFor(()=>mount.textContent.includes('Full original answer'));
-      if(mount.querySelector('.memory-originals .journal-prose em')?.textContent!=='The resident asks about fishing.')throw Error('Archived source lost the native follow-up');
+      if(![...mount.querySelectorAll('.memory-originals .source')].some(source=>source.textContent==='Native event · The resident asks about fishing.'&&!source.querySelector('em')))throw Error('Archived source lost the historical native event');
     }finally{api=originApi;mount.remove();}
   })()`);
   await evaluate("document.getElementById('char-tab-profile').click();document.querySelector('.original-save summary').click()");

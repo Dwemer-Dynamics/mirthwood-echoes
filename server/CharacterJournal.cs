@@ -57,10 +57,12 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
         """;
     const string Dialogues="""
         SELECT id::text AS id,day,started AS at,jsonb_build_object('kind','conversation','player',player_text,'reply',reply,'sourceType','turn','sourceId',id,
-          'nativeHandoff',talk->'handoff'->>'cue','questTerms',quest_offer->'offer'->>'terms','questOutcome',CASE quest_offer->>'action' WHEN 'accept' THEN 'Quest accepted' WHEN 'decline' THEN 'Quest declined' END,
+          'nativeHandoff',CASE WHEN talk->>'spokenReturn' IS DISTINCT FROM 'true' THEN talk->'handoff'->>'cue' END,'questTerms',quest_offer->'offer'->>'terms','questOutcome',CASE quest_offer->>'action' WHEN 'accept' THEN 'Quest accepted' WHEN 'decline' THEN 'Quest declined' END,
           'commitmentReview',commitment_review,'promises',(SELECT coalesce(jsonb_agg(jsonb_build_object('speaker',p.speaker,'quote',p.statement,'proposal',p.proposal) ORDER BY p.recorded,p.id),'[]')
           FROM commitments p WHERE p.turn_id=turns.id)) AS doc
         FROM turns WHERE campaign=@c AND actor=@a AND state='complete' AND day<=@day
+        UNION ALL SELECT id::text,day,observed,jsonb_build_object('kind','conversation','reply',description,'sourceType','event','sourceId',id)
+        FROM daily_events WHERE campaign=@c AND actor=@a AND kind='address' AND day<=@day
         """;
     const string Interactions=Events+" UNION ALL "+"""
         SELECT 'turn/'||id,day,started,jsonb_build_object('kind','conversation','description','Spoke with the player.','sourceType','turn','sourceId',id)
