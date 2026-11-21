@@ -331,6 +331,7 @@ namespace Mirthwood.Echoes
         {
             if(Visible||GameState.GetCurrentState(1)!=GameState.State.Gameplay)yield break;
             bool isolated=IsolatedGameRun.Active?.PathsMatch()==true;
+            if(isolated&&!live)yield return new WaitForSecondsRealtime(3);
             var player=PlayerCharacterController.Instance;
             var nearest=player==null?null:UnityEngine.Object.FindObjectsOfType<NPCController>()
                 .Where(n=>n.CharacterInfo!=null&&n.isActiveAndEnabled&&OverheadSpeech.Board(n)!=null)
@@ -338,11 +339,19 @@ namespace Mirthwood.Echoes
                 .OrderBy(n=>(n.transform.position-player.transform.position).sqrMagnitude).FirstOrDefault();
             if(nearest==null)yield break;
             var start=player.transform.position;
-            bool approach=isolated&&!live&&!InReplyRange(nearest);
+            bool approach=isolated&&!live;
             try{
                 if(approach){
-                    player.transform.position=nearest.transform.position+Vector3.left*1.5f;
-                    yield return new WaitForSecondsRealtime(.8f);
+                    bool settled=false;
+                    for(int attempt=0;attempt<2&&!settled;attempt++){
+                        var beside=nearest.transform.position+Vector3.left*1.5f;
+                        if(UnityEngine.AI.NavMesh.SamplePosition(beside,out var hit,1.5f,UnityEngine.AI.NavMesh.AllAreas))beside=hit.position;
+                        yield return player.CoTeleport(beside,0,0,false,false);
+                        yield return new WaitForSecondsRealtime(.8f);
+                        var view=Camera.main.WorldToViewportPoint(nearest.transform.position+Vector3.up);
+                        settled=InReplyRange(nearest)&&view.z>0&&view.x>.05f&&view.x<.95f&&view.y>.05f&&view.y<.95f;
+                    }
+                    if(!settled){report["probeError"]="The copied player and resident could not share the same camera view.";yield break;}
                 }
                 var preview=PreviewResident(url,report,live,isolated,player,nearest);
                 if(isolated)yield return CheckedProbe(report,preview);

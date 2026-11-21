@@ -122,7 +122,10 @@ namespace Mirthwood.Echoes
                 report["guests"]=new JArray(seated.Select(g=>new JObject{["name"]=g.Npc.CharacterInfo.name,["actor"]=g.Actor}));
                 var first=seated.Single(g=>g.Npc==two[0]);var other=seated.Single(g=>g.Npc==two[1]);
                 string ownSession=gathering.Session;
-                playerBubble.Input.text="wai";playerBubble.Input.caretPosition=3;
+                var writer=playerBubble.Input;
+                yield return Await(()=>writer.isFocused,"The group editor did not receive keyboard focus.",4);
+                writer.text="wai";writer.ForceLabelUpdate();yield return new WaitForEndOfFrame();
+                writer.stringPosition=writer.text.Length;
                 Require(IsolatedGameRun.PostGroupKey(true),"Could not type the group key in the draft.");
                 yield return new WaitForSecondsRealtime(.12f);IsolatedGameRun.PostGroupKey(false);
                 yield return new WaitForSecondsRealtime(.15f);

@@ -79,7 +79,10 @@ namespace Mirthwood.Echoes
                 groupReady=groupTyping=true;ready=true;playerBubble.Note("Enter to speak   •   Esc to leave");
                 return;
             }
-            if(!seated.Any(g=>g.Npc==resident))SelectSpeaker(seated[0]);
+            if(!seated.Any(g=>g.Npc==resident)){
+                waitingDots=0;
+                SelectSpeaker(seated[0]);
+            }
             if(departingGuest!=null&&seated.Contains(departingGuest)&&seated.Length==2){
                 groupParting=true;departingGuest=null;npcBubble.Note("Enter to leave");
             }
@@ -160,9 +163,10 @@ namespace Mirthwood.Echoes
         {
             FinishDeparture();
             groupProbe?.Invoke("Player composing after line "+groupSequence);
-            groupRevision++;if(active!=null){active.Abort();active=null;}
+            if(active!=null){active.Abort();active=null;}
             busy=false;nextGroupReply=0;groupReplies=0;groupTyping=true;
-            GameState.SetCurrentState(1,GameState.State.UI,false);Edit("");playerBubble.Note("Enter to speak   •   Esc to leave");
+            GameState.SetCurrentState(1,GameState.State.UI,false);Edit("");groupRevision++;
+            playerBubble.Note("Enter to speak   •   Esc to leave");
         }
         void SubmitGroup(string words)
         {
