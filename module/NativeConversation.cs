@@ -352,6 +352,12 @@ namespace Mirthwood.Echoes
                         settled=InReplyRange(nearest)&&view.z>0&&view.x>.05f&&view.x<.95f&&view.y>.05f&&view.y<.95f;
                     }
                     if(!settled){report["probeError"]="The copied player and resident could not share the same camera view.";yield break;}
+                    yield return DismissGroupTestCards();
+                    GameState.SetCurrentGeneralState(GameState.State.Gameplay);
+                    GameState.SetCurrentState(1,GameState.State.Gameplay,false);
+                    GameState.UnPause();GameState.AllowInput=true;
+                    float clock=Time.time;
+                    yield return Await(()=>!GameState.IsPaused&&Time.time>clock,"The copied world did not resume after travel.",5);
                 }
                 var preview=PreviewResident(url,report,live,isolated,player,nearest);
                 if(isolated)yield return CheckedProbe(report,preview);
