@@ -3,6 +3,7 @@
 Runs the bundled module in Steam against a private WSL server and a copy of slot 0.
 The interface test uses the local fixture. The Averil test uses the selected Windows Codex subscription.
 Use --play PACKAGE RESIDENT [tired|eager] for an unscripted conversation and --say RUN "words" after each reply.
+Use --group PACKAGE for the attendance regression or --play-group PACKAGE [eager|tired] to continue it in your own words.
 """
 import hashlib
 import json
@@ -150,7 +151,7 @@ def run(package, mode, resident=None, starting_desire=None):
             except OSError: pass
             time.sleep(.4)
         else: raise RuntimeError("The private server did not index the copied save")
-        if mode!="interface":
+        if mode not in ("interface","voices"):
             api("providers/codex_subscription",dict(defaultModel="gpt-6.1-terra",conversation="gpt-6.1-terra",
                                                     conversationEffort="medium",codexHost="windows"),"PUT")
             api("options",dict(provider="codex_subscription",replyTokens=96,dailyDays=2),"PUT")
@@ -177,7 +178,24 @@ def run(package, mode, resident=None, starting_desire=None):
         write(work/"probe.json",probe)
         for check in (probe["result"] or {}).get("checks",[]):print(check,flush=True)
         if probe["state"]!="passed":raise RuntimeError(mode+" check "+probe["state"])
-        if mode=="interface":return
+        if mode in ("interface","voices"):return
+        if mode=="grouptalk":
+            result=probe["result"]
+            attendance=result["attendance"]
+            assert all((attendance["late"] in row["line"]["audience"])==
+                       (attendance["joinedAfter"]<row["line"]["seq"]<=attendance["departedAfter"]) for row in result["groupLines"])
+            for guest in result["guests"]:
+                base="saves/"+result["campaign"]+"/characters/"+guest["actor"]+"/history/sessions"
+                lines=api(base+"/"+result["groupSession"])
+                expected=[row["line"]["words"] for row in result["groupLines"] if guest["actor"] in row["line"]["audience"]]
+                assert [row["text"] for row in lines]==expected, (guest["name"],lines,expected)
+                write(work/(guest["actor"]+"-transcript.json"),lines)
+                history=api(base.replace("/sessions","/daily"))["items"]
+                records=[entry for day in history for entry in api(base.replace("/sessions","/daily/")+day["id"])]
+                flour=[item for item in records if "2 Flour" in item["text"]]
+                assert bool(flour)==(guest["name"]=="Averil"), (guest["name"],flour)
+            subprocess.run(["node","tests/journal_browser.cjs",str(work),"--group"],check=True,timeout=90)
+            return
         result=probe["result"]
         first=result["turns"][0]
         path="saves/"+first["campaign"]+"/characters/"+first["actor"]+"/history/conversations"
@@ -211,16 +229,22 @@ def run(package, mode, resident=None, starting_desire=None):
         write(work/"isolation.json",receipt)
         if not all(receipt[k] for k in ("unchanged","closed","databaseRemoved")):raise RuntimeError("Isolation check failed")
         if (game/"BepInEx/LogOutput.log").exists():shutil.copyfile(game/"BepInEx/LogOutput.log",work/"game-module.log")
-        for capture in (harness.parent/"Diagnostics").glob("latest-roleplay-*.png" if resident else "latest-averil-*.png"):
-            if capture.stat().st_mtime>=(session/"harness.json").stat().st_mtime:shutil.copyfile(capture,work/capture.name)
+        pattern="latest-group-*.png" if mode=="grouptalk" else "latest-roleplay-*.png" if resident else "latest-averil-*.png"
+        patterns=("latest-native-overhead.png","latest-player-draft.png","latest-interface.png","latest-full-*.png","latest-named-player-speech.png","latest-compact-*.png") if mode=="interface" else (pattern,)
+        if mode=="voices":patterns=("voice-player.png","voice-resident.png")
+        for match in patterns:
+            for capture in (harness.parent/"Diagnostics").glob(match):
+                if capture.stat().st_mtime>=(session/"harness.json").stat().st_mtime:shutil.copyfile(capture,work/capture.name)
         if session.resolve().parent==harness.resolve() and json.loads((session/"harness.json").read_text())["id"]==token:
             shutil.rmtree(session)
         print("Verified original saves and installed module.",flush=True)
 
 
 if __name__=="__main__":
-    modes={"--live-averil":"residentdialogue","--interface-fixture":"interface","--live-topic-flow":"dialogueflow"}
+    modes={"--live-averil":"residentdialogue","--interface-fixture":"interface","--live-topic-flow":"dialogueflow","--group":"grouptalk","--voices":"voices"}
     if len(sys.argv)==3 and sys.argv[1] in modes:run(Path(sys.argv[2]).resolve(strict=True),modes[sys.argv[1]])
+    elif sys.argv[1:2]==["--play-group"] and os.name=="nt" and (len(sys.argv)==3 or len(sys.argv)==4 and sys.argv[3] in ("tired","eager")):
+        run(Path(sys.argv[2]).resolve(strict=True),"grouptalk","Group",sys.argv[3] if len(sys.argv)==4 else None)
     elif sys.argv[1:2]==["--play"] and os.name=="nt" and (len(sys.argv)==4 or len(sys.argv)==5 and sys.argv[4] in ("tired","eager")):
         run(Path(sys.argv[2]).resolve(strict=True),"roleplay",*sys.argv[3:])
     elif len(sys.argv)==4 and sys.argv[1]=="--say" and os.name=="nt":send_line(sys.argv[2],sys.argv[3])

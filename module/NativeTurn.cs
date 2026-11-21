@@ -25,22 +25,23 @@ namespace Mirthwood.Echoes
         }
         void PlayerLine(string id,string text)
         {
+            var bubble=playerBubble;
             speech.Say(id+"/player",_Mirthwood.Scripts.Demo.Combat.PlayerCharacterController.Instance,text,
-                (value,partial)=>playerBubble.Show(value,partial));
+                (heard,partial)=>{if(playerBubble==bubble&&bubble.Visible&&!bubble.Editing)bubble.ShowSpoken(text,heard,partial);},false);
         }
         void DisplayTalk(string id,string reply,JObject handoff,bool playerLeaves=false)
         {
             string kind=(string)handoff?["kind"];
             conversationOver=playerLeaves||kind=="ended"||kind=="unknown";
             phase=Phase.Reading;phaseFrame=Time.frameCount;
-            speech.Say(id+"/npc",resident,reply,ShowResidentReply,showPlaceholder:false);
+            speech.Say(id+"/npc",resident,reply,(heard,partial)=>ShowResidentReply(heard,partial,reply),showPlaceholder:false);
             ReadingHint();
         }
         IEnumerator NativeTurn(string message,int epoch)
         {
             if(!SameResident(epoch)){if(epoch==generation)Close();yield break;}
             var outbox=exchange;JObject turn=null;
-            try{turn=outbox.Accept(message,positiveRun,NativeCues.Binding(freshCue,resident),resident);freshCue=null;}catch(Exception){Retry(message,"Could not save this exchange. Enter to retry.");}
+            try{turn=outbox.Accept(message,positiveRun,NativeCues.Binding(freshCue,resident,conversationId),resident);freshCue=null;}catch(Exception){Retry(message,"Could not save this exchange. Enter to retry.");}
             if(turn==null)yield break;
             string id=(string)turn["id"],original=(string)turn["text"];
             if(original!=message){Retry(original,"An earlier exchange is pending. Enter to recover your original words.");yield break;}

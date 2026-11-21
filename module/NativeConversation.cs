@@ -67,6 +67,7 @@ namespace Mirthwood.Echoes
         int waitingDots;
         float waitStarted;
         string campaign,actor,person="",accepted,pendingFinish;
+        string conversationId;
         UnityWebRequest active;
         Canvas[] contextPrompts=Array.Empty<Canvas>();
         NPCController resident;
@@ -93,6 +94,7 @@ namespace Mirthwood.Echoes
         bool Build(NPCController npc)
         {
             var player=PlayerCharacterController.Instance;if(player==null)return false;
+            conversationId=Guid.NewGuid().ToString();
             generation++;person=npc.CharacterInfo.name;busy=false;ready=false;resolving=false;conversationOver=false;positiveRun=0;resident=npc;accepted=pendingFinish=null;
             root=SpeechSurface("Mirthwood Echoes • Conversation",true);
             var surface=(RectTransform)root.transform;npcBubble=OverheadSpeech.Create(npc,surface);playerBubble=OverheadSpeech.Create(npc,surface,player);
@@ -111,7 +113,7 @@ namespace Mirthwood.Echoes
         {
             speech?.Stop(true);
             if(waitingDots!=0){waitingDots=0;npcBubble.SetVisible(false);}
-            phase=Phase.Draft;phaseFrame=Time.frameCount;DraftPause.Begin();npcBubble.Note(npcBubble.Visible?npcBubble.PageHint:"");
+            phase=Phase.Draft;phaseFrame=Time.frameCount;DraftPause.Begin();npcBubble.Note("");
             playerBubble.Edit(draft);playerBubble.Note(note);
         }
         void WaitForReply(string words,string note="")
@@ -133,19 +135,19 @@ namespace Mirthwood.Echoes
             if(count==waitingDots)return;
             waitingDots=count;npcBubble.Show(new string('.',count));
         }
-        void ShowResidentReply(string value,bool partial=false)
+        void ShowResidentReply(string value,bool partial=false,string spokenLine=null)
         {
             if(string.IsNullOrWhiteSpace(value)||(partial&&value=="*"))return;
             if(waitingDots!=0||phase!=Phase.Reading)phaseFrame=Time.frameCount;
             waitingDots=0;phase=Phase.Reading;
-            playerBubble.SetVisible(false);npcBubble.Show(value,partial);ReadingHint();
+            playerBubble.SetVisible(false);
+            if(spokenLine==null)npcBubble.Show(value,partial);else npcBubble.ShowSpoken(spokenLine,value,partial);
+            ReadingHint();
         }
-        void Page(int direction){npcBubble.TurnPage(direction);if(phase==Phase.Draft)npcBubble.Note(npcBubble.PageHint);else ReadingHint();}
         void ReadingHint()
         {
             if(waitingDots!=0)return;
-            string pages=npcBubble.Pages>1?npcBubble.PageHint+"    ":"";
-            npcBubble.Note(pages+(busy?"":pendingFinish!=null?"Enter to save this reply":conversationOver?"Enter to leave":"Enter to reply"));
+            npcBubble.Note(busy?"":pendingFinish!=null?"Enter to save this reply":conversationOver?"Enter to leave":"Enter to reply");
         }
         void Advance()
         {
@@ -159,10 +161,6 @@ namespace Mirthwood.Echoes
                 if(phase==Phase.Reading&&!busy&&waitingDots==0)Advance();else Close();return;
             }
             if(phase==Phase.Reading&&!busy&&waitingDots==0&&Time.frameCount!=phaseFrame&&(Input.GetKeyDown(KeyCode.Return)||Input.GetKeyDown(KeyCode.KeypadEnter))){Advance();return;}
-            if((phase==Phase.Reading||phase==Phase.Draft)&&npcBubble.Visible&&npcBubble.Pages>1){
-                if(Input.GetKeyDown(KeyCode.PageDown)||Input.mouseScrollDelta.y<0)Page(1);
-                if(Input.GetKeyDown(KeyCode.PageUp)||Input.mouseScrollDelta.y>0)Page(-1);
-            }
         }
         public void Follow()
         {
@@ -202,13 +200,15 @@ namespace Mirthwood.Echoes
         public void Open(NPCController npc,object target)
         {
             if(npc?.CharacterInfo==null||Visible||GameState.GetCurrentState(1)!=GameState.State.Gameplay)return;
-            string opener=null;
+            string opener=null,openedSession=null;
             if(passing?.Speaker==npc&&passing.CanReply&&(passing.Kind!="address"||passing.Heard)&&passing.Bubble!=null&&InReplyRange(npc)){
                 opener=passing.Line;
+                if(passing.Kind=="address")openedSession=passing.Id;
                 if(passing.EventId!=null)NativeCues.Recent(npc,passing.EventId,passing.Kind,passing.Line);
             }
             DismissPassingLine();
             if(!Build(npc))return;
+            if(openedSession!=null)conversationId=openedSession;
             if(opener!=null){npcBubble.Show(opener);Follow();}
             var brain=npc.GetComponent<NPCChatController>();var player=PlayerCharacterController.Instance.GetComponent<PlayerChat>();
             if(brain!=null&&player!=null)FaceForTalk(brain,player);
@@ -249,6 +249,7 @@ namespace Mirthwood.Echoes
         }
         void Submit(string words)
         {
+            if(GroupActive){SubmitGroup(words);return;}
             if(!Visible||busy||phase!=Phase.Draft||(IsolatedGameRun.Active!=null&&fixtureUrl==null&&IsolatedGameRun.Active.TalkAddress==null))return;
             if(string.IsNullOrWhiteSpace(words)){host.StartCoroutine(Refocus(generation));return;}
             WaitForReply(words.Trim());
@@ -330,6 +331,7 @@ namespace Mirthwood.Echoes
         {
             if(Visible||GameState.GetCurrentState(1)!=GameState.State.Gameplay)yield break;
             bool isolated=IsolatedGameRun.Active?.PathsMatch()==true;
+            if(isolated&&!live)yield return new WaitForSecondsRealtime(3);
             var player=PlayerCharacterController.Instance;
             var nearest=player==null?null:UnityEngine.Object.FindObjectsOfType<NPCController>()
                 .Where(n=>n.CharacterInfo!=null&&n.isActiveAndEnabled&&OverheadSpeech.Board(n)!=null)
@@ -337,11 +339,25 @@ namespace Mirthwood.Echoes
                 .OrderBy(n=>(n.transform.position-player.transform.position).sqrMagnitude).FirstOrDefault();
             if(nearest==null)yield break;
             var start=player.transform.position;
-            bool approach=isolated&&!live&&!InReplyRange(nearest);
+            bool approach=isolated&&!live;
             try{
                 if(approach){
-                    player.transform.position=nearest.transform.position+Vector3.left*1.5f;
-                    yield return new WaitForSecondsRealtime(.8f);
+                    bool settled=false;
+                    for(int attempt=0;attempt<2&&!settled;attempt++){
+                        var beside=nearest.transform.position+Vector3.left*1.5f;
+                        if(UnityEngine.AI.NavMesh.SamplePosition(beside,out var hit,1.5f,UnityEngine.AI.NavMesh.AllAreas))beside=hit.position;
+                        yield return player.CoTeleport(beside,0,0,false,false);
+                        yield return new WaitForSecondsRealtime(.8f);
+                        var view=Camera.main.WorldToViewportPoint(nearest.transform.position+Vector3.up);
+                        settled=InReplyRange(nearest)&&view.z>0&&view.x>.05f&&view.x<.95f&&view.y>.05f&&view.y<.95f;
+                    }
+                    if(!settled){report["probeError"]="The copied player and resident could not share the same camera view.";yield break;}
+                    yield return DismissGroupTestCards();
+                    GameState.SetCurrentGeneralState(GameState.State.Gameplay);
+                    GameState.SetCurrentState(1,GameState.State.Gameplay,false);
+                    GameState.UnPause();GameState.AllowInput=true;
+                    float clock=Time.time;
+                    yield return Await(()=>!GameState.IsPaused&&Time.time>clock,"The copied world did not resume after travel.",5);
                 }
                 var preview=PreviewResident(url,report,live,isolated,player,nearest);
                 if(isolated)yield return CheckedProbe(report,preview);
@@ -383,18 +399,68 @@ namespace Mirthwood.Echoes
                 var clock=_Mirthwood.Scripts.Demo.Weather.DayNightCycle.Instance;float day=clock.Now;float scaled=Time.time;
                 yield return new WaitForSecondsRealtime(.7f);
                 report["clockPaused"]=GameState.IsPaused&&Time.timeScale==0&&day==clock.Now&&scaled==Time.time;
-                input.text="Hi";var small=playerBubble.Size;
-                input.text="The flour is ready by the mill";var wide=playerBubble.Size;
+                input.text="Hi";input.ForceLabelUpdate();yield return new WaitForEndOfFrame();
+                var small=playerBubble.Size;float left=playerBubble.Footprint.xMin;
+                input.text="The flour is ready by the mill";input.ForceLabelUpdate();yield return new WaitForEndOfFrame();
+                var wide=playerBubble.Size;float wideLeft=playerBubble.Footprint.xMin;
+                input.textComponent.ForceMeshUpdate(false,true);
+                bool grewRight=Mathf.Abs(wideLeft-left)<1f&&input.textComponent.textInfo.lineCount==1&&wide.x>small.x;
+                input.text="Hi";input.ForceLabelUpdate();yield return new WaitForEndOfFrame();
+                bool shrank=Vector2.Distance(playerBubble.Size,small)<1f;
+                const string named="Averil, what did you collect for work today? Could you tell Drystan too?";
+                input.text=named;input.MoveTextEnd(false);input.ForceLabelUpdate();yield return new WaitForEndOfFrame();
+                bool draftWords=playerBubble.WholeWordsOnLines(named)&&playerBubble.EntireDraftInView();
+                playerBubble.Show(named);npcBubble.Show(".");yield return new WaitForEndOfFrame();
+                Require(playerBubble!=null,"The sample bubble closed during the layout check. "+report["closedFrom"]);
+                bool sentWords=playerBubble.WholeWordsOnLines(named)&&playerBubble.ShowsCompleteMessage(named);
+                yield return Capture("latest-named-player-speech.png",ok=>report["namedCapture"]=ok);
+                playerBubble.ShowSpoken(named,"Aver",true);
+                report["namedWords"]=draftWords&&sentWords&&playerBubble.WholeWordsOnLines(named)&&playerBubble.SpokenWordMarked();
+                report["horizontalGrowth"]=grewRight&&shrank;
+                report["wordLayout"]=$"Left {left:F1} to {wideLeft:F1}, size {small} to {wide}, grew right {grewRight}, shrank {shrank}, draft {draftWords}, submitted {sentWords}, voiced {playerBubble.WholeWordsOnLines(named)}.";
+                const string flour="Drystan, who told you about the flour?";
+                const string parting="I should head home. Thank you both, and good night.";
+                var clearance=new JArray();bool compact=true;
+                foreach(var sample in new[]{flour,parting,".","..","..."}){
+                    var bubble=sample.StartsWith(".")?npcBubble:playerBubble;
+                    bubble.Show(sample);
+                    var margins=bubble.PaperMargins();
+                    clearance.Add(sample+" "+margins);
+                    for(int side=0;side<4;side++)compact&=margins[side]>=2&&margins[side]<=12;
+                    compact&=bubble.ShowsCompleteMessage(sample)&&bubble.WholeWordsOnLines(sample);
+                }
+                report["compactPaper"]=compact;report["paperMargins"]=clearance.ToString(Newtonsoft.Json.Formatting.None);
+                playerBubble.Show(flour);npcBubble.Show("..");
+                yield return Capture("latest-compact-flour.png",ok=>report["flourCapture"]=ok);
+                playerBubble.Show(parting);
+                yield return Capture("latest-compact-goodbye.png",ok=>report["goodbyeCapture"]=ok);
+                npcBubble.SetVisible(false);
+                Edit("");
                 input.text=string.Join(" ",Enumerable.Repeat("The sacks are ready by the mill.",5));
+                yield return new WaitForEndOfFrame();
                 report["grows"]=wide.x>small.x&&playerBubble.Size.y>wide.y;
                 input.MoveTextEnd(false);input.ProcessEvent(new Event{type=EventType.KeyDown,character='!'});input.ForceLabelUpdate();
                 yield return null;yield return new WaitForEndOfFrame();
                 report["longDraftCaret"]=playerBubble.DraftEndInView();
                 report["editorEdges"]=playerBubble.ChecksEdges()&&playerBubble.FitsScreen();
-                var narrow=new string('i',37);input.text=narrow;input.ForceLabelUpdate();input.textComponent.ForceMeshUpdate(false,true);
+                const string ending=" Every last word.";
+                string longDraft=string.Join(" ",Enumerable.Repeat("Beyond the old mill the evening light falls on the water.",28)).Substring(0,1200-ending.Length)+ending;
+                input.text=longDraft;input.MoveTextEnd(false);input.ForceLabelUpdate();
+                yield return null;yield return new WaitForEndOfFrame();
+                report["wholeLongDraft"]=input.text==longDraft&&playerBubble.EntireDraftInView()&&playerBubble.DraftEndInView()&&playerBubble.ChecksEdges();
+                report["draftBounds"]=playerBubble.InkDetail(true)??"All glyphs fit";
+                yield return Capture("latest-full-player-draft.png",ok=>report["fullDraftCapture"]=ok);
+                WaitForReply(input.text);yield return new WaitForEndOfFrame();
+                report["wholeSubmitted"]=playerBubble.ShowsCompleteMessage(longDraft)&&playerBubble.ChecksEdges();
+                yield return Capture("latest-full-player-speech.png",ok=>report["fullPlayerCapture"]=ok);
+                Edit("");
+                var narrow=new string('i',37);input.text=narrow;yield return new WaitForEndOfFrame();input.ForceLabelUpdate();input.textComponent.ForceMeshUpdate(false,true);
                 var chars=input.textComponent.textInfo.characterInfo;
-                report["wrapped"]=input.text==narrow&&input.textComponent.GetParsedText().StartsWith(new string('i',36)+"\ni")&&chars[36].stringLength==0&&chars[37].index==36;
-                input.stringPosition=37;input.ProcessEvent(Event.KeyboardEvent("backspace"));report["editAfterWrap"]=input.text==new string('i',36);
+                bool narrowFits=chars[0].lineNumber==chars[36].lineNumber&&chars[36].index==36;
+                string wideWord=new string('W',180);input.text=wideWord;yield return new WaitForEndOfFrame();input.ForceLabelUpdate();input.textComponent.ForceMeshUpdate(false,true);
+                chars=input.textComponent.textInfo.characterInfo;
+                report["wrapped"]=narrowFits&&chars[0].lineNumber<chars[179].lineNumber&&chars[179].index==179&&playerBubble.EntireDraftInView();
+                input.stringPosition=180;input.ProcessEvent(Event.KeyboardEvent("backspace"));report["editAfterWrap"]=input.text==new string('W',179);
                 input.text="<b>plain</b> *bows*";input.ForceLabelUpdate();report["literalTags"]=input.textComponent.GetParsedText().Contains("<b>plain</b>")&&playerBubble.Styled("plain",false);
                 input.text="Hello *bows*. Morning.";input.stringPosition=9;input.ProcessEvent(new Event{type=EventType.KeyDown,character='X'});
                 report["middleEdit"]=input.text=="Hello *boXws*. Morning.";
@@ -424,6 +490,7 @@ namespace Mirthwood.Echoes
             input.stringPosition=line.Length;input.ForceLabelUpdate();
             report["draftItalic"]=playerBubble.Styled("lift",true)&&playerBubble.Styled("collect",false);
             yield return null;yield return new WaitForEndOfFrame();report["shortDraftVisible"]=playerBubble.EntireDraftInView()&&playerBubble.CaretAligned;
+            report["shortDraftBounds"]=(playerBubble.InkDetail(true)??"All glyphs fit")+", caret aligned "+playerBubble.CaretAligned;
             if(isolated)yield return Capture("latest-player-draft.png",ok=>report["draftCapture"]=ok);
             if(isolated&&IsolatedGameRun.PostReturn()){
                 float timeout=Time.realtimeSinceStartup+2;
@@ -438,6 +505,7 @@ namespace Mirthwood.Echoes
             report["resumeSpeed"]=!GameState.IsPaused&&Mathf.Approximately(Time.timeScale,originalSpeed);
             report["font"]=npcBubble.FontName;report["sprite"]=npcBubble.SpriteName;report["nativeStyle"]=npcBubble.UsesNativeStyle&&playerBubble.UsesNativeStyle;
             report["onScreen"]=npcBubble.FitsScreen();report["displayed"]=npcBubble.VisibleText;
+            report["relativeTypeSize"]=npcBubble.RelativeTypeSize;
             report["replyItalic"]=npcBubble.Styled("nod",true)&&npcBubble.Styled("mill",false);
             yield return Capture("latest-interface.png",ok=>report["capture"]=ok);
             if(isolated&&phase==Phase.Reading){
@@ -445,13 +513,17 @@ namespace Mirthwood.Echoes
                 yield return new WaitForSecondsRealtime(.65f);
                 report["clockAdvanced"]=_Mirthwood.Scripts.Demo.Weather.DayNightCycle.Instance.Now>before;
                 report["tracksSpeaker"]=npcBubble.ChecksTracking();
-                npcBubble.Show(string.Join(" ",Enumerable.Repeat("The mill wheel turns beside the willow while we wait for the rain to pass.",14)));
-                report["pages"]=npcBubble.Pages;Page(1);report["nextPage"]=npcBubble.Page;Page(-1);report["backPage"]=npcBubble.Page;
+                string longReply=string.Join(" ",Enumerable.Repeat("The mill wheel turns beside the willow while we wait for the rain to pass.",14))+" *I smile.* Good night.";
+                npcBubble.Show(longReply);yield return new WaitForEndOfFrame();
+                report["wholeLongReply"]=npcBubble.ShowsCompleteMessage(longReply)&&npcBubble.Styled("smile",true);
                 report["edgeFit"]=npcBubble.ChecksEdges()&&npcBubble.FitsScreen();
+                yield return Capture("latest-full-resident-speech.png",ok=>report["fullResidentCapture"]=ok);
                 Edit("");report["nextDraftPaused"]=GameState.IsPaused&&Time.timeScale==0;
                 playerBubble.Input.text=string.Join(" ",Enumerable.Repeat("I remember the mill wheel and the rain.",10));
-                Follow();
-                report["separateBubbles"]=npcBubble.Visible&&playerBubble.Editing&&playerBubble.FitsScreen()&&npcBubble.FitsScreen()&&!playerBubble.Footprint.Overlaps(npcBubble.Footprint);
+                yield return null;yield return new WaitForEndOfFrame();Follow();
+                report["pairBounds"]=playerBubble.Footprint+" and "+npcBubble.Footprint+". Draft "+(playerBubble.InkDetail(true)??"fits")+". Reply "+(npcBubble.InkDetail(false)??"fits");
+                report["separateBubbles"]=npcBubble.Visible&&playerBubble.Editing&&playerBubble.EntireDraftInView()&&npcBubble.EntireSpeechInView()&&
+                    playerBubble.FitsScreen()&&npcBubble.FitsScreen()&&!playerBubble.Footprint.Overlaps(npcBubble.Footprint);
             }
             var prompts=contextPrompts;
             if(epoch==generation)Close();
@@ -482,9 +554,11 @@ namespace Mirthwood.Echoes
         }
         public void Close()
         {
+            ReleaseGroup();
             waitingDots=0;
             DismissPassingLine();
             if(!Visible)return;generation++;if(active!=null){active.Abort();active=null;}
+            if(fixtureReport!=null&&IsolatedGameRun.Active!=null)fixtureReport["closedFrom"]=UnityEngine.StackTraceUtility.ExtractStackTrace();
             speech?.Stop();speech=null;
             freshCue=null;NativeCues.Clear(resident);InteractionHooks.DismissGiftRemark(resident);
             DraftPause.End();playerBubble?.Dispose();npcBubble?.Dispose();

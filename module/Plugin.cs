@@ -36,6 +36,7 @@ namespace Mirthwood.Echoes
         private int hookCount;
         private float nextBeat;
         private NativeConversation dialogue;
+        BepInEx.Configuration.ConfigEntry<BepInEx.Configuration.KeyboardShortcut> groupKey;
         private ReactionVoices reactionVoices;
         internal static ReactionVoices Voices => instance && instance.isActiveAndEnabled ? instance.reactionVoices : null;
         private string probing,completedProbe,completedPacket;
@@ -65,11 +66,16 @@ namespace Mirthwood.Echoes
                 StartCoroutine(isolated.Load());
             }
             dialogue = new NativeConversation(this);
+            groupKey=Config.Bind("Controls","GroupTalk",new BepInEx.Configuration.KeyboardShortcut(KeyCode.T),"Gather nearby residents for a group conversation.");
             reactionVoices = new ReactionVoices(Config.Bind("Audio","OriginalVoices",true,"Play the Echoes cast for resident and player chat reactions."),Logger);
             hooks.CreateClassProcessor(typeof(ReactionVoices.NativeSound)).Patch();
             QuestPanel.Install(this,hooks);
             NativeCues.Start(this);
             InteractionHooks.Install(hooks,Logger);
+            if(InteractionHooks.Compatible){
+                hooks.CreateClassProcessor(typeof(GroupGathering.Routine)).Patch();
+                hooks.CreateClassProcessor(typeof(GroupGathering.Movement)).Patch();
+            }
             hooks.CreateClassProcessor(typeof(DraftPause)).Patch();
             hooks.CreateClassProcessor(typeof(WaitingResident)).Patch();
             hooks.CreateClassProcessor(typeof(TalkOption)).Patch();
@@ -107,7 +113,8 @@ namespace Mirthwood.Echoes
         {
             reactionVoices?.Collect();
             QuestPanel.Tick();
-            dialogue?.TickPassingLine();
+            dialogue?.GroupKeys(groupKey.Value);
+            if(dialogue?.GroupActive!=true)dialogue?.TickPassingLine();
             if (Time.realtimeSinceStartup >= nextBeat)
             {
                 nextBeat = Time.realtimeSinceStartup + (isolated==null?12:3);
@@ -120,7 +127,7 @@ namespace Mirthwood.Echoes
                     isolatedRun=isolated?.Id
                 }), null, OnHeartbeat));
             }
-            if (dialogue.Visible)dialogue.HandleKeys();
+            if (dialogue.Visible&&!dialogue.GroupActive)dialogue.HandleKeys();
         }
 
         // NPCController uses IsChatting to stop its agent and idle its walk animation.
@@ -129,7 +136,7 @@ namespace Mirthwood.Echoes
         {
             static void Postfix(ChatController __instance,ref bool __result)
             {
-                if(!__result && instance?.dialogue?.WaitingFor(__instance)==true)__result=true;
+                if(!__result && (instance?.dialogue?.WaitingFor(__instance)==true||GroupGathering.Holds(__instance)))__result=true;
             }
         }
 
@@ -145,7 +152,7 @@ namespace Mirthwood.Echoes
                 if(index<0)return; // Authored Speak and disabled or unavailable residents retain their native options.
                 __result.RemoveAll(o=>o.Name=="Talk");
                 __result.Insert(index,new IContextMenu.Option("Talk",playerIndex=>{
-                    if(playerIndex!=1||!ReplacesTalk||!npc||!npc.isActiveAndEnabled||!chat.chatEnabled||instance.dialogue.Visible||
+                    if(playerIndex!=1||!ReplacesTalk||!npc||!npc.isActiveAndEnabled||!chat.chatEnabled||instance.dialogue.Visible||instance.dialogue.GroupActive||
                        !ReferenceEquals(Selected.GetValue(__instance),chat)||chat.GetDialogueData()!=null)return;
                     var world=World();string owner=Owner(npc);
                     if(world!=null&&owner!=""&&npc.CharacterInfo!=null)
@@ -251,6 +258,8 @@ namespace Mirthwood.Echoes
                 }
                 if(mode=="relationships"&&isolated?.TalkAddress!=null&&isolated.PathsMatch())
                     yield return dialogue.RunRelationships(report);
+                if(mode=="grouptalk"&&isolated?.PrivateDiagnostics==true&&isolated.PathsMatch())
+                    yield return dialogue.RunGroupHarness(report);
                 if(mode=="interactions"&&isolated?.TalkAddress!=null&&isolated.PathsMatch())
                     yield return dialogue.RunInteractions(report);
                 if((mode=="residentdialogue"||mode=="dialogueflow"||mode=="roleplay")&&isolated?.PrivateDiagnostics==true&&isolated.PathsMatch())

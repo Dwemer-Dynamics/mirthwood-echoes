@@ -25,6 +25,11 @@ class Writer(BaseHTTPRequestHandler):
         player=packet["messages"][1]["content"]
         marks=[{"speaker":"player","quote":player}] if player=="I promise to deliver flour tomorrow." else []
         text="The miller learned the rhythm of the mill in Brightoak." if packet["model"]=="historian" else json.dumps({"reply":"Welcome back.","commitments":marks})
+        if "heardInOrder" in player:
+            text=json.dumps({"words":"Who told you about the mill?","to":"player","ownTopic":"Intellectual",
+                             "receivedTopic":"Small Talk","farewell":"Tell me about it another day."})
+        elif player.startswith("Do you still keep"):
+            text=json.dumps({"topic":"Small Talk","warm":"I do.","neutral":"I do.","cool":"I do.","commitments":[]})
         self.wfile.write(json.dumps({"choices":[{"message":{"content":text}}]}).encode())
 
 def main(package,game_assets):
@@ -57,6 +62,10 @@ def main(package,game_assets):
                 component["data"]=json.dumps({"dayNumber":4,"yearNumber":1})
         second.write_text(json.dumps(later))
         data=json.loads(file.read_text())
+        third=dict(next(row for row in data["saveData"] if row["guid"].startswith("East-NPC-NPCController")))
+        third["guid"]=third["guid"].replace("East-NPC","South-NPC")
+        third_info=json.loads(third["data"]);third_info["characterInfo"].update(id="third",name="Listener")
+        third["data"]=json.dumps(third_info);data["saveData"].append(third)
         for row in data["saveData"]:
             if "NPCController" in row["guid"]:
                 payload=json.loads(row["data"]);info=payload["characterInfo"]
@@ -73,8 +82,10 @@ def main(package,game_assets):
                  MIRTHWOOD_ECHOES_PORT=str(port),Logging__LogLevel__Default="Warning")
         app=package/"app"
         with (tmp/"test.log").open("w+") as log:
-            proc=subprocess.Popen(["dotnet",str(app/"Mirthwood.Echoes.Server.dll")],cwd=app,env=env,user=account.pw_uid,group=account.pw_gid,
-                                  extra_groups=[],stdout=log,stderr=log)
+            def start():
+                return subprocess.Popen(["dotnet",str(app/"Mirthwood.Echoes.Server.dll")],cwd=app,env=env,user=account.pw_uid,group=account.pw_gid,
+                                        extra_groups=[],stdout=log,stderr=log)
+            proc=start()
             try:
                 for _ in range(80):
                     try:
@@ -146,6 +157,33 @@ def main(package,game_assets):
                 beat(17);api("dialogue",{"campaign":campaign,"actor":a,"text":"We have a deal.","commitment":True,"id":str(uuid.uuid4())})
                 assert all(x["statement"]!="We have a deal." for x in api(left+"/history/commitments")["items"])
                 print("PASS every source on a busy day survives compaction, full source text remains actor/day scoped, and client flags cannot create a promise.")
+                from group_memory import check_memories
+                third_key=next(x["key"] for x in roster if x["owner"]=="South-NPC")
+                session=check_memories(api,beat,event,world,campaign,[a,b,third_key],turn,Writer.calls)
+                data["saveData"].append({"guid":"SVar-mirthwood.echoes.history","scene":"Global","data":world["cueHead"]})
+                clock=next(r for r in data["saveData"] if "DayNightCycle" in r["guid"])
+                clock["data"]=json.dumps({"dayNumber":world["day"],"yearNumber":0})
+                file.write_text(json.dumps(data));api("saves/refresh",{})
+                before=api(right+"/history/sessions/"+session)
+                receipts=[]
+                for attempt in range(2):
+                    proc.terminate();proc.wait(timeout=10);proc=start()
+                    for _ in range(100):
+                        count=pg("psql","-XAt","-d",db,"-c","SELECT count(*) FROM resident_recaps WHERE kind='group'")
+                        try:
+                            if int(count)>=3 and api(right+"/history/sessions/"+session)==before:break
+                        except OSError:pass
+                        time.sleep(.15)
+                    else:raise AssertionError("The background worker did not persist the three audience recaps")
+                    receipts.append(pg("psql","-XAt","-d",db,"-c","SELECT kind,entry,fingerprint,body FROM resident_recaps ORDER BY actor,kind,entry,fingerprint"))
+                assert receipts[0]==receipts[1] and "daily|" in receipts[0]
+                pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='Wren' WHERE player_name='Test player'")
+                renamed=next(item for item in api(right+"/history/sessions")["items"] if item["id"]==session)
+                assert "Wren — " in renamed["body"] and "Test player — " not in renamed["body"]
+                pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='' WHERE player_name='Wren'")
+                assert any(row.get("to")=="Player" for row in api(left+"/history/sessions/"+turn))
+                pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='Test player' WHERE player_name=''")
+                print("PASS two service restarts preserve the exact per-audience recaps and daily sources.",flush=True)
                 # A controller reused by a different native ID must start a separate journal.
                 for r in data["saveData"]:
                     if r["guid"].startswith("East-NPC-NPCController"):

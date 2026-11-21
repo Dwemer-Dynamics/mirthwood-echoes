@@ -91,6 +91,7 @@ namespace Mirthwood.Echoes
             report["playerVoice"]=Plugin.Voices.Select(player,out int playerPitch);
             report["residentVoice"]=Plugin.Voices.Select(npc,out int residentPitch);
             report["playerPitch"]=playerPitch;report["residentPitch"]=residentPitch;
+            speech=new ConversationSpeech(host,Address+"voices/speech");
             speech.Witness=rows.Add;
             try{
                 DraftPause.End();phase=Phase.Waiting;playerBubble.Show(first);
@@ -103,7 +104,7 @@ namespace Mirthwood.Echoes
                     if(playerBubble.Visible){
                         var text=playerBubble.ReadRenderedText();
                         if((string)playerText.Last!=text && playerText.Count<32)playerText.Add(text);
-                        playerPartial|=text=="Good";
+                        playerPartial|=playerBubble.ShowsCompleteMessage(first)&&playerBubble.SpokenWordMarked();
                         actionItalic|=rows.Count==1&&playerBubble.Styled("lift",true);
                         if(actionItalic&&!requestedCapture){
                             requestedCapture=true;
@@ -113,7 +114,7 @@ namespace Mirthwood.Echoes
                     if(npcBubble.Visible){
                         var text=npcBubble.ReadRenderedText();
                         if((string)npcText.Last!=text && npcText.Count<32)npcText.Add(text);
-                        npcPartial|=text.Length>0&&text!="…"&&text.Length<second.Length && second.StartsWith(text,StringComparison.Ordinal);
+                        npcPartial|=npcBubble.ShowsCompleteMessage(second)&&npcBubble.SpokenWordMarked();
                     }
                     yield return null;
                 }
@@ -125,10 +126,9 @@ namespace Mirthwood.Echoes
                     report["speakerAnchor"]=npcBubble.AnchoredTo(npc.transform);
                     yield return Capture("voice-resident.png",ok=>report["residentCapture"]=ok);
                     report["playerCapture"]=playerCapture;
-                    // The standalone voice suite has no disposable Talk backend on this port.
-                    // Exercise the game client's real network failure without taking Dwemer offline.
+                    // Exercise a refused loopback connection without interrupting the live voice service.
                     speech.Stop();
-                    speech=new ConversationSpeech(host,"http://127.0.0.1:17864/api/voices/speech");
+                    speech=new ConversationSpeech(host,"http://127.0.0.1:1/api/voices/speech");
                     var failedClips=new JArray();speech.Witness=failedClips.Add;
                     const string offline="The mill is open. *I nod.*";
                     DisplayTalk("voice-offline",offline,null);

@@ -35,31 +35,17 @@ namespace Mirthwood.Echoes
                 __result["Leisure"]=replayLeisureCue;
         }
 
-        IEnumerator ReadResidentPages(OverheadSpeech bubble,string line,JObject row,string filename,bool opener)
+        IEnumerator ReadResidentBubble(OverheadSpeech bubble,string line,JObject row,string filename)
         {
-            string words=new BubbleText(line,false).Plain;
-            var pages=new JArray();row["visiblePages"]=pages;
-            int count=bubble.Pages;
-            for(int page=1;page<=count;page++){
-                yield return new WaitForEndOfFrame();
-                if(!bubble.Visible||bubble.Page!=page)throw new InvalidOperationException("The resident's next page was not displayed.");
-                pages.Add(bubble.ReadPageInk());
-                if(filename!=null){
-                    bool captured=false;
-                    yield return Capture(filename+(page==1?"":"-page-"+page)+".png",ok=>captured=ok);
-                    if(!captured)throw new InvalidOperationException("Could not capture the resident's visible page.");
-                }
-                if(page==count)break;
-                if(!opener)Page(1);
-                else if(page==1)AdvancePassingLine();
-                else{
-                    passing.Expires=Time.unscaledTime;
-                    yield return Await(()=>passing!=null&&bubble.Page==page+1,"Averil's passing remark ended before the next page.");
-                }
+            yield return new WaitForEndOfFrame();
+            if(!bubble.Visible||!bubble.ShowsCompleteMessage(line))throw new InvalidOperationException("Some of the resident's words were missing from the bubble.");
+            row["visiblePages"]=new JArray(bubble.ReadVisibleInk());
+            if(filename!=null){
+                bool captured=false;
+                yield return Capture(filename+".png",ok=>captured=ok);
+                if(!captured)throw new InvalidOperationException("Could not capture the resident's speech.");
             }
             row["capture"]=filename!=null;
-            if(string.Concat(pages.Values<string>())!=string.Concat(words.Where(c=>!char.IsWhiteSpace(c))))
-                throw new InvalidOperationException("Some of the resident's words were missing from the visible pages.");
         }
 
         IEnumerator ResidentCases(JObject report,string mode)
@@ -172,7 +158,7 @@ namespace Mirthwood.Echoes
                         }
                         turns.Add(row);
                         string filename=interactive?(i==0||conversationOver?"latest-roleplay-turn-"+turns.Count:null):"latest-averil-turn-"+turns.Count;
-                        yield return ReadResidentPages(npcBubble,reply,row,filename,false);
+                        yield return ReadResidentBubble(npcBubble,reply,row,filename);
                         if(!matched)throw new InvalidOperationException("The on-screen speech differs from the recovered turn.");
                         if(interactive){
                             string output=Path.Combine(folder,"reply-"+i+".json");
@@ -195,15 +181,17 @@ namespace Mirthwood.Echoes
                     brain.PrepareForChat(chat);chat.PrepareForChat(brain);brain.SendInteraction(native);
                     float until=Time.realtimeSinceStartup+80;
                     while(passing?.Heard!=true&&Time.realtimeSinceStartup<until){
-                        if(!InReplyRange(npc))PlaceResident(player.transform.position+Vector3.right*.8f);
+                        // Keep the copied actor in hearing range throughout the provider request.
+                        if((npc.transform.position-player.transform.position).sqrMagnitude>4f)PlaceResident(player.transform.position+Vector3.right*.8f);
                         yield return null;
                     }
                     if(passing?.Speaker!=npc||passing.Kind!="address"||passing.EventId==null)
-                        throw new InvalidOperationException("Averil's native "+card+" did not produce a spoken opener.");
+                        throw new InvalidOperationException("Averil's native "+card+" did not produce a spoken opener. Range "+InReplyRange(npc)+
+                            ", game "+_Mirthwood.Scripts.Demo.GameState.GetCurrentState(1)+", pending "+(pendingAddress!=null)+", heard "+passing?.Heard+".");
                     var remark=passing;string line=remark.Line,id=remark.EventId;
                     bool matched=remark.Bubble.ReadRenderedText()==new BubbleText(line,false).Plain.Trim();
                     var row=JObject.FromObject(new{card,id,line,matched});openers.Add(row);
-                    yield return ReadResidentPages(remark.Bubble,line,row,"latest-averil-opener-"+openers.Count,true);
+                    yield return ReadResidentBubble(remark.Bubble,line,row,"latest-averil-opener-"+openers.Count);
                     AdvancePassingLine();
                     yield return Await(()=>Ready,"The native opener could not be answered.");
                     row["campaign"]=campaign;row["actor"]=actor;

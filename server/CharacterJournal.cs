@@ -67,14 +67,15 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
     const string Interactions=Events+" UNION ALL "+"""
         SELECT 'turn/'||id,day,started,jsonb_build_object('kind','conversation','description','Spoke with the player.','sourceType','turn','sourceId',id)
         FROM turns WHERE campaign=@c AND actor=@a AND state='complete' AND day<=@day
-        UNION ALL SELECT 'promise/'||id,day,recorded,jsonb_build_object('kind','promise','description',statement,'speaker',speaker) FROM commitments
+        UNION ALL SELECT 'promise/'||id,day,recorded,jsonb_build_object('kind','promise','description',statement,'speaker',speaker,'speakerLabel',speaker_label) FROM commitments
           WHERE campaign=@c AND actor=@a AND day<=@day
-        UNION ALL SELECT 'fulfilled/'||id,resolved_day,recorded,jsonb_build_object('kind','fulfillment','description',statement,'speaker',speaker) FROM commitments
+        UNION ALL SELECT 'fulfilled/'||id,resolved_day,recorded,jsonb_build_object('kind','fulfillment','description',statement,'speaker',speaker,'speakerLabel',speaker_label) FROM commitments
           WHERE campaign=@c AND actor=@a AND resolved_day<=@day AND status='fulfilled'
         """;
     const string Promises="""
         SELECT id::text AS id,day,recorded AS at,jsonb_build_object('kind','promise','speaker',speaker,'statement',statement,'due',due,
-          'proposal',proposal,'sourceTurn',turn_id,'model',model,'provider',provider,'status',CASE WHEN resolved_day<=@day THEN status ELSE 'open' END,
+          'proposal',proposal,'sourceTurn',turn_id,'sourceLine',source_line,'proposalLine',proposal_line,'speakerLabel',speaker_label,'addressedTo',addressed_to,
+          'model',model,'provider',provider,'status',CASE WHEN resolved_day<=@day THEN status ELSE 'open' END,
           'resolvedDay',CASE WHEN resolved_day<=@day THEN resolved_day END,'resolutionSource',CASE WHEN resolved_day<=@day THEN resolution_source END) AS doc
         FROM commitments WHERE campaign=@c AND actor=@a AND day<=@day
         """;
@@ -96,7 +97,8 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
         var actor=await Actor(c,a);
         int day=liveDay??actor.I("day");
         int window=(await providers.Options()).DailyDays;
-        var sql=view switch {"interactions"=>Interactions,"conversations"=>Dialogues,"memories"=>Memories,"commitments"=>Promises,_=>throw new UserError("Unknown journal section.",404)};
+        var sql=view switch {"interactions"=>Interactions,"conversations"=>Dialogues,"memories"=>Memories,"commitments"=>Promises,
+            "sessions"=>ConversationSessions.WithRecaps(false),"daily"=>ConversationSessions.WithRecaps(true),_=>throw new UserError("Unknown journal section.",404)};
         if(view=="memories" && day>=0)await compactor.Compact(c,a,day,window);
         int? priorDay=null;string? priorTime=null,priorId=null;
         if(before!=null){
@@ -121,6 +123,16 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
             next=WebEncoders.Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(new{view,actor=a,campaign=c,day=last.I("day"),at=last.S("at"),id=last.S("id")}));
         }
         return new JsonObject{["items"]=page,["next"]=next,["day"]=day<0?null:day};
+    }
+
+    public async Task<JsonNode> HistoryDetail(string c,string a,string view,string entry,int? liveDay)
+    {
+        if(view is not ("daily" or "sessions") || entry.Length>64)throw new UserError("Unknown journal record.",404);
+        var actor=await Actor(c,a);
+        var rows=await db.ScopedOne(ConversationSessions.Details(view=="daily"),false,null,("c",c),("a",a),
+            ("day",liveDay??actor.I("day")),("entry",entry));
+        if(rows is not JsonArray {Count:>0})throw new UserError("This record is unavailable for this resident.",404);
+        return rows;
     }
 
     public async Task AddTurningPoint(string c,string a,JsonNode form,int? liveDay)

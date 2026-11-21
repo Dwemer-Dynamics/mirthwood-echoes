@@ -30,7 +30,7 @@ namespace Mirthwood.Echoes
 
         internal void OfferNativeAddress(NPCController npc,string card,string cue)
         {
-            if(!InReplyRange(npc)||Visible||GameState.GetCurrentState(1)!=GameState.State.Gameplay||
+            if(!InReplyRange(npc)||Visible||GroupActive||GameState.GetCurrentState(1)!=GameState.State.Gameplay||
                 (IsolatedGameRun.Active!=null&&IsolatedGameRun.Active.TalkAddress==null))return;
             var world=Plugin.World();
             if(world==null||npc.CharacterInfo==null||string.IsNullOrEmpty(Plugin.Owner(npc)))return;
@@ -73,7 +73,7 @@ namespace Mirthwood.Echoes
 
         internal bool OfferPassingLine(NPCController npc,string id,string kind,string line,float delay,ConversationSpeech queued=null,bool canReply=true)
         {
-            if(Visible||!InReplyRange(npc)||string.IsNullOrWhiteSpace(line)||passing?.Id==id)return false;
+            if(Visible||GroupActive||!InReplyRange(npc)||string.IsNullOrWhiteSpace(line)||passing?.Id==id)return false;
             DismissPassingLine();
             passing=new PassingLine{Speaker=npc,Id=id,EventId=kind=="address"?null:id,Kind=kind,Line=line,Session=NativeCues.Session,
                 ReadyAt=Time.time+delay,Expires=Time.unscaledTime+12f,Speech=queued,CanReply=canReply};
@@ -95,8 +95,7 @@ namespace Mirthwood.Echoes
                 DismissPassingLine();return;
             }
             if(Time.unscaledTime>=passing.Expires&&(passing.Bubble==null||passing.Speech?.Busy!=true)){
-                if(passing.Bubble==null||passing.Bubble.Page>=passing.Bubble.Pages){DismissPassingLine();return;}
-                TurnPassingPage(1);
+                DismissPassingLine();return;
             }
             if(GameState.GetCurrentState(1)!=GameState.State.Gameplay||GameState.IsPaused){
                 if(passing.Bubble!=null)DismissPassingLine();
@@ -110,43 +109,31 @@ namespace Mirthwood.Echoes
                 var remark=passing;
                 if(remark.Speech==null)remark.Speech=new ConversationSpeech(host);
                 remark.Speech.Say(remark.Id,remark.Speaker,remark.Line,(value,partial)=>{
-                    if(remark.Kind=="address")remark.Bubble.Show(remark.Line);
-                    else remark.Bubble.Show(value,partial);
-                    remark.Expires=Time.unscaledTime+8f;
+                    remark.Bubble.ShowSpoken(remark.Line,value,partial);
+                    remark.Expires=Time.unscaledTime+ReadTime(remark.Line);
                     if(remark.Kind=="address"&&!remark.Heard){
                         remark.Heard=true;
-                        remark.EventId=NativeCues.Fact(remark.Speaker,"address",remark.Line,false);
+                        remark.EventId=NativeCues.Fact(remark.Speaker,"address",remark.Line,false,new JObject{["conversation"]=remark.Id});
                         if(remark.EventId!=null)NativeCues.Recent(remark.Speaker,remark.EventId,remark.Kind,remark.Line);
                     }
                 });
-                passing.Expires=Time.unscaledTime+8f;
+                passing.Expires=Time.unscaledTime+ReadTime(remark.Line);
                 passing.Frame=Time.frameCount;
                 if(passing.CanReply&&passing.Kind!="address")NativeCues.Recent(passing.Speaker,passing.EventId,passing.Kind,passing.Line);
             }
             if(!passing.Bubble.Follow()||Input.GetKeyDown(KeyCode.Escape)){DismissPassingLine();return;}
             var bubble=passing.Bubble;
-            string action=bubble.Page<bubble.Pages?"Enter for more":passing.CanReply?"Enter to reply":"";
-            bubble.Note(bubble.Pages==1?action:(bubble.PageHint+"    "+action).TrimEnd());
+            bubble.Note(passing.CanReply?"Enter to reply":"");
             var menu=PlayerCharacterController.Instance.GetComponent<PlayerChat>()?.ContextMenuUI;
             if(bubble.QuickMenuBounds(menu) is Rect occupied)bubble.Avoid(occupied);
             if(Time.frameCount==passing.Frame)return;
             if(Input.GetKeyDown(KeyCode.Return)||Input.GetKeyDown(KeyCode.KeypadEnter))AdvancePassingLine();
-            else if(bubble.Pages>1){
-                if(Input.GetKeyDown(KeyCode.PageDown)||Input.mouseScrollDelta.y<0)TurnPassingPage(1);
-                else if(Input.GetKeyDown(KeyCode.PageUp)||Input.mouseScrollDelta.y>0)TurnPassingPage(-1);
-            }
         }
-
-        void TurnPassingPage(int direction)
-        {
-            passing.Bubble.TurnPage(direction);
-            passing.Expires=Time.unscaledTime+8f;
-        }
+        static float ReadTime(string line)=>Mathf.Max(8f,line.Length/16f);
 
         void AdvancePassingLine()
         {
-            if(passing.Bubble.Page<passing.Bubble.Pages)TurnPassingPage(1);
-            else if(passing.CanReply)ReplyToPassingLine();
+            if(passing.CanReply)ReplyToPassingLine();
         }
 
         void ReplyToPassingLine()
