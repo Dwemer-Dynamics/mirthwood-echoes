@@ -18,6 +18,31 @@ namespace Mirthwood.Echoes
             yield return CheckedProbe(report,AverilCases(report));
         }
 
+        IEnumerator ReadAverilPages(OverheadSpeech bubble,string line,JObject row,string filename,bool opener)
+        {
+            string words=new BubbleText(line,false).Plain;
+            var pages=new JArray();row["visiblePages"]=pages;
+            int count=bubble.Pages;
+            for(int page=1;page<=count;page++){
+                yield return new WaitForEndOfFrame();
+                if(!bubble.Visible||bubble.Page!=page)throw new InvalidOperationException("Averil's next page was not displayed.");
+                pages.Add(bubble.ReadPageInk());
+                bool captured=false;
+                yield return Capture(filename+(page==1?"":"-page-"+page)+".png",ok=>captured=ok);
+                if(!captured)throw new InvalidOperationException("Could not capture Averil's visible page.");
+                if(page==count)break;
+                if(!opener)Page(1);
+                else if(page==1)AdvancePassingLine();
+                else{
+                    passing.Expires=Time.unscaledTime;
+                    yield return Await(()=>passing!=null&&bubble.Page==page+1,"Averil's passing remark ended before the next page.");
+                }
+            }
+            row["capture"]=true;
+            if(string.Concat(pages.Values<string>())!=string.Concat(words.Where(c=>!char.IsWhiteSpace(c))))
+                throw new InvalidOperationException("Some of Averil's words were missing from the visible pages.");
+        }
+
         IEnumerator AverilCases(JObject report)
         {
             yield return new WaitForSecondsRealtime(3);
@@ -74,7 +99,7 @@ namespace Mirthwood.Echoes
                         var row=JObject.FromObject(new{id,campaign=c,actor=a,player=words,reply,topic=packet["topic"],handoff=packet["handoff"],
                             branch=packet["reaction"],context=intent["context"],matched,firstMs,finishMs,opened=opening});
                         turns.Add(row);
-                        yield return Capture("latest-averil-turn-"+turns.Count+".png",ok=>row["capture"]=ok);
+                        yield return ReadAverilPages(npcBubble,reply,row,"latest-averil-turn-"+turns.Count,false);
                         if(!matched)throw new InvalidOperationException("Averil’s speech differs from the recovered turn.");
                     }
                     Advance();
@@ -94,8 +119,8 @@ namespace Mirthwood.Echoes
                     var remark=passing;string line=remark.Line,id=remark.EventId;
                     bool matched=remark.Bubble.ReadRenderedText()==new BubbleText(line,false).Plain.Trim();
                     var row=JObject.FromObject(new{card,id,line,matched});openers.Add(row);
-                    yield return Capture("latest-averil-opener-"+openers.Count+".png",ok=>row["capture"]=ok);
-                    ReplyToPassingLine();
+                    yield return ReadAverilPages(remark.Bubble,line,row,"latest-averil-opener-"+openers.Count,true);
+                    AdvancePassingLine();
                     yield return Await(()=>Ready,"The native opener could not be answered.");
                     row["campaign"]=campaign;row["actor"]=actor;
                     row["matched"]=matched&&npcBubble.ReadRenderedText()==new BubbleText(line,false).Plain.Trim()&&

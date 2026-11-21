@@ -35,6 +35,7 @@ namespace Mirthwood.Echoes
         readonly Vector3[] corners=new Vector3[4];
         public int Pages=>Mathf.Max(1,text.textInfo.pageCount);
         public int Page=>page;
+        public string PageHint=>Pages>1?"PgUp / PgDn  "+Page+" / "+Pages:"";
         public string FontName=>text.font.name;
         public string SpriteName=>paper.sprite.name;
         public bool Visible=>frame.gameObject.activeSelf;
@@ -43,6 +44,19 @@ namespace Mirthwood.Echoes
         {
             text.ForceMeshUpdate(false,true);
             return text.GetParsedText().TrimEnd('\u200b','\0').Trim();
+        }
+        internal string ReadPageInk()
+        {
+            text.ForceMeshUpdate(false,true);
+            var ink=new System.Text.StringBuilder();
+            var info=text.textInfo;
+            for(int i=0;i<info.characterCount;i++){
+                var letter=info.characterInfo[i];
+                if(!letter.isVisible||letter.pageNumber!=page-1||char.IsWhiteSpace(letter.character))continue;
+                var vertices=info.meshInfo[letter.materialReferenceIndex].vertices;
+                if(vertices[letter.vertexIndex]!=vertices[letter.vertexIndex+2])ink.Append(letter.character);
+            }
+            return ink.ToString();
         }
         public bool UsesNativeStyle=>paper.sprite==nativePaper.sprite&&text.font==source.font&&text.fontSharedMaterial==source.fontSharedMaterial;
         public TMP_InputField Input { get; private set; }

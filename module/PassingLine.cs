@@ -91,9 +91,12 @@ namespace Mirthwood.Echoes
         internal void TickPassingLine()
         {
             if(passing==null)return;
-            if(!InReplyRange(passing.Speaker)||passing.Session!=NativeCues.Session||
-                (Time.unscaledTime>=passing.Expires && (passing.Bubble==null||passing.Speech?.Busy!=true))){
+            if(!InReplyRange(passing.Speaker)||passing.Session!=NativeCues.Session){
                 DismissPassingLine();return;
+            }
+            if(Time.unscaledTime>=passing.Expires&&(passing.Bubble==null||passing.Speech?.Busy!=true)){
+                if(passing.Bubble==null||passing.Bubble.Page>=passing.Bubble.Pages){DismissPassingLine();return;}
+                TurnPassingPage(1);
             }
             if(GameState.GetCurrentState(1)!=GameState.State.Gameplay||GameState.IsPaused){
                 if(passing.Bubble!=null)DismissPassingLine();
@@ -116,15 +119,34 @@ namespace Mirthwood.Echoes
                         if(remark.EventId!=null)NativeCues.Recent(remark.Speaker,remark.EventId,remark.Kind,remark.Line);
                     }
                 });
-                passing.Bubble.Note(passing.CanReply?"Enter to reply":"");
                 passing.Expires=Time.unscaledTime+8f;
                 passing.Frame=Time.frameCount;
                 if(passing.CanReply&&passing.Kind!="address")NativeCues.Recent(passing.Speaker,passing.EventId,passing.Kind,passing.Line);
             }
             if(!passing.Bubble.Follow()||Input.GetKeyDown(KeyCode.Escape)){DismissPassingLine();return;}
+            var bubble=passing.Bubble;
+            string action=bubble.Page<bubble.Pages?"Enter for more":passing.CanReply?"Enter to reply":"";
+            bubble.Note(bubble.Pages==1?action:(bubble.PageHint+"    "+action).TrimEnd());
             var menu=PlayerCharacterController.Instance.GetComponent<PlayerChat>()?.ContextMenuUI;
-            if(passing.Bubble.QuickMenuBounds(menu) is Rect occupied)passing.Bubble.Avoid(occupied);
-            if(passing.CanReply&&Time.frameCount!=passing.Frame&&(Input.GetKeyDown(KeyCode.Return)||Input.GetKeyDown(KeyCode.KeypadEnter)))ReplyToPassingLine();
+            if(bubble.QuickMenuBounds(menu) is Rect occupied)bubble.Avoid(occupied);
+            if(Time.frameCount==passing.Frame)return;
+            if(Input.GetKeyDown(KeyCode.Return)||Input.GetKeyDown(KeyCode.KeypadEnter))AdvancePassingLine();
+            else if(bubble.Pages>1){
+                if(Input.GetKeyDown(KeyCode.PageDown)||Input.mouseScrollDelta.y<0)TurnPassingPage(1);
+                else if(Input.GetKeyDown(KeyCode.PageUp)||Input.mouseScrollDelta.y>0)TurnPassingPage(-1);
+            }
+        }
+
+        void TurnPassingPage(int direction)
+        {
+            passing.Bubble.TurnPage(direction);
+            passing.Expires=Time.unscaledTime+8f;
+        }
+
+        void AdvancePassingLine()
+        {
+            if(passing.Bubble.Page<passing.Bubble.Pages)TurnPassingPage(1);
+            else if(passing.CanReply)ReplyToPassingLine();
         }
 
         void ReplyToPassingLine()
