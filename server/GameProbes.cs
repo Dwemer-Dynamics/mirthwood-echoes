@@ -187,6 +187,7 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
             Check("Streamed speech on screen",input.S("reply")=="*I nod.* The mill is open."&&input.S("displayed")=="I nod. The mill is open."&&input.I("deltas")==2&&Yes("done"),input.S("displayed"));
             if(p.Run!=""){
                 if(input.S("probeError")!="")Check("Interface probe reached its reply",false,input.S("probeError"));
+                Check("F types into the draft",Yes("typedInteractionKey"),"Sent menu Submit and typed F in mid-word. The complete draft stayed focused until Return.");
                 Check("Enter accepts the typed draft",Yes("windowEnter"),"Sent Return to the isolated game window through Windows.");
                 Check("Rolling periods above the selected resident",Yes("waitCycle")&&Yes("waitAnchored")&&Yes("waitSelectedOnly")&&Yes("waitCapture"),input.S("waitStages"));
                 Check("Resident waits while the world advances",Yes("waitStationary")&&Yes("waitReleased"),"Checked the resident's position and native navigation agent during the delay and after the reply.");

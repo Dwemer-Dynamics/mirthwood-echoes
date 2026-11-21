@@ -1,7 +1,7 @@
-"""Windows: python tests/resident_dialogue.py --live-averil <built server package>.
+"""Windows: python tests/resident_dialogue.py (--interface-fixture | --live-averil) <built server package>.
 
 Runs the bundled module in Steam against a private WSL server and a copy of slot 0.
-The selected Windows Codex subscription is used for real dialogue.
+The interface test uses the local fixture. The Averil test uses the selected Windows Codex subscription.
 """
 import hashlib
 import json
@@ -89,7 +89,7 @@ def linux(path):
     return "/mnt/"+path.drive[0].lower()+"/"+path.as_posix().split(":/",1)[1]
 
 
-def run(package):
+def run(package, mode):
     import winreg
     token=uuid.uuid4().hex
     free_port()
@@ -120,7 +120,7 @@ def run(package):
         return powershell("@(Get-CimInstance Win32_Process -Filter \"Name='Mirthwood.exe'\" | Where-Object {$_.CommandLine -like '*"+token+"*'}).Count")!="0"
     def session_ready():
         return api("test-session")["run"]==token and api("saves")
-    print("Private Averil run",token,flush=True)
+    print("Private",mode,"run",token,flush=True)
     try:
         end=time.monotonic()+60
         while time.monotonic()<end:
@@ -130,12 +130,13 @@ def run(package):
             except OSError: pass
             time.sleep(.4)
         else: raise RuntimeError("The private server did not index the copied save")
-        api("providers/codex_subscription",dict(defaultModel="gpt-6.1-terra",conversation="gpt-6.1-terra",
-                                                conversationEffort="medium",codexHost="windows"),"PUT")
-        api("options",dict(provider="codex_subscription",replyTokens=96,dailyDays=2),"PUT")
+        if mode=="residentdialogue":
+            api("providers/codex_subscription",dict(defaultModel="gpt-6.1-terra",conversation="gpt-6.1-terra",
+                                                    conversationEffort="medium",codexHost="windows"),"PUT")
+            api("options",dict(provider="codex_subscription",replyTokens=96,dailyDays=2),"PUT")
         assert api("module/check",{})["status"]=="ready"
         assert digest(game/module)==digest(package/"app/bundle"/module)
-        probe=api("diagnostics/probes",dict(mode="residentdialogue",run=token))
+        probe=api("diagnostics/probes",dict(mode=mode,run=token))
         subprocess.Popen([steam,"-applaunch","2272900","-echoes-harness",token,"--doorstop-target-assembly",
                           str(game/"BepInEx/core/BepInEx.Preloader.dll")])
         launched=True;last=None;end=time.monotonic()+590
@@ -147,7 +148,8 @@ def run(package):
             time.sleep(1)
         write(work/"probe.json",probe)
         for check in (probe["result"] or {}).get("checks",[]):print(check,flush=True)
-        if probe["state"]!="passed":raise RuntimeError("Averil check "+probe["state"])
+        if probe["state"]!="passed":raise RuntimeError(mode+" check "+probe["state"])
+        if mode=="interface":return
         result=probe["result"]
         first=result["turns"][0]
         path="saves/"+first["campaign"]+"/characters/"+first["actor"]+"/history/conversations"
@@ -188,6 +190,7 @@ def run(package):
 
 
 if __name__=="__main__":
-    if len(sys.argv)==3 and sys.argv[1]=="--live-averil":run(Path(sys.argv[2]).resolve(strict=True))
+    modes={"--live-averil":"residentdialogue","--interface-fixture":"interface"}
+    if len(sys.argv)==3 and sys.argv[1] in modes:run(Path(sys.argv[2]).resolve(strict=True),modes[sys.argv[1]])
     elif len(sys.argv)==5 and sys.argv[1]=="--server" and os.name=="posix":serve(*sys.argv[2:])
     else:raise SystemExit(__doc__)

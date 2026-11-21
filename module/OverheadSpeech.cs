@@ -137,7 +137,7 @@ namespace Mirthwood.Echoes
             var target=edit.gameObject.AddComponent<Image>();target.color=Color.clear;
             var typed=Words(Rect("Draft",viewport));typed.alignment=TextAlignmentOptions.TopLeft;typed.overflowMode=TextOverflowModes.Overflow;
             var hint=Words(Rect("Hint",viewport));hint.text="Speak…";hint.alignment=TextAlignmentOptions.TopLeft;hint.color=new Color(source.color.r,source.color.g,source.color.b,.72f);
-            Input=edit.gameObject.AddComponent<TMP_InputField>();Input.targetGraphic=target;Input.textViewport=viewport;Input.textComponent=typed;Input.placeholder=hint;
+            Input=edit.gameObject.AddComponent<DialogueInputField>();Input.targetGraphic=target;Input.textViewport=viewport;Input.textComponent=typed;Input.placeholder=hint;
             Input.richText=true;Input.isRichTextEditingAllowed=true;Input.characterLimit=1200;Input.lineType=TMP_InputField.LineType.MultiLineSubmit;
             Input.onFocusSelectAll=false;Input.customCaretColor=true;Input.caretColor=source.color;Input.caretWidth=2;
             var projection=new DraftProjection();typed.textPreprocessor=projection;typed.OnPreRenderText+=projection.MapCaret;

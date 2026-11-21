@@ -400,7 +400,23 @@ namespace Mirthwood.Echoes
                 report["middleEdit"]=input.text=="Hello *boXws*. Morning.";
             }
             const string line="*I lift my hat.* I’ll collect the flour. Is the mill open?";
-            input.text=line;input.stringPosition=line.Length;input.ForceLabelUpdate();
+            if(isolated){
+                int insertAt=line.IndexOf('f');
+                input.text=line.Remove(insertAt,1);input.stringPosition=insertAt;
+                // Exercise both events a bound letter can produce, including the menu's Submit.
+                var events=EventSystem.current;
+                if(events!=null&&events.currentSelectedGameObject==input.gameObject){
+                    ExecuteEvents.Execute(input.gameObject,new BaseEventData(events),ExecuteEvents.submitHandler);
+                    if(phase==Phase.Draft&&IsolatedGameRun.PostLetterF()){
+                        float untilTyped=Time.realtimeSinceStartup+2;
+                        while(phase==Phase.Draft&&input.text!=line&&Time.realtimeSinceStartup<untilTyped)yield return null;
+                    }
+                }
+                bool typed=phase==Phase.Draft&&input.isFocused&&input.text==line;
+                report["typedInteractionKey"]=typed;
+                if(!typed){report["probeError"]="Typing F in the middle of the draft did not keep the complete text in the editor.";Close();yield break;}
+            }else input.text=line;
+            input.stringPosition=line.Length;input.ForceLabelUpdate();
             report["draftItalic"]=playerBubble.Styled("lift",true)&&playerBubble.Styled("collect",false);
             yield return null;yield return new WaitForEndOfFrame();report["shortDraftVisible"]=playerBubble.EntireDraftInView()&&playerBubble.CaretAligned;
             if(isolated)yield return Capture("latest-player-draft.png",ok=>report["draftCapture"]=ok);

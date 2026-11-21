@@ -26,7 +26,7 @@ namespace Mirthwood.Echoes
     public sealed class Plugin : BaseUnityPlugin
     {
         internal const string Id = "mirthwood.echoes";
-        private const string Server = "http://127.0.0.1:17841";
+        private string ModuleApi => (isolated?.PrivateDiagnostics==true?isolated.TalkAddress:"http://127.0.0.1:17841/api/")+"module/";
         private readonly Queue<string> pending = new Queue<string>();
         private readonly Harmony hooks = new Harmony(Id);
         private static Plugin instance;
@@ -242,7 +242,7 @@ namespace Mirthwood.Echoes
                 }
                 if(mode=="interface" || (mode=="provider" && isolated!=null && isolated.PathsMatch())){
                     bool live=mode=="provider";
-                    var preview=dialogue.Preview(Server+"/api/module/probes/"+id+(live?"/talk":"/stream")+"?session="+session,report,live);
+                    var preview=dialogue.Preview(ModuleApi+"probes/"+id+(live?"/talk":"/stream")+"?session="+session,report,live);
                     while(true){
                         bool next;
                         try{next=preview.MoveNext();}catch(Exception e){Logger.LogWarning(e.GetBaseException().Message);dialogue.Close();break;}
@@ -307,8 +307,7 @@ namespace Mirthwood.Echoes
 
         private IEnumerator Post(string route, string data, Action<long> result = null, Action<string> success = null)
         {
-            string api=isolated?.PrivateDiagnostics==true?isolated.TalkAddress:Server+"/api/";
-            using (var req = new UnityWebRequest(api+"module/"+route, "POST"))
+            using (var req = new UnityWebRequest(ModuleApi+route, "POST"))
             {
                 req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(data));
                 req.downloadHandler = new DownloadHandlerBuffer();
