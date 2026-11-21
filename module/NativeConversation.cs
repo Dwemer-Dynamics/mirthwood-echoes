@@ -405,16 +405,21 @@ namespace Mirthwood.Echoes
                 input.text=line.Remove(insertAt,1);input.stringPosition=insertAt;
                 // Exercise both events a bound letter can produce, including the menu's Submit.
                 var events=EventSystem.current;
-                if(events!=null&&events.currentSelectedGameObject==input.gameObject){
+                bool selected=events!=null&&events.currentSelectedGameObject==input.gameObject;
+                bool posted=false;
+                if(selected){
                     ExecuteEvents.Execute(input.gameObject,new BaseEventData(events),ExecuteEvents.submitHandler);
-                    if(phase==Phase.Draft&&IsolatedGameRun.PostLetterF()){
+                    if(phase==Phase.Draft&&(posted=IsolatedGameRun.PostLetterF())){
                         float untilTyped=Time.realtimeSinceStartup+2;
                         while(phase==Phase.Draft&&input.text!=line&&Time.realtimeSinceStartup<untilTyped)yield return null;
                     }
                 }
                 bool typed=phase==Phase.Draft&&input.isFocused&&input.text==line;
                 report["typedInteractionKey"]=typed;
-                if(!typed){report["probeError"]="Typing F in the middle of the draft did not keep the complete text in the editor.";Close();yield break;}
+                if(!typed){
+                    report["probeError"]=$"Mid-word F failed. Selected={selected}, posted={posted}, phase={phase}, focused={input.isFocused}, buffer=[{input.text}].";
+                    Close();yield break;
+                }
             }else input.text=line;
             input.stringPosition=line.Length;input.ForceLabelUpdate();
             report["draftItalic"]=playerBubble.Styled("lift",true)&&playerBubble.Styled("collect",false);

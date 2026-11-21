@@ -25,16 +25,15 @@ namespace Mirthwood.Echoes
         public static bool Requested=>Environment.GetCommandLineArgs().Contains("-echoes-harness");
         [System.Runtime.InteropServices.DllImport("user32.dll",EntryPoint="PostMessageW")]
         static extern bool PostMessage(IntPtr window,uint message,IntPtr key,IntPtr detail);
-        public static bool PostReturn()=>PostTextKey(13,'\r',0x1c);
-        public static bool PostLetterF()=>PostTextKey('F','f',0x21);
-        static bool PostTextKey(int key,char character,int scan)
+        public static bool PostReturn()=>PostTextKey(13,0x1c);
+        public static bool PostLetterF()=>PostTextKey('F',0x21);
+        static bool PostTextKey(int key,int scan)
         {
             if(Active==null||!Active.PathsMatch()||Application.platform!=RuntimePlatform.WindowsPlayer)return false;
             using(var process=System.Diagnostics.Process.GetCurrentProcess()){
                 var window=process.MainWindowHandle;if(window==IntPtr.Zero)return false;
                 int flags=(scan<<16)|1;
                 return PostMessage(window,0x100,(IntPtr)key,(IntPtr)flags)
-                    &&PostMessage(window,0x102,(IntPtr)(int)character,(IntPtr)flags)
                     &&PostMessage(window,0x101,(IntPtr)key,(IntPtr)(flags|unchecked((int)0xc0000000)));
             }
         }
