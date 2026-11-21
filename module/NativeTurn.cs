@@ -30,9 +30,8 @@ namespace Mirthwood.Echoes
         }
         void DisplayTalk(string id,string reply,JObject handoff)
         {
-            string kind=(string)handoff?["kind"],cue=(string)handoff?["cue"];
+            string kind=(string)handoff?["kind"];
             conversationOver=kind=="ended"||kind=="unknown";
-            if(!string.IsNullOrWhiteSpace(cue))reply+="\n*"+cue.Replace("*","")+"*";
             phase=Phase.Reading;phaseFrame=Time.frameCount;
             speech.Say(id+"/npc",resident,reply,ShowResidentReply,showPlaceholder:false);
             ReadingHint();
@@ -51,7 +50,7 @@ namespace Mirthwood.Echoes
             while(SameResident(epoch)){
                 var values=resident.CharacterInfo.personality?.values;
                 var payload=new {id,campaign,actor,text=message,context=turn["context"],reaction=result?.Reaction,handoff=result?.Handoff,supportsSpokenFarewells=true,
-                    playerImpression=stage=="prepare"?turn["playerImpression"]:null,
+                    returnCues=stage=="prepare"?turn["returnCues"]:null,playerImpression=stage=="prepare"?turn["playerImpression"]:null,
                     socialDesire=stage=="prepare"&&values?.Length>5?(float?)values[5]:null,
                     liveTopicFit=stage=="prepare"?TopicFit(resident,true):null};
                 JObject answer=null;
@@ -82,7 +81,10 @@ namespace Mirthwood.Echoes
                             foreach(string key in new[]{"warm","neutral","cool"})
                                 if(string.IsNullOrWhiteSpace((string)choices[key])||string.IsNullOrWhiteSpace((string)endings[key]))throw new FormatException();
                             result=outbox.Apply(id,(string)answer["topic"],resident,(int?)answer["positiveDesireCostPercent"]??100);
-                            var lines=(string)result.Handoff?["kind"]=="ended"?endings:choices;
+                            string card=(string)result.Handoff?["action"];
+                            var cardChoices=answer["cardChoices"] as JObject;
+                            var lines=(string)result.Handoff?["kind"]=="ended"?endings:
+                                (card==null?null:cardChoices?[card] as JObject)??choices;
                             DisplayTalk(id,(string)lines[result.Reaction=="unknown"?"neutral":result.Reaction],result.Handoff);stage="finish";
                         }catch(Exception){Retry(message,"Could not confirm the native reaction. Enter to recover this exchange.");yield break;}
                         if(IsolatedGameRun.Active?.TalkAddress!=null&&interruptBeforeFinish){

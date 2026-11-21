@@ -99,6 +99,7 @@ app.MapPost("/api/module/event",async(JsonObject input,Conversation dialogue)=>{
 app.MapPost("/api/module/cue",async(JsonObject input,Conversation dialogue)=>{await dialogue.ObserveCue(input);return Results.Ok();});
 app.MapPost("/api/dialogue",(JsonObject input,Conversation dialogue,HttpContext ctx)=>dialogue.Speak(input,ctx));
 app.MapPost("/api/dialogue/prepare",(JsonObject input,Conversation dialogue)=>dialogue.PrepareTalk(input));
+app.MapPost("/api/dialogue/address",(JsonObject input,Conversation dialogue,CancellationToken ct)=>dialogue.AddressPlayer(input,ct));
 app.MapPost("/api/dialogue/finish",(JsonObject input,Conversation dialogue)=>dialogue.FinishTalk(input));
 app.MapPost("/api/quests/turn",(JsonObject input,Conversation dialogue)=>dialogue.QuestTurn(input));
 app.MapPost("/api/quests/finish",(JsonObject input,Conversation dialogue)=>dialogue.FinishQuest(input));

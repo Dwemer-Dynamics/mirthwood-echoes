@@ -86,7 +86,7 @@ public static class CueHistory
 public sealed partial class Conversation
 {
     static readonly HashSet<string> CueKinds = new(StringComparer.Ordinal) {
-        "gift","hire","collection","social","work","household","funeral","letter","quest","warning","talk"
+        "gift","hire","collection","social","work","household","funeral","letter","quest","warning","talk","address"
     };
     public async Task ObserveCue(JsonNode n)
     {
@@ -145,7 +145,7 @@ public sealed partial class Conversation
         }
         if(b["event"]!=null)result["event"]=CueHistory.OptionalId(b["event"])?.ToString();
         if(b["remark"] is {} remark){
-            if(remark.Required("kind",20) is not ("remark" or "greeting" or "warning" or "gift" or "hire" or "card" or "giftReply" or "collectionReply"))throw new UserError("Unknown native remark.");
+            if(remark.Required("kind",20) is not ("remark" or "greeting" or "warning" or "gift" or "hire" or "card" or "address" or "giftReply" or "collectionReply"))throw new UserError("Unknown native remark.");
             result["remark"]=new JsonObject{["kind"]=remark.S("kind"),["text"]=remark.Required("text",460),
                 ["owner"]=remark.Required("owner"),["nativeId"]=remark.Required("nativeId")};
         }
@@ -175,7 +175,10 @@ public sealed partial class Conversation
                 ("c",c),("a",a),("owner",r.S("owner")),("id",r.S("nativeId")));
             if(owner==null)throw new UserError("This remark belongs to a different resident.",409);
             string kind=r.S("kind");cue["kind"]=kind;
-            if(kind is "giftReply" or "collectionReply"){
+            if(kind=="address"){
+                if(cue["event"]?.S("kind")!="address"||cue["event"]?.S("observation")!=r.S("text"))throw new UserError("The spoken opener differs from its recorded words.",409);
+                cue["spokenOpener"]=r.S("text");
+            }else if(kind is "giftReply" or "collectionReply"){
                 if(cue["event"]?["kind"]?.ToString()!=(kind=="giftReply"?"gift":"collection"))throw new UserError("The spoken line needs its matching transaction.",409);
                 cue["spokenOpener"]=r.S("text");
             }else cue[kind is "greeting" or "card"?"observedAction":kind=="hire"?"priceQuote":"nativeCue"]=r.S("text");

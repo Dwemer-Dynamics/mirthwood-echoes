@@ -20,6 +20,7 @@ namespace Mirthwood.Echoes
         public readonly int SourceSlot;
         public readonly string Preference;
         public string TalkAddress {get;private set;}
+        public bool PrivateDiagnostics {get;private set;}
         IsolatedGameRun(string root,string id,int source){Root=root;Id=id;SourceSlot=source;Preference="Mirthwood.Echoes.Harness."+id;}
         public static bool Requested=>Environment.GetCommandLineArgs().Contains("-echoes-harness");
         [System.Runtime.InteropServices.DllImport("user32.dll",EntryPoint="PostMessageW")]
@@ -61,6 +62,7 @@ namespace Mirthwood.Echoes
             int slot=(int)manifest["sourceSlot"];if(slot<0||slot>299)throw new InvalidDataException("Invalid source slot.");
             Active=new IsolatedGameRun(root,id,slot);
             if((int?)manifest["talkPort"]==17864)Active.TalkAddress="http://127.0.0.1:17864/api/";
+            Active.PrivateDiagnostics=Active.TalkAddress!=null&&(bool?)manifest["privateDiagnostics"]==true;
             harmony.Patch(AccessTools.PropertyGetter(typeof(TestSaveFolder),nameof(TestSaveFolder.Root)),prefix:new HarmonyMethod(typeof(IsolatedGameRun),nameof(RootForTest)));
             harmony.Patch(AccessTools.PropertyGetter(typeof(TestSaveFolder),nameof(TestSaveFolder.LastUsedSlotKey)),prefix:new HarmonyMethod(typeof(IsolatedGameRun),nameof(PrefForTest)));
             if(!Active.PathsMatch())throw new InvalidDataException("The native save paths did not switch to the test copy.");

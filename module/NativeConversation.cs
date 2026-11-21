@@ -111,7 +111,7 @@ namespace Mirthwood.Echoes
         {
             speech?.Stop(true);
             if(waitingDots!=0){waitingDots=0;npcBubble.SetVisible(false);}
-            phase=Phase.Draft;phaseFrame=Time.frameCount;DraftPause.Begin();npcBubble.Note(npcBubble.Visible?PageHint():"");
+            phase=Phase.Draft;phaseFrame=Time.frameCount;DraftPause.Begin();npcBubble.Note(npcBubble.Visible?npcBubble.PageHint:"");
             playerBubble.Edit(draft);playerBubble.Note(note);
         }
         void WaitForReply(string words,string note="")
@@ -140,12 +140,11 @@ namespace Mirthwood.Echoes
             waitingDots=0;phase=Phase.Reading;
             playerBubble.SetVisible(false);npcBubble.Show(value,partial);ReadingHint();
         }
-        string PageHint()=>npcBubble.Pages>1?"PgUp / PgDn  "+npcBubble.Page+" / "+npcBubble.Pages:"";
-        void Page(int direction){npcBubble.TurnPage(direction);if(phase==Phase.Draft)npcBubble.Note(PageHint());else ReadingHint();}
+        void Page(int direction){npcBubble.TurnPage(direction);if(phase==Phase.Draft)npcBubble.Note(npcBubble.PageHint);else ReadingHint();}
         void ReadingHint()
         {
             if(waitingDots!=0)return;
-            string pages=npcBubble.Pages>1?PageHint()+"    ":"";
+            string pages=npcBubble.Pages>1?npcBubble.PageHint+"    ":"";
             npcBubble.Note(pages+(busy?"":pendingFinish!=null?"Enter to save this reply":conversationOver?"Enter to leave":"Enter to reply"));
         }
         void Advance()
@@ -204,9 +203,9 @@ namespace Mirthwood.Echoes
         {
             if(npc?.CharacterInfo==null||Visible||GameState.GetCurrentState(1)!=GameState.State.Gameplay)return;
             string opener=null;
-            if(passing?.Speaker==npc&&passing.Bubble!=null&&InReplyRange(npc)){
+            if(passing?.Speaker==npc&&passing.CanReply&&(passing.Kind!="address"||passing.Heard)&&passing.Bubble!=null&&InReplyRange(npc)){
                 opener=passing.Line;
-                NativeCues.Recent(npc,passing.Id,passing.Kind,passing.Line);
+                if(passing.EventId!=null)NativeCues.Recent(npc,passing.EventId,passing.Kind,passing.Line);
             }
             DismissPassingLine();
             if(!Build(npc))return;

@@ -41,6 +41,10 @@ namespace Mirthwood.Echoes
         private string probing,completedProbe,completedPacket;
         private IsolatedGameRun isolated;
         private JArray testObservations;
+        internal static void AddressPlayer(NPCController npc,string card,string cue)
+        {
+            if(ReplacesTalk)instance.dialogue?.OfferNativeAddress(npc,card,cue);
+        }
         internal static void OfferReply(NPCController npc,string id,string kind,string line,float delay=0)
         {
             if(ReplacesTalk&&id!=null)instance.dialogue?.OfferPassingLine(npc,id,kind,line,delay);
@@ -249,6 +253,8 @@ namespace Mirthwood.Echoes
                     yield return dialogue.RunRelationships(report);
                 if(mode=="interactions"&&isolated?.TalkAddress!=null&&isolated.PathsMatch())
                     yield return dialogue.RunInteractions(report);
+                if(mode=="residentdialogue"&&isolated?.PrivateDiagnostics==true&&isolated.PathsMatch())
+                    yield return dialogue.RunResidentDialogue(report);
                 if(mode=="quests"&&isolated?.TalkAddress!=null&&isolated.PathsMatch())
                     yield return dialogue.RunQuests(report);
                 if(mode=="socialbalance"&&isolated?.PathsMatch()==true)
@@ -301,7 +307,8 @@ namespace Mirthwood.Echoes
 
         private IEnumerator Post(string route, string data, Action<long> result = null, Action<string> success = null)
         {
-            using (var req = new UnityWebRequest(Server + "/api/module/" + route, "POST"))
+            string api=isolated?.PrivateDiagnostics==true?isolated.TalkAddress:Server+"/api/";
+            using (var req = new UnityWebRequest(api+"module/"+route, "POST"))
             {
                 req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(data));
                 req.downloadHandler = new DownloadHandlerBuffer();

@@ -1,0 +1,193 @@
+"""Windows: python tests/resident_dialogue.py --live-averil <built server package>.
+
+Runs the bundled module in Steam against a private WSL server and a copy of slot 0.
+The selected Windows Codex subscription is used for real dialogue.
+"""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import sys
+import time
+from urllib.request import Request, urlopen
+import uuid
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def write(path, value):
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def api(path, data=None, method=None):
+    body = None if data is None else json.dumps(data).encode()
+    req = Request("http://127.0.0.1:17864/api/"+path, data=body, method=method,
+                  headers={"Content-Type":"application/json"})
+    with urlopen(req, timeout=85) as response:
+        return json.loads(response.read() or b"null")
+
+
+def free_port():
+    with socket.socket() as check:
+        if check.connect_ex(("127.0.0.1",17864)) == 0:
+            raise RuntimeError("The isolated server port is in use.")
+
+
+def serve(token, saves, package):
+    import pwd
+    import signal
+    import tempfile
+    from relationships import postgres
+    work = Path(".work/resident-dialogue") / uuid.UUID(hex=token).hex
+    app = (Path(package)/"app").resolve(strict=True)
+    if not (work/"game").is_dir() or not (Path(saves)/"Slot0.savegame").is_file():
+        raise ValueError("Missing private game or save")
+    free_port()
+    account = pwd.getpwnam("mirthwood_echoes")
+    database = "echoes_talk_"+token
+    postgres("createdb","-O",account.pw_name,database)
+    try:
+        with tempfile.TemporaryDirectory(prefix="echoes-resident-") as temp:
+            os.chown(temp,account.pw_uid,account.pw_gid)
+            env = dict(os.environ,HOME=temp,WSL_INTEROP="/run/WSL/1_interop",DOTNET_PROCESSOR_COUNT="2",
+                       MIRTHWOOD_ECHOES_DB="Host=/var/run/postgresql;Username=mirthwood_echoes;Database="+database,
+                       MIRTHWOOD_ECHOES_PORT="17864",MIRTHWOOD_ECHOES_HARNESS_ID=token,MIRTHWOOD_ECHOES_STATE=temp,
+                       MIRTHWOOD_ECHOES_GAME=str((work/"game").resolve()),MIRTHWOOD_ECHOES_SAVES=saves)
+            with (work/"server.log").open("w") as log:
+                process = subprocess.Popen(["/usr/bin/dotnet",str(app/"Mirthwood.Echoes.Server.dll")],cwd=app,env=env,
+                                           user=account.pw_uid,group=account.pw_gid,extra_groups=[],stdout=log,stderr=log)
+                try:
+                    end=time.monotonic()+720
+                    while process.poll() is None and not (work/"stop-server").exists() and time.monotonic()<end:
+                        time.sleep(.3)
+                    if process.poll() is not None: raise RuntimeError("Private server exited early")
+                    query = """SELECT coalesce(json_agg(row_to_json(t)),'[]') FROM
+                      (SELECT player_text,reply,state,talk->>'topic' AS topic,talk->'handoff' AS handoff,
+                      first_ms,total_ms FROM turns ORDER BY started) t"""
+                    write(work/"turns.json",json.loads(postgres("psql","-XAt","-d",database,"-c",query)))
+                finally:
+                    if process.poll() is None:
+                        process.send_signal(signal.SIGINT)
+                        try: process.wait(timeout=15)
+                        except subprocess.TimeoutExpired: process.kill();process.wait()
+    finally:
+        postgres("dropdb","--force",database)
+
+
+def powershell(script):
+    return subprocess.check_output(["powershell.exe","-NoProfile","-NonInteractive","-Command",script],text=True).strip()
+
+
+def linux(path):
+    path=path.resolve()
+    return "/mnt/"+path.drive[0].lower()+"/"+path.as_posix().split(":/",1)[1]
+
+
+def run(package):
+    import winreg
+    token=uuid.uuid4().hex
+    free_port()
+    if powershell("@(Get-Process -Name Mirthwood -ErrorAction SilentlyContinue).Count")!="0":
+        raise RuntimeError("A game is already running.")
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER,r"Software\Valve\Steam") as key:
+        steam=winreg.QueryValueEx(key,"SteamExe")[0]
+    real=Path(os.environ.get("MIRTHWOOD_ECHOES_STEAM_GAME",r"C:\SteamLibrary\steamapps\common\Mirthwood"))
+    module=Path("BepInEx/plugins/MirthwoodEchoes/Mirthwood.Echoes.dll")
+    original=Path(os.environ["USERPROFILE"])/"AppData/LocalLow/Bad Ridge Games/Mirthwood/SaveData"
+    files=[p for p in (original/name for name in ("Slot0.savegame","Slot0.metadata","Slot0.savegame.b","Slot0.metadata.b")) if p.exists()]
+    baseline={str(p):digest(p) for p in [*files,real/module]}
+    work=Path(".work/resident-dialogue")/token
+    game=(work/"game").absolute();game.mkdir(parents=True)
+    harness=Path(os.environ["LOCALAPPDATA"])/"MirthwoodEchoes/Harness"
+    session=harness/token;saves=session/"SaveData";saves.mkdir(parents=True)
+    for p in files:
+        shutil.copyfile(p,saves/p.name)
+        assert digest(saves/p.name)==baseline[str(p)]
+    write(session/"harness.json",dict(id=token,sourceSlot=0,sha256=digest(saves/"Slot0.savegame"),talkPort=17864,privateDiagnostics=True))
+    for rel in ("Mirthwood.exe","Mirthwood_Data/Managed/Assembly-CSharp.dll","Mirthwood_Data/resources.assets"):
+        (game/rel).parent.mkdir(exist_ok=True,parents=True);shutil.copyfile(real/rel,game/rel)
+    launch=["wsl","-d","ReignServer","-u","root","--cd",str(Path.cwd()),"--","python3","-B",
+            "tests/resident_dialogue.py","--server",token,linux(saves),linux(package)]
+    server=subprocess.Popen(launch)
+    launched=False
+    def owned():
+        return powershell("@(Get-CimInstance Win32_Process -Filter \"Name='Mirthwood.exe'\" | Where-Object {$_.CommandLine -like '*"+token+"*'}).Count")!="0"
+    def session_ready():
+        return api("test-session")["run"]==token and api("saves")
+    print("Private Averil run",token,flush=True)
+    try:
+        end=time.monotonic()+60
+        while time.monotonic()<end:
+            if server.poll() is not None: raise RuntimeError("The private server exited before startup")
+            try:
+                if session_ready():break
+            except OSError: pass
+            time.sleep(.4)
+        else: raise RuntimeError("The private server did not index the copied save")
+        api("providers/codex_subscription",dict(defaultModel="gpt-6.1-terra",conversation="gpt-6.1-terra",
+                                                conversationEffort="medium",codexHost="windows"),"PUT")
+        api("options",dict(provider="codex_subscription",replyTokens=96,dailyDays=2),"PUT")
+        assert api("module/check",{})["status"]=="ready"
+        assert digest(game/module)==digest(package/"app/bundle"/module)
+        probe=api("diagnostics/probes",dict(mode="residentdialogue",run=token))
+        subprocess.Popen([steam,"-applaunch","2272900","-echoes-harness",token,"--doorstop-target-assembly",
+                          str(game/"BepInEx/core/BepInEx.Preloader.dll")])
+        launched=True;last=None;end=time.monotonic()+590
+        while time.monotonic()<end:
+            probe=api("diagnostics/probes/"+probe["id"])
+            if probe["state"]!=last:
+                last=probe["state"];print(last,flush=True)
+            if last not in ("waiting","running"):break
+            time.sleep(1)
+        write(work/"probe.json",probe)
+        for check in (probe["result"] or {}).get("checks",[]):print(check,flush=True)
+        if probe["state"]!="passed":raise RuntimeError("Averil check "+probe["state"])
+        result=probe["result"]
+        first=result["turns"][0]
+        path="saves/"+first["campaign"]+"/characters/"+first["actor"]+"/history/conversations"
+        expected={r["id"]:r["reply"] for r in result["turns"]}
+        for r in result["openers"]:
+            source=hashlib.md5((r["id"]+"/"+r["actor"]).encode(),usedforsecurity=False).hexdigest()
+            expected[str(uuid.UUID(hex=source))]=r["line"]
+        end=time.monotonic()+15
+        while True:
+            entries=[r for r in api(path)["items"] if r["id"] in expected]
+            if {r["id"]:r["reply"] for r in entries}==expected:break
+            if time.monotonic()>=end:raise AssertionError("Journal differs from the in-game speech")
+            time.sleep(.5)
+        write(work/"journal.json",entries)
+        subprocess.run(["node","tests/journal_browser.cjs",str(work),"--averil"],check=True,timeout=90)
+        log=(work/"server.log").read_text(encoding="utf-8",errors="replace")
+        calls={kind:log.count("Echoes Codex "+kind+" accepted: model=gpt-6.1-terra effort=medium") for kind in ("turn","opener")}
+        write(work/"calls.json",calls)
+        assert calls=={"turn":len(result["turns"]),"opener":len(result["openers"])}, calls
+    finally:
+        if launched:
+            (session/"quit.request").write_text(token)
+            end=time.monotonic()+40
+            while owned() and time.monotonic()<end:time.sleep(.7)
+        (work/"stop-server").touch()
+        server.wait(timeout=45)
+        after={f:digest(Path(f)) for f in baseline}
+        receipt=dict(run=token,before=baseline,after=after,unchanged=after==baseline,closed=not owned(),
+                     databaseRemoved=server.returncode==0,module=digest(game/module) if (game/module).exists() else None)
+        write(work/"isolation.json",receipt)
+        if not all(receipt[k] for k in ("unchanged","closed","databaseRemoved")):raise RuntimeError("Isolation check failed")
+        if (game/"BepInEx/LogOutput.log").exists():shutil.copyfile(game/"BepInEx/LogOutput.log",work/"game-module.log")
+        for capture in (harness.parent/"Diagnostics").glob("latest-averil-*.png"):
+            if capture.stat().st_mtime>=(session/"harness.json").stat().st_mtime:shutil.copyfile(capture,work/capture.name)
+        if session.resolve().parent==harness.resolve() and json.loads((session/"harness.json").read_text())["id"]==token:
+            shutil.rmtree(session)
+        print("Verified original saves and installed module.",flush=True)
+
+
+if __name__=="__main__":
+    if len(sys.argv)==3 and sys.argv[1]=="--live-averil":run(Path(sys.argv[2]).resolve(strict=True))
+    elif len(sys.argv)==5 and sys.argv[1]=="--server" and os.name=="posix":serve(*sys.argv[2:])
+    else:raise SystemExit(__doc__)

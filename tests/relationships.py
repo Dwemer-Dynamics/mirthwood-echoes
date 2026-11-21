@@ -142,8 +142,7 @@ def main(package, output, mode="Relationships"):
                         ) t"""))
                     assert rows and all(t["state"]=="complete" and t["text"] and t["reply"] for t in rows),rows
                     last=rows[-1]
-                    cue=(last["handoff"] or {}).get("cue")
-                    expected_bubble=last["reply"]+("\n*"+cue.replace("*","")+"*" if cue else "")
+                    expected_bubble=last["reply"]
                     assert last["resident"]==observed["resident"] and expected_bubble==observed["bubbleSource"],last
                     for t in rows:
                         cached=request("dialogue/prepare",{k:t[k] for k in ("id","campaign","actor","text","context")})
@@ -244,7 +243,7 @@ def main(package, output, mode="Relationships"):
                     entries=request("saves/"+turn["campaign"]+"/characters/"+turn["actor"]+"/history/conversations")["items"]
                     entry=next(e for e in entries if e["id"]==turn["id"])
                     assert entry["reply"]==first["reply"]==trial.get("spoken",trial["reply"])
-                    assert entry.get("nativeHandoff")==((first.get("handoff") or {}).get("cue"))
+                    assert not entry.get("nativeHandoff")
                     assert request("dialogue/finish",dict(turn,reaction="unknown"))==first
                     for changed in [dict(turn,text="A different turn."),dict(turn,actor=next(t["actor"] for t in trials if t["actor"]!=turn["actor"]))]:
                         try: request("dialogue/prepare",changed)

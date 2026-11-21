@@ -38,6 +38,8 @@ Once implemented, capture the addition and its reference in game and compare the
 
 Use Reign's backend with PostgreSQL as Mirthwood's foundation. Keep everyday replies brief and in character. Give the model just enough context to answer the current turn, usually the NPC's disposition, current state, and relevant recent history or commitments. The player can ask follow-up questions for clarification or more detail. Retrieve exact evidence when the question depends on it, and include any facts or terms needed for an accurate answer on the current turn.
 
+In player-directed conversation, give the resident the words of the joke, flirt, question or story in their own voice. Reserve action italics for observable physical behavior. Follow the player’s question or disclosure first. Use the native return card to shape a related beat, give a sensitive moment space, and follow an explicit invitation to change subjects. A card is internal context. The transcript records the actual words and gestures the player saw. Background conversations between residents use Mirthwood’s existing presentation.
+
 Use one streamed model call for ordinary dialogue. Keep background summarization off the reply path. When testing dialogue performance, measure time to the first readable line and time to finish separately.
 
 ## 3. Keep the C: workspace lean and limit backups on both drives

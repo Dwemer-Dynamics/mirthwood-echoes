@@ -60,7 +60,7 @@ def check_talk_retries(api, model, say, twin, checked, legacy_packet):
     turn=current_turn("Hmm.");model.samples[turn["text"]]=json.dumps(dict(answer,topic="None",commitments=[]))
     prepared=api(prepare,dict(turn,socialDesire=-.85))
     prompt=model.calls[-1]["messages"][0]["content"]
-    assert 'very low' in prompt and card["cue"] in prompt and 'say goodbye' in prompt and 'otherwise briefly acknowledge' in prompt
+    assert 'very low' in prompt and card["cue"] not in prompt and answer["cool"] in prompt
     assert prepared["state"]=="ready" and prepared["topic"]=="Small Talk" and prepared["positiveDesireCostPercent"]==70
     ending={"kind":"ended","cue":"The resident has had enough conversation."}
     completed=api(finish,dict(turn,reaction="warm",handoff=ending))
@@ -93,11 +93,46 @@ def check_talk_retries(api, model, say, twin, checked, legacy_packet):
     assert api(finish,dict(old_client,reaction="cool",handoff=ending))["reply"]==answer["cool"]
     check_endings(api,model,current_turn,path,ending)
     check_impressions(api,model,current_turn,answer,coat)
+    check_resident_speech(api,model,current_turn,path,answer)
     api("/api/options",settings,"PUT",204)
     checked("social desire settings, older clients, legacy prepared turns and stable per-exchange cost across settings changes")
     checked("parallel Talk retries, scoped UUIDs, grounded promises, Small Talk fallback, silent actions, direct trade and malformed replies")
     checked("spoken farewells on confirmed endings, open and uncertain replies, duplicate farewells, trailing questions and promises")
     checked("resident knowledge, spoken introductions, visible clothing and frozen first impressions on retries")
+    checked("selected native card as spoken dialogue, physical gestures, sensitive subjects, immutable replay and unspoken promises")
+
+
+def check_resident_speech(api, model, say, path, common):
+    cues={"Funny Joke":"Averil jokes about the tavern cook","Flirt":"Averil flirts nervously","Deep":"Averil asks about loss"}
+    opening="*I smile at the lad who jokes about his bread.* The bread would keep a cartwheel turning."
+    joke="The cook asked for a second opinion. The millstone chipped a tooth."
+    promise="I will bring the cart tomorrow."
+    for card,beat in (("Funny Joke",joke),("Flirt","*I smooth my sleeve.* I rather hoped you'd stay."),("Deep","")):
+        turn=dict(say("Do you remember mending the wagon with me?"),returnCues=cues)
+        choices={"Funny Joke":joke+" *Averil jokes about the tavern cook.*","Flirt":"*I smooth my sleeve.* I rather hoped you'd stay.",
+                 "Deep":cues["Deep"]}
+        sample=dict(common,warm=opening,neutral=opening,cool=promise,continuations=choices,
+                    commitments=[{"speaker":"npc","quote":promise}])
+        model.samples[turn["text"]]=json.dumps(sample)
+        before=len(model.calls)
+        ready=api("/api/dialogue/prepare",turn)
+        expected=opening+(" "+beat if beat else "")
+        assert ready["cardChoices"][card]["neutral"]==expected
+        event=dict(kind="followup",action=card,cue=cues[card])
+        api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=dict(event,cue="Changed variant")),status=409)
+        done=api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=event))
+        assert done["reply"]==expected and done["handoff"]==event
+        assert api("/api/dialogue/prepare",turn)==done and api("/api/dialogue/finish",dict(turn,reaction="cool"))==done
+        entry=next(item for item in api(path+"conversations")["items"] if item["id"]==turn["id"])
+        assert entry["reply"]==expected and not entry.get("nativeHandoff") and not entry["promises"]
+        assert len(model.calls)==before+1
+    turn=dict(say("I'd like to sit quietly with his old fishing net."),returnCues=cues)
+    line="*I sit beside you.* We can stay here a while."
+    model.samples[turn["text"]]=json.dumps(dict(common,neutral=line,continuations={},commitments=[]))
+    ready=api("/api/dialogue/prepare",turn)
+    assert ready["cardChoices"]=={} and ready["choices"]["neutral"]==line
+    end={"kind":"ended","cue":"Averil is done talking."}
+    assert api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=end))["reply"]==line+" Be well."
 
 
 def check_impressions(api, model, say, answer, coat):

@@ -192,11 +192,11 @@ namespace Mirthwood.Echoes
                     using(var request=Post(Address+"dialogue/prepare",new{id,campaign=c,actor=a,text=words[i],context=pending["context"]})){
                         yield return request.SendWebRequest();var packet=JObject.Parse(request.downloadHandler.text);
                         string ordinary=(string)packet["choices"][branch],ending=(string)packet["endingChoices"][branch];
-                        string spoken=(string)handoff?["kind"]=="ended"?ending:ordinary;
-                        string cue=(string)handoff?["cue"];
-                        row["continuingReply"]=ordinary;row["endingReply"]=ending;row["spoken"]=spoken;
-                        var wordsInBubble=string.IsNullOrEmpty(cue)?spoken:spoken+"\n*"+cue.Replace("*","")+"*";
-                        row["firstBubbleMatched"]=testFirstBubble==new BubbleText(wordsInBubble,false).Plain;
+                        var card=(string)handoff?["action"];
+                        string continuing=(card==null?null:(string)packet["cardChoices"]?[card]?[branch])??ordinary;
+                        string spoken=(string)handoff?["kind"]=="ended"?ending:continuing;
+                        row["continuingReply"]=continuing;row["endingReply"]=ending;row["spoken"]=spoken;
+                        row["firstBubbleMatched"]=testFirstBubble==new BubbleText(spoken,false).Plain;
                     }
                     // Simulate a process exit between the native write and its final local disk receipt.
                     var ambiguous=JObject.Parse(File.ReadAllText(path));ambiguous["stage"]="applying";ambiguous.Remove("reaction");ambiguous.Remove("handoff");ambiguous.Remove("positiveRun");File.WriteAllText(path,ambiguous.ToString());
