@@ -52,20 +52,38 @@ internal static class TalkEndings
     static string RemoveSentence(string text,int start,int end) =>
         Join(text[..start].TrimEnd(),text[end..].TrimStart());
 
-    internal static (string Continuing,string Ending) Prepare(string answer,JsonNode? parting)
+    static string WithoutPartings(string text,string? listener,bool continuing,out string? farewell)
+    {
+        farewell=null;
+        for(int cursor=text.Length;cursor>0;){
+            var (start,end)=LastSentence(text[..cursor]);
+            string sentence=text[start..end];
+            string? phrase=KnownPhrase(sentence);
+            int comma=sentence.LastIndexOf(',');
+            if(phrase==null && listener!=null && comma>0 &&
+                sentence[(comma+1)..].Trim().TrimEnd('.', '!', '…').Equals(listener,StringComparison.OrdinalIgnoreCase))
+                phrase=KnownPhrase(sentence[..comma]);
+            // "Good day." followed by another sentence can be a greeting.
+            if(phrase!=null && (phrase!="Good day."||!continuing&&cursor==text.Length)){
+                farewell??=sentence;
+                text=RemoveSentence(text,start,end);
+            }
+            cursor=Math.Min(start,text.Length);
+        }
+        return text;
+    }
+
+    internal static (string Continuing,string Ending) Prepare(string answer,JsonNode? parting,string? listener=null)
     {
         string? chosen=parting is JsonValue value&&value.TryGetValue<string>(out var words)?KnownPhrase(words):null;
-        var last=LastSentence(answer);
-        var embedded=KnownPhrase(answer[last.Start..last.End]);
-        string settled=embedded==null?answer:RemoveSentence(answer,last.Start,last.End);
-        // "Good day." can also be a greeting in a conversation that continues.
-        string continuing=embedded=="Good day."?answer:settled;
+        string continuing=WithoutPartings(answer,listener,true,out _);
+        string settled=WithoutPartings(answer,listener,false,out var embedded);
         // Keep the answer to the player's question. Omit a trailing question that invites another turn.
         while(settled.Length>0){
-            last=LastSentence(settled);
+            var last=LastSentence(settled);
             if(last.End==last.Start||settled[last.End-1] is not ('?' or '？'))break;
             settled=RemoveSentence(settled,last.Start,last.End);
         }
-        return (continuing.Length==0?"I hear you.":continuing,Join(settled,chosen??embedded??"Goodbye."));
+        return (continuing.Length==0?"I hear you.":continuing,Join(settled,embedded??chosen??"Goodbye."));
     }
 }

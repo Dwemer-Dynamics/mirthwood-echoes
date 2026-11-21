@@ -305,3 +305,21 @@ def check_endings(api, model, say, path, ending):
     entry=next(item for item in api(path+"conversations")["items"] if item["id"]==turn["id"])
     assert [(p["speaker"],p["quote"]) for p in entry["promises"]]==[("player",player_promise)]
     assert len(model.calls)==calls+len(cases)+1
+
+    aside="(I say he cheated.)"
+    long_answer=" ".join(["I can show you as far as the bridge."]*10)
+    for base,closing,continuing,departed in [
+        ("I'll see to it. Goodbye, Rowan.","I should get home. Goodbye, Rowan.","I'll see to it.","I should get home. Goodbye, Rowan."),
+        ("Farewell. Mind the river.","Farewell. Mind the river. *I lift my hand.*","Mind the river.","Mind the river. *I lift my hand.* Farewell."),
+        ("Good day. The bridge is sound.",aside+" The bridge is sound.","Good day. The bridge is sound.",aside+" The bridge is sound. Be well."),
+        ("Take care, the boards are loose.","Take care, the boards are loose.","Take care, the boards are loose.","Take care, the boards are loose. Be well."),
+        ("I can draw you a map.",long_answer,"I can draw you a map.",long_answer+" Be well."),
+        ("I can draw you a map.","x"*901,"I can draw you a map.","I can draw you a map. Be well."),
+    ]:
+        turn=dict(say("Where is the bridge?"),playerImpression={"familiarity":"Friend","name":"Rowan"},returnCues={})
+        model.samples[turn["text"]]=json.dumps(dict(answer,flow="follow",neutral=base,
+            closingAnswers={"neutral":closing},farewells={"neutral":"Be well."},commitments=[]))
+        ready=api("/api/dialogue/prepare",turn)
+        assert ready["choices"]["neutral"]==continuing and ready["endingChoices"]["neutral"]==departed
+        assert api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=ending))["reply"]==departed
+        assert api("/api/dialogue/prepare",turn)["reply"]==departed

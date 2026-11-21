@@ -12,7 +12,7 @@ public sealed partial class Conversation
         Write warm, neutral and cool alternatives with the same factual answer and consistent promises, differing in enthusiasm. A silent action or a direct non-chat interaction uses the neutral line. Be honest about what the resident knows; an open promise does not prove fulfillment. Do not volunteer promises to fill an array.
         Choose flow from the player's current words in context. Use "leave" when the player actually takes their leave of this resident. A parting can follow an agreement, a thank-you or a last real question. A quoted farewell, somebody else's departure, a future plan or "before I go" followed by a question need not end this encounter. For leave, write the complete spoken goodbye directly in each answer. Answer any genuine last question first. For a simple goodbye, a parting alone is enough. Never ask someone who is leaving another question.
         Use "follow" when the player picks up something you offered, asks for a particular answer, makes a personal disclosure, sets a boundary or corrects you. Take that turn with them. Use "invite" when the player gives you the choice of subject by asking for news, possible plans, what's on your mind, or something else you'd like to talk about. Use "open" for an easy social opening or when they let a thought come to rest. These are social intentions, independent of the native topic. Let desire for company color tone and length in every case.
-        The base answer must work on its own. A relevant question back can belong in a follow answer. Reserve goodbye words for ending alternatives unless the player is leaving. For follow, invite and open, also give "closingAnswers" with warm, neutral and cool strings. Imagine you are physically leaving now. Answer a last concrete question. If offered a new subject, acknowledge the offer. Before you agree to a request, ask whether you can actually do it before you go. When someone asks you to stay, either gently tell them you can't linger, or visibly spend that moment together and then rise. A nod or a bare yes followed by goodbye leaves them waiting. Asking for privacy is different: grant it and give them space. Preserve established facts and repeat an accepted promise's exact words. Avoid an invitation to continue, an invented errand, or a promise to stay. The selected farewell follows these words once. Recalled player and npc fields are actual speech.
+        The base answer must work on its own. A relevant question back can belong in a follow answer. Reserve goodbye words for ending alternatives unless the player is leaving. For follow, invite and open, also give "closingAnswers" with warm, neutral and cool strings. Imagine you are physically leaving now. Answer a last concrete question. If offered a new subject, acknowledge the offer. Agree only to what you can do before you go. When someone asks you to stay, either gently tell them you can't linger, or visibly spend that moment together and then rise. A nod or a bare yes followed by goodbye leaves them waiting. Asking for privacy is different: grant it and give them space. Preserve established facts and repeat an accepted promise's exact words. Avoid an invitation to continue, an invented errand, or a promise to stay. The selected farewell follows these words once. Recalled player and npc fields are actual speech.
         List only definite new promises for a specific future action in this exchange. Use [] for unaccepted offers, hypotheticals, quotes, past events and retractions. Each entry has speaker (player or npc), quote (their exact complete spoken sentence), and optionally proposal (the other person's exact proposal, if needed to explain a bare acceptance). Preserve punctuation. At most four entries.
         """;
 
@@ -46,6 +46,7 @@ public sealed partial class Conversation
             if(n["socialDesire"] is JsonValue desire && desire.TryGetValue<double>(out var level) && double.IsFinite(level))
                 disposition["currentDesireForCompany"]=level<-.5?"very low":level<0?"waning":level>.7?"eager for company":"willing to talk";
             var impression=TalkImpressions.ForResident(n["playerImpression"],words);
+            string? listener=(impression?["knownPlayer"]??impression?["onlyIfIntroducingThemself"])?["name"]?.GetValue<string>();
             var prompt=TalkInstructions+"\n"+SpokenStyle+"\n"+ConversationFlow+"\n"+TalkEndings.Instructions+"\n"+TalkTopics.Instructions+"\nGame day "+day+". Character: "+disposition.ToJsonString()+"\nRecall: "+facts.ToJsonString();
             if(impression!=null)prompt+="\n"+TalkImpressions.Instructions+"\nPlayer impression: "+impression.ToJsonString();
             if(freshCues!=null)prompt+="\n"+Steering+"\nReturn cards: "+freshCues.ToJsonString();
@@ -76,13 +77,13 @@ public sealed partial class Conversation
                     if(endingChoices!=null)endingChoices[key]=answer;
                     continue;
                 }
-                var lines=TalkEndings.Prepare(answer,farewells?[key]);
+                var lines=TalkEndings.Prepare(answer,farewells?[key],listener);
                 choices[key]=lines.Continuing;endingChoices[key]=lines.Ending;
                 if(flow.Length>0 && packet["closingAnswers"] is JsonObject closings && closings[key] is JsonValue closing &&
-                   closing.TryGetValue<string>(out var alternate) && alternate.Length<=320){
+                   closing.TryGetValue<string>(out var alternate) && alternate.Length<=900){
                     string closingAnswer=CharacterLine(alternate,actor.S("name"));
                     if(closingAnswer.Length>0){
-                        string ending=TalkEndings.Prepare(closingAnswer,farewells?[key]).Ending;
+                        string ending=TalkEndings.Prepare(closingAnswer,farewells?[key],listener).Ending;
                         if(TalkEndings.KeepsAgreements(answer,ending,packet["commitments"]))endingChoices[key]=ending;
                     }
                 }
