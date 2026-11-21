@@ -230,7 +230,7 @@ def run(package, mode, resident=None, starting_desire=None):
         if not all(receipt[k] for k in ("unchanged","closed","databaseRemoved")):raise RuntimeError("Isolation check failed")
         if (game/"BepInEx/LogOutput.log").exists():shutil.copyfile(game/"BepInEx/LogOutput.log",work/"game-module.log")
         pattern="latest-group-*.png" if mode=="grouptalk" else "latest-roleplay-*.png" if resident else "latest-averil-*.png"
-        patterns=("latest-native-overhead.png","latest-player-draft.png","latest-interface.png","latest-full-*.png") if mode=="interface" else (pattern,)
+        patterns=("latest-native-overhead.png","latest-player-draft.png","latest-interface.png","latest-full-*.png","latest-named-player-speech.png","latest-compact-*.png") if mode=="interface" else (pattern,)
         if mode=="voices":patterns=("voice-player.png","voice-resident.png")
         for match in patterns:
             for capture in (harness.parent/"Diagnostics").glob(match):

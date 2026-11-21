@@ -181,7 +181,7 @@ namespace Mirthwood.Echoes
             if(id==null){playerBubble.Note("The conversation could not be saved. Enter to retry.");host.StartCoroutine(Refocus(generation));return;}
             groupTyping=false;phaseFrame=Time.frameCount;DraftPause.End();GameState.SetCurrentState(1,GameState.State.Gameplay,false);
             groupProbe?.Invoke("Submitted player line "+groupSequence);
-            playerBubble.Show(words.Trim());PlayerLine(id,words.Trim());groupReplies=0;BeginGroupReply();
+            playerBubble.Note("");playerBubble.Show(words.Trim());PlayerLine(id,words.Trim());groupReplies=0;BeginGroupReply();
         }
         string RecordGroupLine(string speaker,string to,string words,string promise,JObject priorPromise,JToken proposal=null)
         {
@@ -275,7 +275,7 @@ namespace Mirthwood.Echoes
             playerBubble.SetVisible(false);npcBubble.Show(words);
             string hint=groupParting?"Enter to leave":"Enter to speak   •   Tab to listen   •   Esc to leave";
             npcBubble.Note(hint);speech.Say(id,guest.Npc,words,(heard,partial)=>{
-                if(group==gathering&&resident==guest.Npc){npcBubble.ShowSpoken(words,heard,partial);npcBubble.Note(hint);}
+                if(group==gathering&&groupRevision==revision&&groupLastId==id&&resident==guest.Npc){npcBubble.ShowSpoken(words,heard,partial);npcBubble.Note(hint);}
             },false);
             bool yieldToPlayer=addressed=="player"&&(words.Contains("?")||(bool?)answer["yieldToPlayer"]==true);
             nextGroupReply=leaves||groupParting||yieldToPlayer?0:Time.unscaledTime+Mathf.Clamp(words.Length/16f,2.7f,8f);

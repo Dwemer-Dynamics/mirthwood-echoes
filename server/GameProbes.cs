@@ -196,7 +196,9 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
                 string voiceSetting=Yes("waitVoiceMuted")?"muted":"enabled";
                 Check("Selected reply replaces the waiting dots",Yes("waitVoiceQueued")&&Yes("waitVoiceReply"),
                     Yes("waitVoiceQueued")?$"Tested the delayed local speech failure with game voices {voiceSetting}.":"The local speech fixture did not queue a reply.");
-                Check("Growing, wrapping player bubble",Yes("grows")&&Yes("wrapped")&&Yes("editAfterWrap")&&Yes("literalTags")&&Yes("editorEdges"),"Measured width and height, a 36-character hard wrap, caret deletion, literal tags and four screen corners.");
+                Check("Growing, wrapping player bubble",Yes("grows")&&Yes("wrapped")&&Yes("editAfterWrap")&&Yes("literalTags")&&Yes("editorEdges"),$"Growth {Yes("grows")}, measured wrap {Yes("wrapped")}, caret deletion {Yes("editAfterWrap")}, literal tags {Yes("literalTags")}, all corners {Yes("editorEdges")}.");
+                Check("Names stay together as the bubble grows right",Yes("horizontalGrowth")&&Yes("namedWords")&&Yes("namedCapture"),input.S("wordLayout"));
+                Check("Paper fits the words and waiting dots",Yes("compactPaper")&&Yes("flourCapture")&&Yes("goodbyeCapture"),input.S("paperMargins"));
                 Check("Extended draft editing",Yes("longDraftCaret")&&Yes("middleEdit")&&Yes("shortDraftVisible")&&Yes("wholeLongDraft")&&Yes("fullDraftCapture"),
                     $"Long caret {Yes("longDraftCaret")}, middle edit {Yes("middleEdit")}, short draft {Yes("shortDraftVisible")}, 1,200 characters {Yes("wholeLongDraft")}. "+input.S("draftBounds")+". "+input.S("shortDraftBounds"));
                 Check("Player clock pause and restoration",Yes("clockPaused")&&Yes("resumeSpeed")&&Yes("nextDraftPaused")&&Yes("closeRestoresClock"),"Measured the scaled simulation and campaign calendar across typing, submission, the next draft and closing.");
@@ -283,7 +285,7 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
         }
         var result=JsonSerializer.SerializeToNode(new{passed=pass,checks},Database.Json)!;
         if(p.Mode=="grouptalk")
-            foreach(var key in new[]{"gathered","released","groupLines","guests","campaign","groupSession","probeError","pair","spacing","firstMs","totalMs","capture","setup","typedT","escape","gBindings","attendance","reload","startingDesire","heldFarewell"})result[key]=input[key]?.DeepClone();
+            foreach(var key in new[]{"gathered","released","groupLines","guests","campaign","groupSession","probeError","pair","spacing","firstMs","totalMs","capture","setup","setupStages","typedT","escape","gBindings","attendance","reload","startingDesire","heldFarewell"})result[key]=input[key]?.DeepClone();
         if(p.Mode is "residentdialogue" or "dialogueflow" or "roleplay")
             foreach(var key in new[]{"resident","turns","openers","backgroundNative","probeError","startingDesire"})result[key]=input[key]?.DeepClone();
         if(p.Mode=="voices"){

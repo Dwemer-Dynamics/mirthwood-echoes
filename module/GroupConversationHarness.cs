@@ -149,10 +149,12 @@ namespace Mirthwood.Echoes
                 Require(GroupActive&&groupSequence>=3,"The group ended before the second resident spoke.");
                 NavMeshHit lateSpot;
                 Require(NavMesh.SamplePosition(center.position+Vector3.forward*3f,out lateSpot,.65f,NavMesh.AllAreas),"No third approach in the clearing.");
-                StageGuest(late,lateSpot.position);yield return null;
+                StageGuest(late,lateSpot.position);
                 Require(IsolatedGameRun.PostGroupKey(true),"Could not invite a late arrival.");
                 yield return new WaitForSecondsRealtime(.15f);IsolatedGameRun.PostGroupKey(false);
-                yield return Await(()=>GroupActive&&Participants().Any(g=>g.Npc==late),"The third resident did not join.",14);
+                float lateUntil=Time.unscaledTime+14;
+                while(GroupActive&&!Participants().Any(g=>g.Npc==late)&&Time.unscaledTime<lateUntil)yield return null;
+                Require(GroupActive&&Participants().Any(g=>g.Npc==late),"The third resident did not join. "+stages.ToString(Newtonsoft.Json.Formatting.None));
                 var lateGuest=Participants().Single(g=>g.Npc==late);
                 ((JArray)report["guests"]).Add(new JObject{["name"]=late.CharacterInfo.name,["actor"]=lateGuest.Actor});
                 int joinedAfter=groupSequence;

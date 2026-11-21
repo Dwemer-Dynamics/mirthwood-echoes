@@ -181,11 +181,13 @@ namespace Mirthwood.Echoes
                     brain.PrepareForChat(chat);chat.PrepareForChat(brain);brain.SendInteraction(native);
                     float until=Time.realtimeSinceStartup+80;
                     while(passing?.Heard!=true&&Time.realtimeSinceStartup<until){
-                        if(!InReplyRange(npc))PlaceResident(player.transform.position+Vector3.right*.8f);
+                        // Keep the copied actor in hearing range throughout the provider request.
+                        if((npc.transform.position-player.transform.position).sqrMagnitude>4f)PlaceResident(player.transform.position+Vector3.right*.8f);
                         yield return null;
                     }
                     if(passing?.Speaker!=npc||passing.Kind!="address"||passing.EventId==null)
-                        throw new InvalidOperationException("Averil's native "+card+" did not produce a spoken opener.");
+                        throw new InvalidOperationException("Averil's native "+card+" did not produce a spoken opener. Range "+InReplyRange(npc)+
+                            ", game "+_Mirthwood.Scripts.Demo.GameState.GetCurrentState(1)+", pending "+(pendingAddress!=null)+", heard "+passing?.Heard+".");
                     var remark=passing;string line=remark.Line,id=remark.EventId;
                     bool matched=remark.Bubble.ReadRenderedText()==new BubbleText(line,false).Plain.Trim();
                     var row=JObject.FromObject(new{card,id,line,matched});openers.Add(row);

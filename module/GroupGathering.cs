@@ -152,7 +152,7 @@ namespace Mirthwood.Echoes
                     trace?.Invoke("Could not arrive "+g.Npc.name+" at "+g.Npc.transform.position+" spot "+g.Spot+" destination "+g.Agent.destination+
                         " speed "+g.Agent.speed+" stopped "+g.Agent.isStopped+" path "+g.Agent.pathStatus+" chatting "+g.Chat.IsChatting);
                     Release(g);
-                }else if(!g.Agent.pathPending&&(!g.Agent.hasPath||(g.Agent.destination-g.Spot).sqrMagnitude>.16f)){
+                }else if(!g.Agent.pathPending&&(g.Agent.isStopped||!g.Agent.hasPath||(g.Agent.destination-g.Spot).sqrMagnitude>.16f)){
                     // A routine already in flight can finish its old path after the invitation.
                     g.Agent.isStopped=false;
                     if(!g.Agent.SetDestination(g.Spot))Release(g);
