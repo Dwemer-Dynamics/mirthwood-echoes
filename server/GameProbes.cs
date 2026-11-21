@@ -16,16 +16,16 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
     readonly object gate=new();
     readonly List<Probe> recent=[];
     static string State(Probe p)=>p.Result!=null?(p.Result["passed"]?.GetValue<bool>()==true?"passed":"failed"):
-        DateTime.UtcNow-p.Created>TimeSpan.FromMinutes(p.Mode is "relationships" or "socialbalance" or "interactions" or "quests" or "voices" or "residentdialogue" or "dialogueflow"?10:3)?"expired":p.Session==""?"waiting":"running";
+        DateTime.UtcNow-p.Created>TimeSpan.FromMinutes(p.Mode=="roleplay"?35:p.Mode is "relationships" or "socialbalance" or "interactions" or "quests" or "voices" or "residentdialogue" or "dialogueflow"?10:3)?"expired":p.Session==""?"waiting":"running";
     static JsonNode View(Probe p)=>JsonSerializer.SerializeToNode(new{id=p.Id,mode=p.Mode,state=State(p),created=p.Created,result=p.Result},Database.Json)!;
     public JsonNode Start(JsonObject input)
     {
         var mode=input.Required("mode",16);
-        if(mode is not ("runtime" or "world" or "interface" or "provider" or "relationships" or "socialbalance" or "interactions" or "quests" or "voices" or "residentdialogue" or "dialogueflow"))throw new UserError("Unknown game check.");
+        if(mode is not ("runtime" or "world" or "interface" or "provider" or "relationships" or "socialbalance" or "interactions" or "quests" or "voices" or "residentdialogue" or "dialogueflow" or "roleplay"))throw new UserError("Unknown game check.");
         lock(gate){
             if(recent.LastOrDefault() is { } active&&State(active) is "waiting" or "running")throw new UserError("A game check is already waiting.",409);
             var run=input.S("run");if(run!=""&&!Guid.TryParseExact(run,"N",out _))throw new UserError("Invalid isolated run.");
-            if(mode is "provider" or "relationships" or "interactions" or "quests" or "residentdialogue" or "dialogueflow"&&run=="")throw new UserError("The live provider test needs an isolated save.");
+            if(mode is "provider" or "relationships" or "interactions" or "quests" or "residentdialogue" or "dialogueflow" or "roleplay"&&run=="")throw new UserError("The live provider test needs an isolated save.");
             if(mode=="socialbalance"&&run=="")throw new UserError("The native balance comparison needs an isolated save.");
             if(mode=="voices"&&run=="")throw new UserError("Voice playback needs an isolated save.");
             var p=new Probe(mode,run);recent.Add(p);if(recent.Count>8)recent.RemoveAt(0);return View(p);
@@ -242,6 +242,11 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
             foreach(var item in input["cases"] as JsonArray??[])Check(item.S("name"),item?["passed"]?.GetValue<bool>()==true,item.S("detail"));
             Check("Completed copied-save interactions",input["interactionsComplete"]?.GetValue<bool>()==true,input.S("probeError"));
         }
+        if(p.Mode=="roleplay"){
+            var turns=input["turns"] as JsonArray??[];
+            Check("Player-entered lines and resident replies in ordinary Talk",input.S("probeError")==""&&turns.Count>0&&
+                turns.All(t=>t?["matched"]?.GetValue<bool>()==true&&t["visiblePages"] is JsonArray {Count:>0}),input.S("probeError"));
+        }
         if(p.Mode=="residentdialogue"){
             var turns=input["turns"] as JsonArray??[];
             Check("Averil’s native Talk and recovered words",input.S("resident")=="Averil"&&turns.Count==3&&
@@ -266,8 +271,8 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
             Check("Native quest choices, terms, callbacks and reload",input["verifiedQuests"]?.GetValue<bool>()==true,input.S("probeError"));
         }
         var result=JsonSerializer.SerializeToNode(new{passed=pass,checks},Database.Json)!;
-        if(p.Mode is "residentdialogue" or "dialogueflow")
-            foreach(var key in new[]{"resident","turns","openers","backgroundNative","probeError"})result[key]=input[key]?.DeepClone();
+        if(p.Mode is "residentdialogue" or "dialogueflow" or "roleplay")
+            foreach(var key in new[]{"resident","turns","openers","backgroundNative","probeError","startingDesire"})result[key]=input[key]?.DeepClone();
         if(p.Mode=="voices"){
             result["reactions"]=input["voiceRows"]?.DeepClone();result["speech"]=input["speech"]?.DeepClone();result["error"]=input["probeError"]?.DeepClone();
             foreach(string key in new[]{"playerPartial","npcPartial","speechComplete","speakerAnchor","actionItalic","playerCaptions","npcCaptions","playerCapture","residentCapture","audioFallback"})

@@ -72,11 +72,17 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
         if(d<0)throw new UserError("Load the save in Mirthwood to supply its current calendar day.",409);
         return(native.Describe(actor),d);
     }
-    public async Task<JsonNode> Recall(string c,string a,int day,Options opt,string question,bool scoped=false,Guid? head=null,int recentTurns=2,bool includeVoicedCues=false)
+    public async Task<JsonNode> Recall(string c,string a,int day,Options opt,string question,bool scoped=false,Guid? head=null,int recentTurns=2,bool includeVoicedCues=false,bool relatedSpeech=false)
     {
         var terms=Regex.Matches(question.ToLowerInvariant(),@"[\p{L}\p{N}]{3,}").Select(m=>m.Value).Where(w=>w is not ("the" or "and" or "you" or "what" or "did" or "that" or "about" or "for")).Distinct().Take(15);
         var facts=await db.ScopedOne("""
-            WITH q AS (SELECT to_tsquery('simple',@terms) AS ts)
+            WITH q AS (SELECT to_tsquery('simple',@terms) AS ts,to_tsquery('english',@terms) AS speech),
+            recent AS (
+                SELECT id AS turn,day,left(player_text,300) AS player,left(reply,600) AS npc,started,
+                    CASE WHEN @includeCues AND talk->>'deliveredContinuation'='true' THEN talk->'handoff'->>'cue' END AS "voicedCue"
+                FROM turns WHERE campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day AND state='complete'
+                ORDER BY started DESC,id DESC LIMIT @recentTurns
+            )
             SELECT jsonb_build_object(
               'daily', (SELECT coalesce(jsonb_agg(to_jsonb(x)),'[]') FROM (SELECT day,kind,description FROM daily_events,q
                 WHERE campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day
@@ -87,11 +93,17 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
               'olderMemory',(SELECT to_jsonb(x) FROM (SELECT day,kind,left(body,340) AS excerpt FROM memory_summaries,q
                 WHERE campaign=@c AND actor=@a AND day<@earliest AND to_tsvector('simple',body) @@ q.ts
                 ORDER BY ts_rank(to_tsvector('simple',body),q.ts) DESC,day DESC,kind LIMIT 1)x),
-              'recentSpeech',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(x)-'started') ORDER BY x.started),'[]') FROM (SELECT id AS turn,day,left(player_text,300) AS player,left(reply,600) AS npc,started,
-                CASE WHEN @includeCues AND talk->>'deliveredContinuation'='true' THEN talk->'handoff'->>'cue' END AS "voicedCue" FROM turns
-                WHERE campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day AND state='complete' ORDER BY started DESC LIMIT @recentTurns)x)
+              'recentSpeech',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(r)-'started') ORDER BY r.started,r.turn),'[]') FROM recent r),
+              'earlierSpeech',(SELECT jsonb_agg(to_jsonb(x)-'started' ORDER BY x.started,x.turn) FROM (
+                SELECT t.id AS turn,t.day,left(t.player_text,300) AS player,left(t.reply,600) AS npc,t.started
+                FROM turns t CROSS JOIN q
+                CROSS JOIN LATERAL (SELECT to_tsvector('english',t.player_text||' '||coalesce(t.reply,'')) AS words) s
+                WHERE @related AND t.campaign=@c AND t.actor=@a AND t.state='complete' AND t.day BETWEEN @earliest AND @day
+                  AND NOT EXISTS(SELECT FROM recent r WHERE r.turn=t.id) AND s.words @@ q.speech
+                ORDER BY ts_rank_cd(s.words,q.speech) DESC,t.started DESC,t.id DESC LIMIT 2)x)
             )::text
-            """,scoped,head,("terms",string.Join(" | ",terms)),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues));
+            """,scoped,head,("terms",string.Join(" | ",terms)),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech));
+        if(facts is JsonObject obj&&obj["earlierSpeech"]==null)obj.Remove("earlierSpeech");
         return facts!;
     }
 

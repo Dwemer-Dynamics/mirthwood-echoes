@@ -2,6 +2,7 @@
 
 Runs the bundled module in Steam against a private WSL server and a copy of slot 0.
 The interface test uses the local fixture. The Averil test uses the selected Windows Codex subscription.
+Use --play PACKAGE RESIDENT [tired|eager] for an unscripted conversation and --say RUN "words" after each reply.
 """
 import hashlib
 import json
@@ -39,14 +40,14 @@ def free_port():
             raise RuntimeError("The isolated server port is in use.")
 
 
-def serve(token, saves, package):
+def serve(token, saves, package, output):
     import pwd
     import signal
     import tempfile
     from relationships import postgres
-    work = Path(".work/resident-dialogue") / uuid.UUID(hex=token).hex
+    work = Path(output).resolve(strict=True)
     app = (Path(package)/"app").resolve(strict=True)
-    if not (work/"game").is_dir() or not (Path(saves)/"Slot0.savegame").is_file():
+    if work.name!=uuid.UUID(hex=token).hex or not (work/"game").is_dir() or not (Path(saves)/"Slot0.savegame").is_file():
         raise ValueError("Missing private game or save")
     free_port()
     account = pwd.getpwnam("mirthwood_echoes")
@@ -63,12 +64,13 @@ def serve(token, saves, package):
                 process = subprocess.Popen(["/usr/bin/dotnet",str(app/"Mirthwood.Echoes.Server.dll")],cwd=app,env=env,
                                            user=account.pw_uid,group=account.pw_gid,extra_groups=[],stdout=log,stderr=log)
                 try:
-                    end=time.monotonic()+720
+                    end=time.monotonic()+(2220 if (Path(saves).parent/"resident.txt").exists() else 720)
                     while process.poll() is None and not (work/"stop-server").exists() and time.monotonic()<end:
                         time.sleep(.3)
                     if process.poll() is not None: raise RuntimeError("Private server exited early")
                     query = """SELECT coalesce(json_agg(row_to_json(t)),'[]') FROM
-                      (SELECT player_text,reply,state,talk->>'topic' AS topic,talk->'handoff' AS handoff,
+                      (SELECT player_text,reply,state,talk->>'topic' AS topic,talk->'handoff' AS handoff,reaction,
+                      talk->>'flow' AS flow,talk->'deliveredContinuation' AS delivered_continuation,
                       first_ms,total_ms FROM turns ORDER BY started) t"""
                     write(work/"turns.json",json.loads(postgres("psql","-XAt","-d",database,"-c",query)))
                 finally:
@@ -89,7 +91,21 @@ def linux(path):
     return "/mnt/"+path.drive[0].lower()+"/"+path.as_posix().split(":/",1)[1]
 
 
-def run(package, mode):
+def send_line(token, words):
+    session=Path(os.environ["LOCALAPPDATA"])/"MirthwoodEchoes/Harness"/uuid.UUID(hex=token).hex
+    if not (session/"resident.txt").is_file() or json.loads((session/"harness.json").read_text())["id"]!=token:
+        raise ValueError("This is not an active private roleplay run.")
+    ready=max(int(p.name.split("-")[1]) for p in session.glob("ready-*"))
+    draft=session/f"draft-{ready}.txt"
+    tmp=session/(uuid.uuid4().hex+".tmp")
+    try:
+        tmp.write_text(words,encoding="utf-8")
+        tmp.rename(draft)  # On Windows a second submission cannot replace the first.
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def run(package, mode, resident=None, starting_desire=None):
     import winreg
     token=uuid.uuid4().hex
     free_port()
@@ -102,7 +118,7 @@ def run(package, mode):
     original=Path(os.environ["USERPROFILE"])/"AppData/LocalLow/Bad Ridge Games/Mirthwood/SaveData"
     files=[p for p in (original/name for name in ("Slot0.savegame","Slot0.metadata","Slot0.savegame.b","Slot0.metadata.b")) if p.exists()]
     baseline={str(p):digest(p) for p in [*files,real/module]}
-    work=Path(".work/resident-dialogue")/token
+    work=Path(os.environ.get("MIRTHWOOD_ECHOES_TEST_OUTPUT",".work/resident-dialogue"))/token
     game=(work/"game").absolute();game.mkdir(parents=True)
     harness=Path(os.environ["LOCALAPPDATA"])/"MirthwoodEchoes/Harness"
     session=harness/token;saves=session/"SaveData";saves.mkdir(parents=True)
@@ -110,10 +126,14 @@ def run(package, mode):
         shutil.copyfile(p,saves/p.name)
         assert digest(saves/p.name)==baseline[str(p)]
     write(session/"harness.json",dict(id=token,sourceSlot=0,sha256=digest(saves/"Slot0.savegame"),talkPort=17864,privateDiagnostics=True))
+    if resident:
+        (session/"resident.txt").write_text(resident,encoding="utf-8")
+        if starting_desire:
+            (session/"starting-desire.txt").write_text(starting_desire,encoding="utf-8")
     for rel in ("Mirthwood.exe","Mirthwood_Data/Managed/Assembly-CSharp.dll","Mirthwood_Data/resources.assets"):
         (game/rel).parent.mkdir(exist_ok=True,parents=True);shutil.copyfile(real/rel,game/rel)
     launch=["wsl","-d","ReignServer","-u","root","--cd",str(Path.cwd()),"--","python3","-B",
-            "tests/resident_dialogue.py","--server",token,linux(saves),linux(package)]
+            "tests/resident_dialogue.py","--server",token,linux(saves),linux(package),linux(work)]
     server=subprocess.Popen(launch)
     launched=False
     def owned():
@@ -139,9 +159,17 @@ def run(package, mode):
         probe=api("diagnostics/probes",dict(mode=mode,run=token))
         subprocess.Popen([steam,"-applaunch","2272900","-echoes-harness",token,"--doorstop-target-assembly",
                           str(game/"BepInEx/core/BepInEx.Preloader.dll")])
-        launched=True;last=None;end=time.monotonic()+590
+        launched=True;last=None;end=time.monotonic()+(2080 if resident else 590)
+        seen_ready=0;seen_reply=0
         while time.monotonic()<end:
             probe=api("diagnostics/probes/"+probe["id"])
+            if resident:
+                reply_file=session/f"reply-{seen_reply}.json"
+                if reply_file.is_file():
+                    row=json.loads(reply_file.read_text(encoding="utf-8-sig"))
+                    print(f"{resident}: {row['reply']}",flush=True);seen_reply+=1
+                if (session/f"ready-{seen_ready}").is_file():
+                    print(f"Ready for player line {seen_ready+1}.",flush=True);seen_ready+=1
             if probe["state"]!=last:
                 last=probe["state"];print(last,flush=True)
             if last not in ("waiting","running"):break
@@ -164,7 +192,8 @@ def run(package, mode):
             if time.monotonic()>=end:raise AssertionError("Journal differs from the in-game speech")
             time.sleep(.5)
         write(work/"journal.json",entries)
-        subprocess.run(["node","tests/journal_browser.cjs",str(work),"--averil"],check=True,timeout=90)
+        if not resident:
+            subprocess.run(["node","tests/journal_browser.cjs",str(work),"--averil"],check=True,timeout=90)
         log=(work/"server.log").read_text(encoding="utf-8",errors="replace")
         calls={kind:log.count("Echoes Codex "+kind+" accepted: model=gpt-6.1-terra effort=medium") for kind in ("turn","opener")}
         write(work/"calls.json",calls)
@@ -182,7 +211,7 @@ def run(package, mode):
         write(work/"isolation.json",receipt)
         if not all(receipt[k] for k in ("unchanged","closed","databaseRemoved")):raise RuntimeError("Isolation check failed")
         if (game/"BepInEx/LogOutput.log").exists():shutil.copyfile(game/"BepInEx/LogOutput.log",work/"game-module.log")
-        for capture in (harness.parent/"Diagnostics").glob("latest-averil-*.png"):
+        for capture in (harness.parent/"Diagnostics").glob("latest-roleplay-*.png" if resident else "latest-averil-*.png"):
             if capture.stat().st_mtime>=(session/"harness.json").stat().st_mtime:shutil.copyfile(capture,work/capture.name)
         if session.resolve().parent==harness.resolve() and json.loads((session/"harness.json").read_text())["id"]==token:
             shutil.rmtree(session)
@@ -192,5 +221,8 @@ def run(package, mode):
 if __name__=="__main__":
     modes={"--live-averil":"residentdialogue","--interface-fixture":"interface","--live-topic-flow":"dialogueflow"}
     if len(sys.argv)==3 and sys.argv[1] in modes:run(Path(sys.argv[2]).resolve(strict=True),modes[sys.argv[1]])
-    elif len(sys.argv)==5 and sys.argv[1]=="--server" and os.name=="posix":serve(*sys.argv[2:])
+    elif sys.argv[1:2]==["--play"] and os.name=="nt" and (len(sys.argv)==4 or len(sys.argv)==5 and sys.argv[4] in ("tired","eager")):
+        run(Path(sys.argv[2]).resolve(strict=True),"roleplay",*sys.argv[3:])
+    elif len(sys.argv)==4 and sys.argv[1]=="--say" and os.name=="nt":send_line(sys.argv[2],sys.argv[3])
+    elif len(sys.argv)==6 and sys.argv[1]=="--server" and os.name=="posix":serve(*sys.argv[2:])
     else:raise SystemExit(__doc__)
