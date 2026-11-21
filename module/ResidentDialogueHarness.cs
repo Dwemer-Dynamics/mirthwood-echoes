@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Linq;
+using HarmonyLib;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 using UnityEngine.AI;
@@ -12,10 +13,25 @@ namespace Mirthwood.Echoes
 {
     internal sealed partial class NativeConversation
     {
-        internal IEnumerator RunResidentDialogue(JObject report)
+        internal IEnumerator RunResidentDialogue(JObject report,bool topicFlow)
         {
             if(!InCopy()||IsolatedGameRun.Active.PrivateDiagnostics!=true)yield break;
-            yield return CheckedProbe(report,AverilCases(report));
+            yield return CheckedProbe(report,AverilCases(report,topicFlow));
+        }
+
+        // These hooks are installed only during the private replay of recorded native cards.
+        static NPCChatController replaySpeaker;
+        static string replayLeisureCue;
+        static bool PickReplayCard(NPCChatController __instance,ChatController other)
+        {
+            if(replayLeisureCue==null||__instance!=replaySpeaker||!(other is PlayerChat))return true;
+            __instance.SendInteraction(__instance.dnaData.chatActions.Single(card=>card.name=="Leisure"));
+            return false;
+        }
+        static void SetReplayCue(NPCController resident,JObject __result)
+        {
+            if(replayLeisureCue!=null&&replaySpeaker.Character==resident&&__result?["Leisure"]!=null)
+                __result["Leisure"]=replayLeisureCue;
         }
 
         IEnumerator ReadAverilPages(OverheadSpeech bubble,string line,JObject row,string filename,bool opener)
@@ -43,7 +59,7 @@ namespace Mirthwood.Echoes
                 throw new InvalidOperationException("Some of Averil's words were missing from the visible pages.");
         }
 
-        IEnumerator AverilCases(JObject report)
+        IEnumerator AverilCases(JObject report,bool topicFlow)
         {
             yield return new WaitForSecondsRealtime(3);
             var player=PlayerCharacterController.Instance;
@@ -59,14 +75,36 @@ namespace Mirthwood.Echoes
             }
             var turns=new JArray();var openers=new JArray();
             report["resident"]=npc.CharacterInfo.name;report["turns"]=turns;report["openers"]=openers;
+            var replay=topicFlow?new Harmony(Plugin.Id+".topic-flow-test"):null;
+            float originalDesire=npc.CharacterInfo.personality.values[5];
             try{
                 PlaceResident(player.transform.position+Vector3.right*.8f);
-                string[] messages={
+                if(replay!=null){
+                    replaySpeaker=brain;
+                    replay.Patch(AccessTools.Method(typeof(NPCChatController),"PickResponseChatAction"),prefix:new HarmonyMethod(typeof(NativeConversation),nameof(PickReplayCard)));
+                    replay.Patch(AccessTools.Method(typeof(NativeSocialTurn),nameof(NativeSocialTurn.ReturnCues)),postfix:new HarmonyMethod(typeof(NativeConversation),nameof(SetReplayCue)));
+                }
+                string[] messages=topicFlow?new[]{
+                    "Evening, Averil. How do you like to spend a quiet evening?",
+                    "What is it about chess that keeps you at the board?",
+                    "That makes sense. I enjoy a game of chess myself.",
+                    "What would you hope to find inside one of those ruins?",
+                    "Speaking of tomorrow, do you think the fields could use a little rain?",
+                    "Back to chess for a moment. If your opponent left a rook unguarded, would you take it at once?"
+                }:new[]{
                     "I miss my brother. We used to mend fishing nets together. What would you do with his old net?",
                     "It's the quiet by the water that I miss most. Could we sit with that a moment?",
                     "Let's talk about something lighter. Tell me a joke about the tavern cook."
                 };
                 foreach(string words in messages){
+                    if(topicFlow){
+                        switch(turns.Count){
+                            case 0: case 1: case 4: replayLeisureCue="Averil talks about playing chess";break;
+                            case 2: replayLeisureCue="Averil talks about exploring old ruins";break;
+                            default: replayLeisureCue=null;break;
+                        }
+                        if(replayLeisureCue!=null)npc.CharacterInfo.personality.values[5]=1f;
+                    }
                     bool opening=!Visible;
                     if(opening){
                         PlaceResident(player.transform.position+Vector3.right*.8f);
@@ -98,6 +136,11 @@ namespace Mirthwood.Echoes
                             npcBubble.ReadRenderedText()==new BubbleText(reply,false).Plain.Trim();
                         var row=JObject.FromObject(new{id,campaign=c,actor=a,player=words,reply,topic=packet["topic"],handoff=packet["handoff"],
                             branch=packet["reaction"],context=intent["context"],matched,firstMs,finishMs,opened=opening});
+                        if(replayLeisureCue!=null){
+                            row["replayedCue"]=replayLeisureCue;
+                            if((string)row["handoff"]?["cue"]!=replayLeisureCue)
+                                throw new InvalidOperationException("The recorded Leisure card did not reach this turn.");
+                        }
                         turns.Add(row);
                         yield return ReadAverilPages(npcBubble,reply,row,"latest-averil-turn-"+turns.Count,false);
                         if(!matched)throw new InvalidOperationException("Averil’s speech differs from the recovered turn.");
@@ -105,6 +148,7 @@ namespace Mirthwood.Echoes
                     Advance();
                 }
                 Close();
+                if(topicFlow)yield break;
                 foreach(string card in new[]{"Funny Joke","Flirt"}){
                     var native=brain.dnaData.chatActions.Single(x=>string.Equals(x.name.Replace(" ",""),card.Replace(" ",""),StringComparison.OrdinalIgnoreCase));
                     PlaceResident(player.transform.position+Vector3.right*.8f);
@@ -142,6 +186,7 @@ namespace Mirthwood.Echoes
                     report["backgroundNative"]=addressRequest==ticket&&passing==null;
                 }finally{NativeCues.Trace=previousTrace;}
             }finally{
+                if(replay!=null){replayLeisureCue=null;replaySpeaker=null;replay.UnpatchSelf();npc.CharacterInfo.personality.values[5]=originalDesire;}
                 Close();PlaceResident(origin);
             }
         }

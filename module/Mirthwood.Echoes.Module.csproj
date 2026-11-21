@@ -23,6 +23,7 @@
     <Reference Include="UnityEngine.CoreModule" HintPath="$(GameManaged)\UnityEngine.CoreModule.dll" Private="false" />
     <Reference Include="UnityEngine.AIModule" HintPath="$(GameManaged)\UnityEngine.AIModule.dll" Private="false" />
     <Reference Include="UnityEngine.InputLegacyModule" HintPath="$(GameManaged)\UnityEngine.InputLegacyModule.dll" Private="false" />
+    <Reference Include="Unity.InputSystem" HintPath="$(GameManaged)\Unity.InputSystem.dll" Private="false" />
     <Reference Include="UnityEngine.IMGUIModule" HintPath="$(GameManaged)\UnityEngine.IMGUIModule.dll" Private="false" />
     <Reference Include="UnityEngine.UnityWebRequestModule" HintPath="$(GameManaged)\UnityEngine.UnityWebRequestModule.dll" Private="false" />
     <Reference Include="UnityEngine.UI" HintPath="$(GameManaged)\UnityEngine.UI.dll" Private="false" />

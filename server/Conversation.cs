@@ -72,7 +72,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
         if(d<0)throw new UserError("Load the save in Mirthwood to supply its current calendar day.",409);
         return(native.Describe(actor),d);
     }
-    public async Task<JsonNode> Recall(string c,string a,int day,Options opt,string question,bool scoped=false,Guid? head=null)
+    public async Task<JsonNode> Recall(string c,string a,int day,Options opt,string question,bool scoped=false,Guid? head=null,int recentTurns=2,bool includeVoicedCues=false)
     {
         var terms=Regex.Matches(question.ToLowerInvariant(),@"[\p{L}\p{N}]{3,}").Select(m=>m.Value).Where(w=>w is not ("the" or "and" or "you" or "what" or "did" or "that" or "about" or "for")).Distinct().Take(15);
         var facts=await db.ScopedOne("""
@@ -87,10 +87,11 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
               'olderMemory',(SELECT to_jsonb(x) FROM (SELECT day,kind,left(body,340) AS excerpt FROM memory_summaries,q
                 WHERE campaign=@c AND actor=@a AND day<@earliest AND to_tsvector('simple',body) @@ q.ts
                 ORDER BY ts_rank(to_tsvector('simple',body),q.ts) DESC,day DESC,kind LIMIT 1)x),
-              'recentSpeech',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(x)-'started') ORDER BY x.started),'[]') FROM (SELECT id AS turn,day,left(player_text,300) AS player,left(reply,600) AS npc,started FROM turns
-                WHERE campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day AND state='complete' ORDER BY started DESC LIMIT 2)x)
+              'recentSpeech',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(x)-'started') ORDER BY x.started),'[]') FROM (SELECT id AS turn,day,left(player_text,300) AS player,left(reply,600) AS npc,started,
+                CASE WHEN @includeCues AND talk->>'deliveredContinuation'='true' THEN talk->'handoff'->>'cue' END AS "voicedCue" FROM turns
+                WHERE campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day AND state='complete' ORDER BY started DESC LIMIT @recentTurns)x)
             )::text
-            """,scoped,head,("terms",string.Join(" | ",terms)),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1));
+            """,scoped,head,("terms",string.Join(" | ",terms)),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues));
         return facts!;
     }
 

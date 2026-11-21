@@ -16,16 +16,16 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
     readonly object gate=new();
     readonly List<Probe> recent=[];
     static string State(Probe p)=>p.Result!=null?(p.Result["passed"]?.GetValue<bool>()==true?"passed":"failed"):
-        DateTime.UtcNow-p.Created>TimeSpan.FromMinutes(p.Mode is "relationships" or "socialbalance" or "interactions" or "quests" or "voices" or "residentdialogue"?10:3)?"expired":p.Session==""?"waiting":"running";
+        DateTime.UtcNow-p.Created>TimeSpan.FromMinutes(p.Mode is "relationships" or "socialbalance" or "interactions" or "quests" or "voices" or "residentdialogue" or "dialogueflow"?10:3)?"expired":p.Session==""?"waiting":"running";
     static JsonNode View(Probe p)=>JsonSerializer.SerializeToNode(new{id=p.Id,mode=p.Mode,state=State(p),created=p.Created,result=p.Result},Database.Json)!;
     public JsonNode Start(JsonObject input)
     {
         var mode=input.Required("mode",16);
-        if(mode is not ("runtime" or "world" or "interface" or "provider" or "relationships" or "socialbalance" or "interactions" or "quests" or "voices" or "residentdialogue"))throw new UserError("Unknown game check.");
+        if(mode is not ("runtime" or "world" or "interface" or "provider" or "relationships" or "socialbalance" or "interactions" or "quests" or "voices" or "residentdialogue" or "dialogueflow"))throw new UserError("Unknown game check.");
         lock(gate){
             if(recent.LastOrDefault() is { } active&&State(active) is "waiting" or "running")throw new UserError("A game check is already waiting.",409);
             var run=input.S("run");if(run!=""&&!Guid.TryParseExact(run,"N",out _))throw new UserError("Invalid isolated run.");
-            if(mode is "provider" or "relationships" or "interactions" or "quests" or "residentdialogue"&&run=="")throw new UserError("The live provider test needs an isolated save.");
+            if(mode is "provider" or "relationships" or "interactions" or "quests" or "residentdialogue" or "dialogueflow"&&run=="")throw new UserError("The live provider test needs an isolated save.");
             if(mode=="socialbalance"&&run=="")throw new UserError("The native balance comparison needs an isolated save.");
             if(mode=="voices"&&run=="")throw new UserError("Voice playback needs an isolated save.");
             var p=new Probe(mode,run);recent.Add(p);if(recent.Count>8)recent.RemoveAt(0);return View(p);
@@ -37,7 +37,7 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
         if(!Guid.TryParse(heartbeat.S("session"),out _))return null;
         lock(gate){
             var p=recent.LastOrDefault();
-            if(p==null||State(p) is not ("waiting" or "running")||(p.Mode is "world" or "interface" or "provider" or "relationships" or "socialbalance" or "interactions" or "quests" or "voices" or "residentdialogue")&&heartbeat["world"]==null&&heartbeat["probeWorld"]==null)return null;
+            if(p==null||State(p) is not ("waiting" or "running")||p.Mode!="runtime"&&heartbeat["world"]==null&&heartbeat["probeWorld"]==null)return null;
             if(p.Run!=""&&p.Run!=heartbeat.S("isolatedRun"))return null;
             if(p.Session!=""&&p.Session!=heartbeat.S("session"))return null;
             p.Session=heartbeat.S("session");return new JsonObject{["id"]=p.Id.ToString(),["mode"]=p.Mode};
@@ -187,6 +187,7 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
             Check("Streamed speech on screen",input.S("reply")=="*I nod.* The mill is open."&&input.S("displayed")=="I nod. The mill is open."&&input.I("deltas")==2&&Yes("done"),input.S("displayed"));
             if(p.Run!=""){
                 if(input.S("probeError")!="")Check("Interface probe reached its reply",false,input.S("probeError"));
+                Check("F types into the draft",Yes("typedInteractionKey"),"Sent menu Submit and typed F in mid-word. The complete draft stayed focused until Return.");
                 Check("Enter accepts the typed draft",Yes("windowEnter"),"Sent Return to the isolated game window through Windows.");
                 Check("Rolling periods above the selected resident",Yes("waitCycle")&&Yes("waitAnchored")&&Yes("waitSelectedOnly")&&Yes("waitCapture"),input.S("waitStages"));
                 Check("Resident waits while the world advances",Yes("waitStationary")&&Yes("waitReleased"),"Checked the resident's position and native navigation agent during the delay and after the reply.");
@@ -249,12 +250,23 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
             Check("Player-directed native joke and flirt",openers.Count==2&&openers.All(t=>t?["matched"]?.GetValue<bool>()==true),input.S("probeError"));
             Check("Background interaction stays native",input["backgroundNative"]?.GetValue<bool>()==true,input.S("probeError"));
         }
+        if(p.Mode=="dialogueflow"){
+            var turns=input["turns"] as JsonArray??[];
+            Check("Six spoken and recovered turns with Averil",input.S("resident")=="Averil"&&turns.Count==6&&
+                turns.All(t=>t?["matched"]?.GetValue<bool>()==true),input.S("probeError"));
+            const string chess="Averil talks about playing chess";
+            string?[] replay=[chess,chess,"Averil talks about exploring old ruins",null,chess,null];
+            Check("Replayed and unrestricted native draws",turns.Select(t=>(string?)t?["replayedCue"]).SequenceEqual(replay)&&
+                turns.All(t=>t?["replayedCue"]==null||t.S("replayedCue")==t?["handoff"].S("cue")),input.S("probeError"));
+            string rain=turns.Count>4?turns[4].S("reply"):"";
+            Check("A repeated chess draw lets the rain answer stand",rain.Length>0&&!rain.Contains("chess",StringComparison.OrdinalIgnoreCase),rain);
+        }
         if(p.Mode=="quests"){
             Check("Talk recovery and native Speak through a backend outage",input["outage"]?["passed"]?.GetValue<bool>()==true,input.S("probeError"));
             Check("Native quest choices, terms, callbacks and reload",input["verifiedQuests"]?.GetValue<bool>()==true,input.S("probeError"));
         }
         var result=JsonSerializer.SerializeToNode(new{passed=pass,checks},Database.Json)!;
-        if(p.Mode=="residentdialogue")
+        if(p.Mode is "residentdialogue" or "dialogueflow")
             foreach(var key in new[]{"resident","turns","openers","backgroundNative","probeError"})result[key]=input[key]?.DeepClone();
         if(p.Mode=="voices"){
             result["reactions"]=input["voiceRows"]?.DeepClone();result["speech"]=input["speech"]?.DeepClone();result["error"]=input["probeError"]?.DeepClone();
