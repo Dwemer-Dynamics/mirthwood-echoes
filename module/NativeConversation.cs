@@ -64,6 +64,8 @@ namespace Mirthwood.Echoes
         bool cursorVisible;CursorLockMode cursorLock;
         int generation,phaseFrame;
         float nextChatRefresh,positiveRun;
+        int waitingDots;
+        float waitStarted;
         string campaign,actor,person="",accepted,pendingFinish;
         UnityWebRequest active;
         Canvas[] contextPrompts=Array.Empty<Canvas>();
@@ -108,13 +110,41 @@ namespace Mirthwood.Echoes
         void Edit(string draft,string note="")
         {
             speech?.Stop(true);
+            if(waitingDots!=0){waitingDots=0;npcBubble.SetVisible(false);}
             phase=Phase.Draft;phaseFrame=Time.frameCount;DraftPause.Begin();npcBubble.Note(npcBubble.Visible?PageHint():"");
             playerBubble.Edit(draft);playerBubble.Note(note);
+        }
+        void WaitForReply(string words,string note="")
+        {
+            accepted=words;phase=Phase.Waiting;phaseFrame=Time.frameCount;
+            if(waitingDots==0){
+                waitStarted=Time.unscaledTime;waitingDots=1;
+                npcBubble.Note("");npcBubble.Show(".");
+            }
+            DraftPause.End();playerBubble.Show(words);playerBubble.Note(note);
+        }
+        internal bool WaitingFor(ChatController speaker) =>
+            waitingDots!=0 && Visible && ReferenceEquals(speaker.Character,resident);
+
+        void AnimateWaitingDots()
+        {
+            if(waitingDots==0)return;
+            int count=1+Mathf.FloorToInt((Time.unscaledTime-waitStarted)/.4f)%3;
+            if(count==waitingDots)return;
+            waitingDots=count;npcBubble.Show(new string('.',count));
+        }
+        void ShowResidentReply(string value,bool partial=false)
+        {
+            if(string.IsNullOrWhiteSpace(value)||(partial&&value=="*"))return;
+            if(waitingDots!=0||phase!=Phase.Reading)phaseFrame=Time.frameCount;
+            waitingDots=0;phase=Phase.Reading;
+            playerBubble.SetVisible(false);npcBubble.Show(value,partial);ReadingHint();
         }
         string PageHint()=>npcBubble.Pages>1?"PgUp / PgDn  "+npcBubble.Page+" / "+npcBubble.Pages:"";
         void Page(int direction){npcBubble.TurnPage(direction);if(phase==Phase.Draft)npcBubble.Note(PageHint());else ReadingHint();}
         void ReadingHint()
         {
+            if(waitingDots!=0)return;
             string pages=npcBubble.Pages>1?PageHint()+"    ":"";
             npcBubble.Note(pages+(busy?"":pendingFinish!=null?"Enter to save this reply":conversationOver?"Enter to leave":"Enter to reply"));
         }
@@ -127,9 +157,9 @@ namespace Mirthwood.Echoes
         {
             if(Input.GetKeyDown(KeyCode.Escape)){Close();return;}
             if(Input.GetKeyDown(KeyCode.F8)){
-                if(phase==Phase.Reading&&!busy)Advance();else Close();return;
+                if(phase==Phase.Reading&&!busy&&waitingDots==0)Advance();else Close();return;
             }
-            if(phase==Phase.Reading&&!busy&&Time.frameCount!=phaseFrame&&(Input.GetKeyDown(KeyCode.Return)||Input.GetKeyDown(KeyCode.KeypadEnter))){Advance();return;}
+            if(phase==Phase.Reading&&!busy&&waitingDots==0&&Time.frameCount!=phaseFrame&&(Input.GetKeyDown(KeyCode.Return)||Input.GetKeyDown(KeyCode.KeypadEnter))){Advance();return;}
             if((phase==Phase.Reading||phase==Phase.Draft)&&npcBubble.Visible&&npcBubble.Pages>1){
                 if(Input.GetKeyDown(KeyCode.PageDown)||Input.mouseScrollDelta.y<0)Page(1);
                 if(Input.GetKeyDown(KeyCode.PageUp)||Input.mouseScrollDelta.y>0)Page(-1);
@@ -140,13 +170,14 @@ namespace Mirthwood.Echoes
             if(!Visible)return;
             DraftPause.Maintain();
             if(resident==null||!resident.isActiveAndEnabled||!playerBubble.Follow()||!npcBubble.Follow()){Close();return;}
+            AnimateWaitingDots();
             if(npcBubble.Visible){
                 var menu=PlayerCharacterController.Instance?.GetComponent<PlayerChat>()?.ContextMenuUI;
                 if(npcBubble.QuickMenuBounds(menu) is Rect occupied)npcBubble.Avoid(occupied);
                 if(playerBubble.Visible)playerBubble.Avoid(npcBubble.Footprint);
             }
-            // Hold the existing pair during provider latency. Reading and walking away use the game's idle timer.
-            if((phase==Phase.Waiting||phase==Phase.Reading&&speech?.Busy==true)&&targetIdentity!=null&&Time.time>=nextChatRefresh){
+            // Keep the native pair facing each other during audible playback.
+            if(waitingDots==0&&phase==Phase.Reading&&speech?.Busy==true&&targetIdentity!=null&&Time.time>=nextChatRefresh){
                 var player=PlayerCharacterController.Instance?.GetComponent<PlayerChat>();
                 var brain=resident.GetComponent<NPCChatController>();
                 if(brain!=null&&player!=null&&brain.chatTarget==player)FaceForTalk(brain,player);
@@ -199,13 +230,17 @@ namespace Mirthwood.Echoes
                     if(accepted==null)playerBubble.Note(note);else{var draft=accepted;accepted=null;Edit(draft,note);}
                     yield break;
                 }
-                var hit=JObject.Parse(r.downloadHandler.text);campaign=(string)hit["campaign"];actor=(string)hit["actor"];
                 try{
+                    var hit=JObject.Parse(r.downloadHandler.text);campaign=(string)hit["campaign"];actor=(string)hit["actor"];
                     exchange=new TalkExchange(campaign,actor);
                     var pending=exchange.Pending();
-                    if(pending!=null){accepted=(string)pending["text"];phase=Phase.Waiting;DraftPause.End();playerBubble.Show(accepted);playerBubble.Note("Recovering your exchange…");}
+                    if(pending!=null)WaitForReply((string)pending["text"],"Recovering your exchange…");
                     ready=true;
-                }catch(Exception){playerBubble.Note("Echoes could not open the pending exchange. Esc to leave.");yield break;}
+                }catch(Exception){
+                    const string note="Echoes could not open the pending exchange. Esc to leave.";
+                    if(accepted==null)playerBubble.Note(note);else Retry(accepted,note);
+                    yield break;
+                }
             }
             if(accepted!=null)host.StartCoroutine(Speak(accepted,epoch));
         }
@@ -217,8 +252,7 @@ namespace Mirthwood.Echoes
         {
             if(!Visible||busy||phase!=Phase.Draft||(IsolatedGameRun.Active!=null&&fixtureUrl==null&&IsolatedGameRun.Active.TalkAddress==null))return;
             if(string.IsNullOrWhiteSpace(words)){host.StartCoroutine(Refocus(generation));return;}
-            accepted=words.Trim();phase=Phase.Waiting;phaseFrame=Time.frameCount;DraftPause.End();
-            playerBubble.Show(accepted);playerBubble.Note("");
+            WaitForReply(words.Trim());
             if(fixtureReport!=null)fixtureReport["acceptedItalic"]=playerBubble.Styled("lift",true)&&!playerBubble.VisibleText.Contains("*");
             if(ready)host.StartCoroutine(Speak(accepted,generation));
             else if(!resolving)host.StartCoroutine(Resolve(targetIdentity,generation));
@@ -237,7 +271,7 @@ namespace Mirthwood.Echoes
             if(!preview){yield return NativeTurn(message,epoch);yield break;}
             var stream=new DialogueStream(value=>{
                 if(epoch!=generation||!Visible)return;
-                phase=Phase.Reading;playerBubble.SetVisible(false);npcBubble.Show(value,true);ReadingHint();
+                ShowResidentReply(value,true);
                 if(preview&&value=="*I nod")fixtureReport["streamItalic"]=npcBubble.Styled("nod",true);
             });
             using(var r=new UnityWebRequest(fixtureUrl,"POST")){
@@ -246,7 +280,7 @@ namespace Mirthwood.Echoes
                 yield return r.SendWebRequest();if(epoch!=generation||!Visible)yield break;active=null;busy=false;accepted=null;
                 if(preview){fixtureReport["reply"]=stream.Reply;fixtureReport["done"]=stream.Done;fixtureReport["deltas"]=stream.Deltas;fixtureReport["acceptedInput"]=r.responseCode==200&&stream.Done;}
                 if(r.responseCode==200&&stream.Done&&stream.Error==""){
-                    phase=Phase.Reading;phaseFrame=Time.frameCount;playerBubble.SetVisible(false);npcBubble.Show(stream.Reply);ReadingHint();
+                    ShowResidentReply(stream.Reply);
                 }else Edit(message,stream.Error!=""?stream.Error:"Reply interrupted. Enter to retry. Esc to leave.");
             }
         }
@@ -274,7 +308,7 @@ namespace Mirthwood.Echoes
                     if(action!=null)DnaTesting.ScoreAction(action,info,player,out score,true);
                     string branch=score>0?"warm":score<0?"cool":"neutral";
                     string reply=(string)answer[branch];
-                    phase=Phase.Reading;phaseFrame=Time.frameCount;playerBubble.SetVisible(false);npcBubble.Show(reply);ReadingHint();
+                    ShowResidentReply(reply);
                     fixtureReport["trial"]=JObject.FromObject(new {resident=person,player=message,topic,score,before,after=relation.friendship,
                         branch,reply,applied=action!=null,provider=(string)answer["provider"],model=(string)answer["model"],
                         visible=npcBubble.Visible&&npcBubble.AnchoredTo(npc.transform),elapsedSeconds=Time.realtimeSinceStartup-started});
@@ -296,12 +330,27 @@ namespace Mirthwood.Echoes
         public IEnumerator Preview(string url,JObject report,bool live=false)
         {
             if(Visible||GameState.GetCurrentState(1)!=GameState.State.Gameplay)yield break;
+            bool isolated=IsolatedGameRun.Active?.PathsMatch()==true;
             var player=PlayerCharacterController.Instance;
             var nearest=player==null?null:UnityEngine.Object.FindObjectsOfType<NPCController>()
                 .Where(n=>n.CharacterInfo!=null&&n.isActiveAndEnabled&&OverheadSpeech.Board(n)!=null)
+                .Where(n=>!isolated||live||CanProbeReplyWait(n))
                 .OrderBy(n=>(n.transform.position-player.transform.position).sqrMagnitude).FirstOrDefault();
             if(nearest==null)yield break;
-            bool isolated=IsolatedGameRun.Active!=null;
+            var start=player.transform.position;
+            bool approach=isolated&&!live&&!InReplyRange(nearest);
+            try{
+                if(approach){
+                    player.transform.position=nearest.transform.position+Vector3.left*1.5f;
+                    yield return new WaitForSecondsRealtime(.8f);
+                }
+                var preview=PreviewResident(url,report,live,isolated,player,nearest);
+                if(isolated)yield return CheckedProbe(report,preview);
+                else while(preview.MoveNext())yield return preview.Current;
+            }finally{if(approach&&player)player.transform.position=start;}
+        }
+        IEnumerator PreviewResident(string url,JObject report,bool live,bool isolated,PlayerCharacterController player,NPCController nearest)
+        {
             if(live){
                 if(!isolated||!IsolatedGameRun.Active.PathsMatch()||!Build(nearest))yield break;
                 int liveEpoch=generation;
@@ -362,9 +411,10 @@ namespace Mirthwood.Echoes
                 report["windowEnter"]=phase!=Phase.Draft;
             }
             if(phase==Phase.Draft)input.onSubmit.Invoke(input.text);
+            if(isolated)yield return ObserveReplyWait(nearest,report,epoch);
             float until=Time.realtimeSinceStartup+13;
             while(epoch==generation&&Visible&&busy&&Time.realtimeSinceStartup<until)yield return null;
-            if(epoch!=generation||!Visible)yield break;
+            if(epoch!=generation||!Visible){report["probeError"]="Talk closed before its reply could be inspected.";yield break;}
             report["resumeSpeed"]=!GameState.IsPaused&&Mathf.Approximately(Time.timeScale,originalSpeed);
             report["font"]=npcBubble.FontName;report["sprite"]=npcBubble.SpriteName;report["nativeStyle"]=npcBubble.UsesNativeStyle&&playerBubble.UsesNativeStyle;
             report["onScreen"]=npcBubble.FitsScreen();report["displayed"]=npcBubble.VisibleText;
@@ -388,6 +438,7 @@ namespace Mirthwood.Echoes
             if(isolated)report["contextRestored"]=prompts.All(c=>c!=null&&c.enabled);
             report["closeRestoresClock"]=!GameState.IsPaused&&Mathf.Approximately(Time.timeScale,originalSpeed);
             if(isolated&&!Visible){
+                yield return CheckWaitCancellation(nearest,url,line,report);
                 bool oldInput=GameState.AllowInput;var origin=player.transform.position;
                 bool moved=(nearest.transform.position-origin).sqrMagnitude>23;
                 try{
@@ -411,6 +462,7 @@ namespace Mirthwood.Echoes
         }
         public void Close()
         {
+            waitingDots=0;
             DismissPassingLine();
             if(!Visible)return;generation++;if(active!=null){active.Abort();active=null;}
             speech?.Stop();speech=null;

@@ -87,6 +87,8 @@ The server carries the compiled BepInEx plugin and the required loader files fro
 
 The server uses Reign’s .NET/PostgreSQL architecture. Its provider IDs, foreground-priority queue and Codex app-server exchange are adapted from ReignServer revision `4d976d6`. Daily observations come from game callbacks. A job title supplies character background. A specific work or social event requires its own observation.
 
+After you send a line in Talk, the resident stays in place while the world clock resumes. One, two, then three periods cycle in their usual brown overhead bubble. Their first words replace the periods. With spoken dialogue enabled, the periods continue until the resident’s caption begins. Escape closes Talk at any time.
+
 An ordinary Talk exchange requests one streamed model completion. The prompt includes the resident’s character, live desire for company, recent observations and conversation, relevant commitments and one matching older memory. The model identifies the main spoken topic and writes short alternatives for a warm, neutral or cool reaction. A hesitant “Hmm” or two equally weighted subjects count as Small Talk. A silent gesture or a direct trade request uses the neutral line and spends no social desire.
 
 Mirthwood scores the player’s card and decides whether the resident follows it with their own card or ends the conversation. A return card spends the resident’s native desire to socialize. Their personality affects its cost and its gradual recovery during game time. The same model call prepares a brief answer or acknowledgment and chooses parting words for each reaction. When the resident decides to leave, they finish their answer and say goodbye aloud. A continuing exchange uses the ordinary answer. The journal keeps the exact spoken words and records the game’s italic action separately. A new promise must match the speaker’s exact words.
@@ -141,11 +143,13 @@ For a keyboard playthrough, run `wsl -d ReignServer -u root -- python3 -B tests/
 
 - **Runtime** checks the loaded Echoes release, Unity scene and actual Harmony patch owners.
 - **World** resolves a loaded resident to the saved profile. In an isolated run it also opens the resident’s overhead dialogue, compares topic readings with Mirthwood’s own calculation and exercises the native social and hired-work callbacks against the copied world. The test records who chose the topic and what item and quantity were collected.
-- **Interface** exercises the player’s overhead editor, keyboard submission, word wrapping, action italics, camera anchoring and game-clock pause in a copied world. A local fixture returns a mixed action and spoken reply through the production stream decoder. The game captures its original NPC bark, the player’s draft and the NPC’s reply under `%LOCALAPPDATA%\MirthwoodEchoes\Diagnostics`.
+- **Interface** exercises the player’s overhead editor, keyboard submission, word wrapping, action italics, camera anchoring and game-clock pause in a copied world. A local fixture delays its reply while the check observes the rolling periods, the resident’s navigation and the advancing clock. It also exercises cancellation, a rejected turn and caption fallback. The game captures its original NPC bark, the player’s draft, the waiting bubble and the reply under `%LOCALAPPDATA%\MirthwoodEchoes\Diagnostics`.
 
 The isolated run redirects native save and temporary-save paths and uses its own last-slot preference. Test observations and test dialogue never enter a player journal. To inspect an already running game, use **Diagnostics → In-game checks** or run the script with a single `-Mode`. The world and interface checks need a loaded save with a resident on screen. Live cloud reply quality and latency require the selected provider and model.
 
 ## Visual references
+
+The waiting indicator uses the resident’s own overhead bark as its reference. In a copied slot 0, Drystan stood beside a canopied stall. The native bark, waiting periods and reply were captured with the same camera. All three use the native brown speech paper, ink and calligraphic lettering. The periods occupy the text area above the same resident’s head.
 
 The **VOICE TTS** page uses the journal’s parchment, brown rules and woodland-green selection cues. Its pitch control follows the Options slider. Spoken dialogue uses the same native brown overhead bubble and italic action lettering as typed dialogue.
 

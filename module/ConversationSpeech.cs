@@ -19,6 +19,7 @@ namespace Mirthwood.Echoes
         {
             public string Key, Text, Voice;
             public int Pitch;
+            public bool ShowPlaceholder;
             public Action<string,bool> Draw;
         }
         readonly Plugin host;
@@ -37,7 +38,7 @@ namespace Mirthwood.Echoes
         internal ConversationSpeech(Plugin host,string speechAddress="http://127.0.0.1:17841/api/voices/speech")
         { this.host = host; this.speechAddress = speechAddress; }
 
-        internal void Say(string key, Character speaker, string text, Action<string,bool> draw)
+        internal void Say(string key, Character speaker, string text, Action<string,bool> draw,bool showPlaceholder=true)
         {
             if (string.IsNullOrWhiteSpace(text)) return;
             if (offered.TryGetValue(key,out string previous))
@@ -59,7 +60,7 @@ namespace Mirthwood.Echoes
             }
             string voice = cast.Select(speaker,out int pitch);
             if (voice == null) { draw?.Invoke(text,false); return; }
-            waiting.Enqueue(new Line { Key=key, Text=text, Voice=voice, Pitch=pitch, Draw=draw });
+            waiting.Enqueue(new Line { Key=key, Text=text, Voice=voice, Pitch=pitch, Draw=draw, ShowPlaceholder=showPlaceholder });
             if (runner == null) runner = host.StartCoroutine(Drain());
         }
 
@@ -80,7 +81,7 @@ namespace Mirthwood.Echoes
 
         IEnumerator Speak(Line line)
         {
-            line.Draw?.Invoke("…",true);
+            if(line.ShowPlaceholder)line.Draw?.Invoke("…",true);
             request = NativeConversation.Post(speechAddress,
                 new {voice=line.Voice,text=line.Text});
             request.timeout = 40;

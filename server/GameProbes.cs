@@ -75,13 +75,19 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
     }
     public async Task Fixture(Guid id,string session,JsonObject turn,HttpContext ctx)
     {
-        if(Issued(id,session).Mode!="interface")throw new UserError("This check has no fixture stream.",409);
+        var probe=Issued(id,session);
+        if(probe.Mode!="interface")throw new UserError("This check has no fixture stream.",409);
+        if(probe.Run!=""&&turn["voice"]!=null&&turn.S("text")=="I am ready."){
+            await Task.Delay(1200,ctx.RequestAborted);
+            throw new UserError("The test voice is unavailable.",503);
+        }
         if(turn.S("campaign")!="fixture"||turn.S("actor")!="resident"||turn.S("text")!="*I lift my hat.* I’ll collect the flour. Is the mill open?"
             ||turn.ContainsKey("commitment"))throw new UserError("The fixture expected ordinary player speech.");
         ctx.Response.ContentType="application/x-ndjson";
         var stream=new DialogueOutput(async part=>{
             await ctx.Response.WriteAsync(JsonSerializer.Serialize(new{type="delta",text=part})+"\n",ctx.RequestAborted);await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
         });
+        if(probe.Run!="")await Task.Delay(2400,ctx.RequestAborted);
         await stream.Push("{\"reply\":\"*I nod");
         await Task.Delay(180,ctx.RequestAborted);
         await stream.Push(".* The mill is open.\",\"commitments\":[{\"speaker\":\"player\",\"quote\":\"I’ll collect the flour.\"}]}");
@@ -180,7 +186,12 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
             Check("Player and NPC action lettering",Yes("draftItalic")&&Yes("acceptedItalic")&&Yes("streamItalic")&&Yes("replyItalic"),"Read the actual TMP styles during drafting, after acceptance, mid-stream and after the reply.");
             Check("Streamed speech on screen",input.S("reply")=="*I nod.* The mill is open."&&input.S("displayed")=="I nod. The mill is open."&&input.I("deltas")==2&&Yes("done"),input.S("displayed"));
             if(p.Run!=""){
+                if(input.S("probeError")!="")Check("Interface probe reached its reply",false,input.S("probeError"));
                 Check("Enter accepts the typed draft",Yes("windowEnter"),"Sent Return to the isolated game window through Windows.");
+                Check("Rolling periods above the selected resident",Yes("waitCycle")&&Yes("waitAnchored")&&Yes("waitSelectedOnly")&&Yes("waitCapture"),input.S("waitStages"));
+                Check("Resident waits while the world advances",Yes("waitStationary")&&Yes("waitReleased"),"Checked the resident's position and native navigation agent during the delay and after the reply.");
+                Check("Closing or retrying clears the wait",Yes("waitCancelled")&&Yes("waitRetry"),"Closed an outstanding request, reopened Talk, and recovered the draft after a rejected request.");
+                Check("Selected reply replaces the waiting dots",Yes("waitVoiceReply"),Yes("waitVoiceQueued")?"The periods kept rolling during a delayed local voice failure, then the actual reply appeared.":"The unvoiced reply appeared immediately.");
                 Check("Growing, wrapping player bubble",Yes("grows")&&Yes("wrapped")&&Yes("editAfterWrap")&&Yes("literalTags")&&Yes("editorEdges"),"Measured width and height, a 36-character hard wrap, caret deletion, literal tags and four screen corners.");
                 Check("Extended draft editing",Yes("longDraftCaret")&&Yes("middleEdit")&&Yes("shortDraftVisible"),"The caret remains visible in a long draft; shortening it brings every fitting line back into view. Mid-action edits preserve the raw position.");
                 Check("Player clock pause and restoration",Yes("clockPaused")&&Yes("resumeSpeed")&&Yes("nextDraftPaused")&&Yes("closeRestoresClock"),"Measured the scaled simulation and campaign calendar across typing, submission, the next draft and closing.");

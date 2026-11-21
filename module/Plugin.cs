@@ -67,6 +67,7 @@ namespace Mirthwood.Echoes
             NativeCues.Start(this);
             InteractionHooks.Install(hooks,Logger);
             hooks.CreateClassProcessor(typeof(DraftPause)).Patch();
+            hooks.CreateClassProcessor(typeof(WaitingResident)).Patch();
             hooks.CreateClassProcessor(typeof(TalkOption)).Patch();
             hooks.CreateClassProcessor(typeof(QuickChatPages)).Patch();
             hooks.CreateClassProcessor(typeof(NativeSocialTurn)).Patch();
@@ -116,6 +117,16 @@ namespace Mirthwood.Echoes
                 }), null, OnHeartbeat));
             }
             if (dialogue.Visible)dialogue.HandleKeys();
+        }
+
+        // NPCController uses IsChatting to stop its agent and idle its walk animation.
+        [HarmonyPatch(typeof(ChatController),nameof(ChatController.IsChatting),MethodType.Getter)]
+        static class WaitingResident
+        {
+            static void Postfix(ChatController __instance,ref bool __result)
+            {
+                if(!__result && instance?.dialogue?.WaitingFor(__instance)==true)__result=true;
+            }
         }
 
         [HarmonyPatch(typeof(PlayerChat),"GenerateOptions")]
