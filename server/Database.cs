@@ -66,6 +66,11 @@ public sealed class Database(NpgsqlDataSource source)
             UPDATE turns SET state='interrupted' WHERE state='pending';
             """);
         cmd.CommandText += CueHistory.Schema;
+        cmd.CommandText += """
+            CREATE TABLE IF NOT EXISTS resident_recaps(
+                campaign text,actor text,kind text,entry text,fingerprint text,body text NOT NULL,
+                PRIMARY KEY(campaign,actor,kind,entry,fingerprint),FOREIGN KEY(campaign,actor) REFERENCES actors(campaign,key));
+            """;
         await cmd.ExecuteNonQueryAsync();
     }
 

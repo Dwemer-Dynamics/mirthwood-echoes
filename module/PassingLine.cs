@@ -30,7 +30,7 @@ namespace Mirthwood.Echoes
 
         internal void OfferNativeAddress(NPCController npc,string card,string cue)
         {
-            if(!InReplyRange(npc)||Visible||GameState.GetCurrentState(1)!=GameState.State.Gameplay||
+            if(!InReplyRange(npc)||Visible||GroupActive||GameState.GetCurrentState(1)!=GameState.State.Gameplay||
                 (IsolatedGameRun.Active!=null&&IsolatedGameRun.Active.TalkAddress==null))return;
             var world=Plugin.World();
             if(world==null||npc.CharacterInfo==null||string.IsNullOrEmpty(Plugin.Owner(npc)))return;
@@ -73,7 +73,7 @@ namespace Mirthwood.Echoes
 
         internal bool OfferPassingLine(NPCController npc,string id,string kind,string line,float delay,ConversationSpeech queued=null,bool canReply=true)
         {
-            if(Visible||!InReplyRange(npc)||string.IsNullOrWhiteSpace(line)||passing?.Id==id)return false;
+            if(Visible||GroupActive||!InReplyRange(npc)||string.IsNullOrWhiteSpace(line)||passing?.Id==id)return false;
             DismissPassingLine();
             passing=new PassingLine{Speaker=npc,Id=id,EventId=kind=="address"?null:id,Kind=kind,Line=line,Session=NativeCues.Session,
                 ReadyAt=Time.time+delay,Expires=Time.unscaledTime+12f,Speech=queued,CanReply=canReply};
@@ -115,7 +115,7 @@ namespace Mirthwood.Echoes
                     remark.Expires=Time.unscaledTime+8f;
                     if(remark.Kind=="address"&&!remark.Heard){
                         remark.Heard=true;
-                        remark.EventId=NativeCues.Fact(remark.Speaker,"address",remark.Line,false);
+                        remark.EventId=NativeCues.Fact(remark.Speaker,"address",remark.Line,false,new JObject{["conversation"]=remark.Id});
                         if(remark.EventId!=null)NativeCues.Recent(remark.Speaker,remark.EventId,remark.Kind,remark.Line);
                     }
                 });

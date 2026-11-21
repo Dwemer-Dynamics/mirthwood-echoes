@@ -1,7 +1,8 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{spawn}=require('node:child_process');
 const delay=n=>new Promise(r=>setTimeout(r,n)), root=path.resolve(process.argv[2]||path.join(__dirname,'../.work/browser'));fs.mkdirSync(root,{recursive:true});
 const voiceOnly=process.argv.includes('--voices'), playedTurn=process.argv.includes('--played-turn'), averil=process.argv.includes('--averil');
-const base=playedTurn||averil?'http://127.0.0.1:17864':process.env.ECHOES_BROWSER_BASE||'http://127.0.0.1:17841';
+const group=process.argv.includes('--group');
+const base=playedTurn||averil||group?'http://127.0.0.1:17864':process.env.ECHOES_BROWSER_BASE||'http://127.0.0.1:17841';
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'mirthwood-echoes-edge-'));
 const browser=spawn('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',['--headless=new','--disable-gpu','--disable-extensions','--disable-background-mode','--disable-background-networking','--no-first-run','--no-default-browser-check','--disable-component-update','--disk-cache-size=2097152','--renderer-process-limit=1','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{windowsHide:true,stdio:'ignore'});
 let socket,seq=0,startedBackend=false;const pending=new Map(),errors=[];
@@ -29,6 +30,26 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
   await cmd('Runtime.enable');await cmd('Page.enable');
   await cmd('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false});
   await cmd('Page.navigate',{url:base+(voiceOnly?'/#voices':'/')});
+  if(group){
+    const report=JSON.parse(fs.readFileSync(path.join(root,'probe.json'),'utf8')).result;
+    const roster=await (await fetch(base+'/api/saves/'+report.campaign+'/characters')).json();
+    for(const guest of report.guests){
+      const index=roster.findIndex(c=>c.key===guest.actor);
+      if(index<0)throw Error('Missing group member '+guest.name);
+      await until("document.querySelectorAll('.roster button').length==="+roster.length);
+      await evaluate("document.querySelectorAll('.roster button')["+index+"].click()");
+      await until("document.querySelector('.inspect-header h3')?.textContent==="+JSON.stringify(guest.name));
+      await evaluate("document.querySelector('#char-tab-sessions').click()");
+      await until("[...document.querySelectorAll('.journal-entry')].some(e=>e.querySelector('strong').textContent==='Group conversation')");
+      await evaluate("[...document.querySelectorAll('.journal-entry')].find(e=>e.querySelector('strong').textContent==='Group conversation').querySelector('summary').click()");
+      const lines=report.groupLines.filter(e=>e.line.audience.includes(guest.actor)).map(e=>e.line.words.replace(/\*([^*]+)\*/g,'$1'));
+      await until(JSON.stringify(lines)+".every(s=>[...document.querySelectorAll('.transcript-line p')].some(p=>p.textContent===s))");
+      if(guest.name==='Averil')await capture('group-journal.png');
+    }
+    if(errors.length)throw Error(errors.join(', '));
+    console.log('PASS the group speakers, delivered words and audience in the character journal.');
+    await cmd('Browser.close');return;
+  }
   if(playedTurn||averil){
     const game=averil?JSON.parse(fs.readFileSync(path.join(root,'probe.json'),'utf8')).result:
       JSON.parse(fs.readFileSync(path.join(root,'game.json'),'utf8').replace(/^\uFEFF/,''))[0].result;
@@ -39,7 +60,9 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
     await until("document.querySelectorAll('.roster button').length==="+roster.length);
     await evaluate("document.querySelectorAll('.roster button')["+index+"].click()");
     await until("document.querySelector('.inspect-header h3')?.textContent==="+JSON.stringify(turn.resident));
-    await evaluate("document.querySelector('#char-tab-conversations').click()");
+    await evaluate("document.querySelector('#char-tab-sessions').click()");
+    await until("document.querySelector('.memory-originals summary')");
+    await evaluate("document.querySelectorAll('.memory-originals summary').forEach(s=>s.click())");
     if(averil){
       const heard=[...game.turns.map(t=>t.reply),...game.openers.map(t=>t.line)];
       const clean=heard.map(line=>line.replace(/\*([^*]+)\*/g,'$1'));
@@ -90,8 +113,8 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
   if(await evaluate("Array.from(document.querySelectorAll('button')).some(b=>/^Talk to /.test(b.textContent)) || !!document.querySelector('form.talk')"))throw Error('Character roster offers dialogue');
   await capture('cedric-desktop.png');
   const tabs=await evaluate("Array.from(document.querySelectorAll('[role=tab]'),b=>b.textContent)");
-  if(tabs.join('|')!=='Profile|Interactions|Conversations|Memory summaries|Commitments|Dynamic personality') throw Error('Character tabs');
-  for(const tab of ['interactions','conversations','memories','commitments','personality']){
+  if(tabs.join('|')!=='Profile|Interactions|Conversations|Daily history|Commitments|Dynamic personality') throw Error('Character tabs');
+  for(const tab of ['interactions','sessions','daily','commitments','personality']){
     await evaluate("document.getElementById('char-tab-"+tab+"').click()");
     await until("document.querySelector('.journal-scroll')?.children.length>0");
     if(await evaluate("getComputedStyle(document.querySelector('.journal-scroll')).overflowY!=='auto'"))throw Error('Journal scroll');
@@ -99,19 +122,20 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
   // Render a populated transcript and compacted memory in a separate, browser-only fixture.
   await evaluate(`(async()=>{
     const originApi=api;
-    const turns=Array.from({length:30},(_,i)=>({kind:'conversation',day:44-i,player:'Player line '+i,reply:'Resident reply '+i}));
-    turns[0].promises=[{speaker:'npc',quote:'Yes.',proposal:'Will you bring flour tomorrow?'}];
-    turns[0].player='*I doff my hat.* Good day. <b>plain</b>';
-    turns[0].reply='Resident reply 0. *Nods.* Then *smiles.*';
-    turns[0].nativeHandoff='The resident is done talking.';
-    const mount=el('div');
-    const fixture='/__journal_fixture';
+    const turns=Array.from({length:30},(_,i)=>({id:'session'+i,kind:i===1?'group':'private',day:44-i,body:'Resident reply '+i,participants:['Player','Test resident']}));
+    const original=[
+      {speaker:'Player',text:'*I doff my hat.* Good day. <b>plain</b>',source:'original',sourceType:'turn',day:44},
+      {speaker:'Test resident',text:'Resident reply 0. *Nods.* Then *smiles.*',source:'original',sourceType:'turn',day:44,turningPoint:true,
+       nativeHandoff:'The resident is done talking.',promises:[{speaker:'npc',quote:'Yes.',proposal:'Will you bring flour tomorrow?'}]}];
+    const mount=el('div'),fixture='/__journal_fixture';
     api=(url,...args)=>{
       if(!url.startsWith(fixture))return originApi(url,...args);
-      if(url.includes('/sources/'))return Promise.resolve({player:'Full original question',reply:'Full original answer',nativeHandoff:'The resident asks about fishing.'});
-      if(url.includes('/memories'))return Promise.resolve({items:[{kind:'conversation',day:10,entries:1,sources:['original'],body:'Player: “*I look toward the road…”  ·  Reply: “Good morning. *Nods.*”'}]});
+      if(url.endsWith('/sessions/session0'))return Promise.resolve(original);
+      if(url.endsWith('/sessions/session1'))return Promise.resolve([{speaker:'Averil',text:'I worked at the mill.',to:'Drystan',audience:['Averil','Drystan','Player']}]);
+      if(url.endsWith('/daily/10'))return Promise.resolve([{day:10,text:'Collected flour at the mill.',sourceType:'event',source:'observation'}]);
+      if(url.endsWith('/daily'))return Promise.resolve({items:[{kind:'daily',id:'10',day:10,entries:1,body:'Collected flour.'}]});
       if(url.includes('/commitments'))return Promise.resolve({items:[{kind:'promise',speaker:'npc',statement:'Yes.',proposal:'Will you bring flour tomorrow?',due:11,day:10,model:'Test model'}]});
-      return Promise.resolve(url.includes('?before=')?{items:[{kind:'conversation',day:2,player:'Oldest recorded line',reply:'Oldest reply'}]}:{items:turns,next:'earlier'});
+      return Promise.resolve(url.includes('?before=')?{items:[{id:'old',kind:'private',day:2,body:'Oldest recorded line'}]}:{items:turns,next:'earlier'});
     };
     const resident={key:'demo',name:'Test resident',campaign:'example'};
     const p={name:resident.name,kind:'NPC',axes:[],skills:{positiveTraits:[],negativeTraits:[],strengths:[],weaknesses:[]},liked:[],links:[],outfits:[]};
@@ -123,18 +147,21 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
       pick('Conversations');await waitFor(()=>mount.querySelector('.load-older'));
       const scroll=mount.querySelector('.journal-scroll');
       const first=scroll.querySelector('.journal-entry');
+      first.querySelector('summary').click();await waitFor(()=>first.querySelector('.transcript-line'));
       if([...first.querySelectorAll('.transcript-line em')].map(e=>e.textContent).join('|')!=='I doff my hat.|Nods.|smiles.'||first.querySelector('b')||!first.textContent.includes('<b>plain</b>'))throw Error('Action italics or literal dialogue markup failed');
-      if(![...first.querySelectorAll('.source')].some(source=>source.textContent.endsWith(turns[0].nativeHandoff)&&!source.querySelector('em')))throw Error('Missing plain historical native event');
+      if(![...first.querySelectorAll('.source')].some(source=>source.textContent.endsWith(original[1].nativeHandoff)&&!source.querySelector('em')))throw Error('Missing plain historical native event');
       if(scroll.scrollHeight<=scroll.clientHeight)throw Error('Populated transcript cannot scroll');
       mount.querySelector('.load-older').click();await waitFor(()=>scroll.textContent.includes('Oldest recorded line'));
       if(!scroll.textContent.includes('Resident reply 0'))throw Error('Earlier page replaced the current transcript');
       if(!scroll.textContent.includes('Promise recorded · Test resident · Yes.'))throw Error('Missing promise in its transcript');
       pick('Commitments');await waitFor(()=>mount.textContent.includes('Identified in conversation by Test model.'));
       if(!mount.textContent.includes('Will you bring flour tomorrow?')||mount.querySelector('.journal-entry button'))throw Error('Promise evidence or read-only view failed');
-      pick('Memory summaries');await waitFor(()=>mount.querySelector('.memory-originals summary'));
-      if([...mount.querySelectorAll('.journal-prose em')].map(e=>e.textContent).join('|')!=='I look toward the road…|Nods.')throw Error('Truncated actions crossed speaker boundaries');
-      mount.querySelector('.memory-originals summary').click();await waitFor(()=>mount.textContent.includes('Full original answer'));
-      if(![...mount.querySelectorAll('.memory-originals .source')].some(source=>source.textContent==='Native event · The resident asks about fishing.'&&!source.querySelector('em')))throw Error('Archived source lost the historical native event');
+      pick('Daily history');await waitFor(()=>mount.querySelector('.memory-originals summary'));
+      mount.querySelector('.memory-originals summary').click();await waitFor(()=>mount.textContent.includes('Collected flour at the mill.'));
+      if(!mount.querySelector('.transcript-line button'))throw Error('Daily observation lost its turning point action');
+      pick('Conversations');await waitFor(()=>mount.querySelectorAll('.memory-originals summary').length===30);
+      mount.querySelectorAll('.memory-originals summary')[1].click();await waitFor(()=>mount.textContent.includes('I worked at the mill.'));
+      if(!mount.textContent.includes('To Drystan')||!mount.textContent.includes('Averil, Drystan, Player'))throw Error('Group transcript lost addressee or audience');
     }finally{api=originApi;mount.remove();}
   })()`);
   await evaluate("document.getElementById('char-tab-profile').click();document.querySelector('.original-save summary').click()");

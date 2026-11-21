@@ -1,8 +1,8 @@
 'use strict';
 
 const characterViews = [
-  ['profile','Profile'], ['interactions','Interactions'], ['conversations','Conversations'],
-  ['memories','Memory summaries'], ['commitments','Commitments'], ['personality','Dynamic personality']
+  ['profile','Profile'], ['interactions','Interactions'], ['sessions','Conversations'],
+  ['daily','Daily history'], ['commitments','Commitments'], ['personality','Dynamic personality']
 ];
 const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
 const pretty = s => cap(String(s).replace(/[_-]/g,' ').replace(/([a-z])([A-Z])/g,'$1 $2'));
@@ -114,53 +114,49 @@ function appendRoleplay(node,text,truncated=false) {
   return node;
 }
 function roleplayLine(text,cls=''){return appendRoleplay(el('p',cls),text);}
-function conversationExcerpt(body){
-  const node=el('p','journal-prose');
-  for(const [i,line] of body.split('\n').entries()){
-    if(i)node.append('\n');
-    const pair=/^Player: “(.*)”  ·  Reply: “(.*)”$/u.exec(line);
-    if(!pair){appendRoleplay(node,line);continue;}
-    node.append('Player: “');appendRoleplay(node,pair[1],pair[1].endsWith('…'));
-    node.append('”  ·  Reply: “');appendRoleplay(node,pair[2],pair[2].endsWith('…'));node.append('”');
-  }
-  return node;
-}
 function entryView(view,e,person,openTurningPoint,path) {
-  const entry=el('article','journal-entry');const speaker=e.speaker==='player'?'Player':person;
-  const header=attach(el('div','entry-head'),el('strong','',view==='commitments'?(e.status==='fulfilled'?'Fulfilled':'Open promise'):activityNames[e.kind]||pretty(e.kind)),el('span','','Day '+e.day));
-  entry.append(header);
-  if(view==='conversations'){
-    for(const [name,text] of [[person,e.questTerms],['Player',e.player],[person,e.reply]])if(text)entry.append(attach(el('div','transcript-line'),el('strong','',name),roleplayLine(text)));
-    if(e.questOutcome)entry.append(el('p','source',e.questOutcome));
-    if(e.nativeHandoff)entry.append(el('p','source','Native event · '+e.nativeHandoff));
-    for(const p of e.promises||[])entry.append(el('p','source','Promise recorded · '+(p.speaker==='player'?'Player':person)+' · '+p.quote+(p.proposal?' In reply to “'+p.proposal+'”':'')));
-    if(e.commitmentReview==='unavailable')entry.append(el('p','source','Echoes could not verify the model’s promise review for this exchange.'));
-  }else if(view==='memories'){
-    entry.append(e.kind==='conversation'?conversationExcerpt(e.body):el('p','journal-prose',e.body));
-    const originals=el('details','memory-originals'),content=el('div');
-    originals.append(el('summary','',e.entries===1?'Read original entry':'Read '+e.entries+' original entries'),content);
+  const entry=el('article','journal-entry');const speaker=e.speakerLabel||(e.speaker==='player'?'Player':person);
+  if(view==='daily'||view==='sessions'){
+    const daily=view==='daily';
+    const label=daily?'Daily activity':e.kind==='group'?'Group conversation':e.knownStart===false?'Recorded private exchange':'Private conversation';
+    entry.append(attach(el('div','entry-head'),el('strong','',label),el('span','','Day '+e.day)));
+    if(e.participants?.length)entry.append(el('p','hint',e.participants.join(', ')));
+    entry.append(daily?el('p','journal-prose',e.body):roleplayLine(e.body,'journal-prose'));
+    const detail=el('details','memory-originals'),body=el('div');
+    detail.append(el('summary','',daily?'Read original observations':'Read conversation'),body);
     let loaded=false,loading=false;
-    originals.ontoggle=async()=>{
-      if(!originals.open||loaded||loading)return;
-      loading=true;content.textContent='Reading original entries…';
+    detail.ontoggle=async()=>{
+      if(!detail.open||loaded||loading)return;
+      loading=true;body.replaceChildren();
       try{
-        const type=e.kind==='conversation'?'turn':'event';
-        const sources=await Promise.all(e.sources.map(id=>api(path+'/sources/'+type+'/'+encodeURIComponent(id))));
-        content.replaceChildren();
-        for(const record of sources){
-          if(type==='turn'){
-            for(const [label,text] of [[person,record.questTerms],['Player',record.player],[person,record.reply]])
-              if(text)content.append(attach(el('div','transcript-line'),el('strong','',label),roleplayLine(text)));
-            if(record.questOutcome)content.append(el('p','source',record.questOutcome));
-            if(record.nativeHandoff)content.append(el('p','source','Native event · '+record.nativeHandoff));
-          }else content.append(record.kind==='address'?roleplayLine(record.description,'journal-prose'):el('p','journal-prose',record.description));
+        const lines=await api(path+'/history/'+view+'/'+encodeURIComponent(e.id));
+        for(const line of lines){
+          const row=el('div','transcript-line');
+          if(line.speaker)row.append(el('strong','',line.speaker));
+          row.append(daily?el('p','',line.text):roleplayLine(line.text));
+          if(e.kind==='group'){
+            row.append(el('small','source','To '+line.to+' · Present: '+line.audience.join(', ')));
+          }
+          if(line.questOutcome)row.append(el('p','source',line.questOutcome));
+          if(line.nativeHandoff)row.append(el('p','source','Native event · '+line.nativeHandoff));
+          for(const promise of line.promises||[]){
+            const who=promise.speakerLabel||(promise.speaker==='player'?'Player':person);
+            row.append(el('p','source','Promise recorded · '+who+' · '+promise.quote+(promise.proposal?' In reply to “'+promise.proposal+'”':'')));
+          }
+          if(line.commitmentReview==='unavailable')row.append(el('p','source','Echoes could not verify the model’s promise review for this exchange.'));
+          if(daily||line.turningPoint)row.append(button('Mark a turning point',()=>openTurningPoint({day:line.day,sourceId:line.source,sourceType:line.sourceType}),'text-action'));
+          body.append(row);
         }
         loaded=true;
-      }catch(error){content.textContent=error.message;}finally{loading=false;}
+      }catch(error){body.textContent=error.message;}finally{loading=false;}
     };
-    entry.append(originals);
-  }else if(view==='commitments'){
+    entry.append(detail);return entry;
+  }
+  const header=attach(el('div','entry-head'),el('strong','',view==='commitments'?(e.status==='fulfilled'?'Fulfilled':'Open promise'):activityNames[e.kind]||pretty(e.kind)),el('span','','Day '+e.day));
+  entry.append(header);
+  if(view==='commitments'){
     entry.append(el('p','journal-prose',e.statement),el('p','hint','Promised by '+speaker+' · '+(e.due==null?'No recorded due date':'Due on day '+e.due)));
+    if(e.addressedTo)entry.append(el('p','hint','Addressed to '+e.addressedTo));
     if(e.proposal)entry.append(el('p','hint','In reply to “'+e.proposal+'”'));
     if(e.model)entry.append(el('small','source','Identified in conversation by '+e.model+'.'));
     if(e.resolvedDay!=null)entry.append(el('small','source','Reported fulfilled by the player on day '+e.resolvedDay+'.'));
@@ -168,7 +164,7 @@ function entryView(view,e,person,openTurningPoint,path) {
     entry.append(e.kind==='address'?roleplayLine(e.description,'journal-prose'):el('p','journal-prose',e.description));
     if(e.speaker)entry.append(el('small','source','Promised by '+speaker));
   }
-  if((view==='interactions'||view==='conversations')&&e.sourceId)
+  if(view==='interactions'&&e.sourceId)
     entry.append(button('Mark a turning point',()=>openTurningPoint(e),'text-action'));
   return entry;
 }
@@ -212,7 +208,7 @@ function characterJournal(person,profile,raw,roster,path,alive) {
     body.tabIndex=0;body.setAttribute('role','region');body.setAttribute('aria-label',text+' for '+person.name);
     panel.append(heading,body);
     if(view==='personality'){try{const d=await api(path+'/personality');if(valid())body.append(growthView(d));}catch(e){if(valid())body.append(el('p','error',e.message));}return;}
-    const messages={interactions:'Recorded encounters and work will appear here.',conversations:'No completed conversations with the player.',memories:'Older observations and conversations will appear here after the daily recall window.',commitments:'No promises recorded for this character.'};
+    const messages={interactions:'Recorded encounters and work will appear here.',sessions:'Conversations will appear here after someone speaks.',daily:'Observed daily activities will appear here.',commitments:'No promises recorded for this character.'};
     let cursor=null,loading=false,more=null;
     async function appendPage(){
       if(loading)return;loading=true;if(more)more.disabled=true;
@@ -221,9 +217,9 @@ function characterJournal(person,profile,raw,roster,path,alive) {
         more?.remove();
         if(!page.items.length&&!cursor)body.append(el('p','journal-empty',page.day==null?'The campaign calendar is unavailable.':messages[view]));
         for(const e of page.items){
-          const card=entryView(view,e,person.name,()=>{
+          const card=entryView(view,e,person.name,source=>{
             const old=card.querySelector('form');if(old){old.querySelector('textarea').focus();return;}
-            const f=turningPointForm(e,path,()=>show('personality',true),()=>f.remove());card.append(f);f.querySelector('select').focus();
+            const f=turningPointForm(source,path,()=>show('personality',true),()=>f.remove());card.append(f);f.querySelector('select').focus();
           },path);
           body.append(card);
         }

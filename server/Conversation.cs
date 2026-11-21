@@ -11,6 +11,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
     Beat? beat;
     static readonly Regex Tomorrow=new(@"^[^.!?]*\btomorrow[.!]?\s*$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant);
     static readonly Regex UncertainDue=new(@"\b(if|unless|whether|maybe|perhaps|not|never|or)\b|n['’]t\b",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant);
+    internal static int? DueTomorrow(string words,int day)=>Tomorrow.IsMatch(words)&&!UncertainDue.IsMatch(words)?day+1:null;
     static string World(JsonNode? w)
     {
         if(w.I("slot")<0||w.I("day")<0||w.I("day")>1_000_000)throw new UserError("Invalid game clock.");
@@ -75,8 +76,10 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
     public async Task<JsonNode> Recall(string c,string a,int day,Options opt,string question,bool scoped=false,Guid? head=null,int recentTurns=2,bool includeVoicedCues=false,bool relatedSpeech=false)
     {
         var terms=Regex.Matches(question.ToLowerInvariant(),@"[\p{L}\p{N}]{3,}").Select(m=>m.Value).Where(w=>w is not ("the" or "and" or "you" or "what" or "did" or "that" or "about" or "for")).Distinct().Take(15);
-        var facts=await db.ScopedOne("""
-            WITH q AS (SELECT to_tsquery('simple',@terms) AS ts,to_tsquery('english',@terms) AS speech),
+        int? requestedDay=Regex.IsMatch(question,@"\byesterday\b",RegexOptions.IgnoreCase)?day-1:
+            Regex.IsMatch(question,@"\btoday\b",RegexOptions.IgnoreCase)?day:null;
+        var facts=await db.ScopedOne(ConversationSessions.Lines+"""
+            , q AS (SELECT to_tsquery('simple',@terms) AS ts,to_tsquery('english',@terms) AS speech),
             recent AS (
                 SELECT id AS turn,day,left(player_text,300) AS player,left(reply,600) AS npc,started,
                     CASE WHEN @includeCues AND talk->>'deliveredContinuation'='true' THEN talk->'handoff'->>'cue' END AS "voicedCue"
@@ -84,15 +87,19 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                 ORDER BY started DESC,id DESC LIMIT @recentTurns
             )
             SELECT jsonb_build_object(
-              'daily', (SELECT coalesce(jsonb_agg(to_jsonb(x)),'[]') FROM (SELECT day,kind,description FROM daily_events,q
-                WHERE campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day
-                ORDER BY ts_rank(to_tsvector('simple',description),q.ts) DESC,day DESC,observed DESC LIMIT 3)x),
-              'commitments',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(x))),'[]') FROM (SELECT speaker,day,due,statement,proposal,'open' AS status FROM commitments,q
+              'daily', (SELECT coalesce(jsonb_agg(to_jsonb(x)),'[]') FROM (SELECT id AS source,day,kind,description FROM daily_events,q
+                WHERE campaign=@c AND actor=@a AND kind<>'address' AND day BETWEEN @earliest AND @day
+                ORDER BY (day=@requestedDay::int) DESC,ts_rank(to_tsvector('simple',description),q.ts) DESC,day DESC,observed DESC LIMIT 3)x),
+              'commitments',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(x))),'[]') FROM (SELECT coalesce(speaker_label,speaker) AS speaker,addressed_to,day,due,statement,proposal,'open' AS status FROM commitments,q
                 WHERE campaign=@c AND actor=@a AND day<=@day AND (status='open' OR resolved_day>@day)
                 ORDER BY ts_rank(to_tsvector('simple',statement||' '||coalesce(proposal,'')),q.ts) DESC,abs(coalesce(due,@day+10000)-@day),recorded DESC LIMIT 3)x),
-              'olderMemory',(SELECT to_jsonb(x) FROM (SELECT day,kind,left(body,340) AS excerpt FROM memory_summaries,q
-                WHERE campaign=@c AND actor=@a AND day<@earliest AND to_tsvector('simple',body) @@ q.ts
-                ORDER BY ts_rank(to_tsvector('simple',body),q.ts) DESC,day DESC,kind LIMIT 1)x),
+              'olderActivity',(SELECT to_jsonb(x) FROM (SELECT id AS source,day,kind,left(description,340) AS experience FROM daily_events,q
+                WHERE actor=@a AND kind<>'address' AND day<@earliest AND (day=@requestedDay::int OR to_tsvector('english',description) @@ q.speech)
+                ORDER BY (day=@requestedDay::int) DESC,ts_rank(to_tsvector('english',description),q.speech) DESC,day DESC,observed DESC LIMIT 1)x),
+              'heardSpeech',(SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT source,session,day,mode,name AS speaker,audience,addressed,left(words,360) AS quote
+                FROM named,q WHERE (mode='group' OR day<@earliest OR source_type='event') AND
+                    to_tsvector('english',words||' '||name) @@ q.speech
+                ORDER BY ts_rank(to_tsvector('english',words||' '||name),q.speech) DESC,at DESC,seq DESC,n DESC LIMIT 3)x),
               'recentSpeech',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(r)-'started') ORDER BY r.started,r.turn),'[]') FROM recent r),
               'earlierSpeech',(SELECT jsonb_agg(to_jsonb(x)-'started' ORDER BY x.started,x.turn) FROM (
                 SELECT t.id AS turn,t.day,left(t.player_text,300) AS player,left(t.reply,600) AS npc,t.started
@@ -102,8 +109,9 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                   AND NOT EXISTS(SELECT FROM recent r WHERE r.turn=t.id) AND s.words @@ q.speech
                 ORDER BY ts_rank_cd(s.words,q.speech) DESC,t.started DESC,t.id DESC LIMIT 2)x)
             )::text
-            """,scoped,head,("terms",string.Join(" | ",terms)),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech));
-        if(facts is JsonObject obj&&obj["earlierSpeech"]==null)obj.Remove("earlierSpeech");
+            """,scoped,head,("terms",string.Join(" | ",terms)),("requestedDay",requestedDay),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech));
+        if(facts is JsonObject obj)foreach(var key in new[]{"earlierSpeech","heardSpeech","olderActivity"})
+            if(obj[key]==null)obj.Remove(key);
         return facts!;
     }
 
@@ -112,7 +120,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
         var (_,day)=await ActorDay(c,a);
         return await db.ScopedOne("""
             SELECT coalesce(jsonb_agg(to_jsonb(x)),'[]')::text FROM
-              (SELECT id,speaker,statement,day,due FROM commitments WHERE campaign=@c AND actor=@a AND day<=@day
+            (SELECT id,speaker,speaker_label AS "speakerLabel",addressed_to AS "addressedTo",statement,day,due FROM commitments WHERE campaign=@c AND actor=@a AND day<=@day
                AND (status='open' OR resolved_day>@day) ORDER BY due NULLS LAST,recorded) x
             """,false,null,("c",c),("a",a),("day",day));
     }
@@ -123,7 +131,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
         var (_,day)=await ActorDay(c,a);
         var updated=await db.ScopedOne("""
             WITH candidate AS (
-                SELECT p.id,t.cue_anchor FROM commitments p LEFT JOIN turns t ON t.id=p.turn_id
+                SELECT p.id,coalesce(p.group_anchor,t.cue_anchor) AS cue_anchor FROM commitments p LEFT JOIN turns t ON t.id=p.turn_id
                 WHERE p.id=@id AND p.campaign=@c AND p.actor=@a AND p.day<=@day AND (p.status='open' OR p.resolved_day>=@day)
             ), legacy AS (
                 UPDATE public.commitments p SET status='fulfilled',resolved_day=@day,resolution_source='player_report'
@@ -198,7 +206,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
             }
             foreach(var item in review.Items)
             {
-                int? due=Tomorrow.IsMatch(item.Quote)&&!UncertainDue.IsMatch(item.Quote)?day+1:null;
+                int? due=DueTomorrow(item.Quote,day);
                 if(due==null&&item.Proposal is { } proposal&&Tomorrow.IsMatch(proposal.TrimEnd('?'))&&!UncertainDue.IsMatch(proposal)){
                     int date=item.ProposalTurn==id?day:((JsonArray)facts["recentSpeech"]!).FirstOrDefault(x=>x.S("turn")==item.ProposalTurn.ToString()).I("day");
                     if(date>=0)due=date+1;

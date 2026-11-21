@@ -1,5 +1,28 @@
 public sealed class MemoryCompactor(Database db, Providers providers, ILogger<MemoryCompactor> log) : BackgroundService
 {
+    // Cache the attributed recap of a closed day or conversation. A different visible
+    // source set after a rewind or a late arrival always has a different fingerprint.
+    async Task SummarizeResidents(CancellationToken ct)
+    {
+        var residents=await db.One("""
+            SELECT coalesce(jsonb_agg(jsonb_build_object('campaign',a.campaign,'actor',a.key,'day',c.day)),'[]')::text
+            FROM actors a JOIN campaigns c ON c.id=a.campaign JOIN slots s ON s.campaign=a.campaign
+            WHERE EXISTS(SELECT FROM daily_events d WHERE d.campaign=a.campaign AND d.actor=a.key)
+                OR EXISTS(SELECT FROM turns t WHERE t.campaign=a.campaign AND t.actor=a.key AND t.state='complete')
+                OR EXISTS(SELECT FROM cue_events e WHERE e.campaign=a.campaign AND e.payload->>'kind'='group' AND (e.payload->'line'->'audience') ? a.key)
+            """);
+        foreach(var resident in residents!.AsArray()){
+            ct.ThrowIfCancellationRequested();
+            string c=resident.S("campaign"),a=resident.S("actor");
+            foreach(bool daily in new[]{true,false}){
+                string query=daily?ConversationSessions.Daily:ConversationSessions.Sessions;
+                string cutoff=daily?"r.day<@day":"r.at<now()-interval '45 seconds'";
+                await db.Run(CueHistory.Query("INSERT INTO resident_recaps(campaign,actor,kind,entry,fingerprint,body) "+
+                    "SELECT @c,@a,r.doc->>'kind',r.id,r.doc->>'fingerprint',r.doc->>'body' FROM ("+query+") r WHERE "+cutoff+
+                    " ON CONFLICT DO NOTHING"),("c",c),("a",a),("day",resident.I("day")),("explicit",false),("head",(Guid?)null));
+            }
+        }
+    }
     // Append observations in chronological groups so busy days retain every source.
     public Task<int> Compact(string? campaign,string? actor,int? asOf,int days) => db.Run("""
         WITH eligible AS (
@@ -30,7 +53,7 @@ public sealed class MemoryCompactor(Database db, Providers providers, ILogger<Me
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while(!stoppingToken.IsCancellationRequested){
-            try { await Compact(null,null,null,(await providers.Options()).DailyDays); }
+            try { await Compact(null,null,null,(await providers.Options()).DailyDays);await SummarizeResidents(stoppingToken); }
             catch(Exception e) when(!stoppingToken.IsCancellationRequested){log.LogWarning(e,"Could not compact character memories.");}
             await Task.Delay(TimeSpan.FromMinutes(2),stoppingToken);
         }

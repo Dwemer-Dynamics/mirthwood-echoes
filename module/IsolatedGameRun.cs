@@ -37,13 +37,16 @@ namespace Mirthwood.Echoes
                     &&PostMessage(window,0x101,(IntPtr)key,(IntPtr)(flags|unchecked((int)0xc0000000)));
             }
         }
-        public static bool PostTalkOrEscape(bool talk,bool down)
+        public static bool PostTalkOrEscape(bool talk,bool down)=>PostNavigationKey(talk?0x77:0x1b,talk?0x42:1,down);
+        internal static bool PostGroupKey(bool down)=>PostNavigationKey('T',0x14,down);
+        internal static bool PostListenKey()=>PostTextKey(9,0x0f);
+        static bool PostNavigationKey(int key,int scan,bool down)
         {
             if(Active==null||!Active.PathsMatch()||Application.platform!=RuntimePlatform.WindowsPlayer)return false;
             using(var process=System.Diagnostics.Process.GetCurrentProcess()){
-                int scan=talk?0x42:1;int flags=(scan<<16)|1;
+                int flags=(scan<<16)|1;
                 if(!down)flags|=unchecked((int)0xc0000000);
-                return process.MainWindowHandle!=IntPtr.Zero&&PostMessage(process.MainWindowHandle,down?0x100u:0x101u,(IntPtr)(talk?0x77:0x1b),(IntPtr)flags);
+                return process.MainWindowHandle!=IntPtr.Zero&&PostMessage(process.MainWindowHandle,down?0x100u:0x101u,(IntPtr)key,(IntPtr)flags);
             }
         }
         public static IsolatedGameRun Attach(Harmony harmony)

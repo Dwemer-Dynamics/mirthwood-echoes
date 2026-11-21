@@ -38,14 +38,20 @@ The cast includes six American men and six American women, plus two men and two 
 
 For live speech, start **Pocket-TTS (GPU / audio.cpp)** in Dwemer Distro. Echoes connects to port **8086** and supplies an original recording for the speaker. The player and resident speak their own words. A separate narrator reads actions enclosed in single asterisks. Words appear in their speaker’s bubble as the game’s audio channel reaches them. For names outside the pronunciation dictionary, Echoes estimates the caption timing from the recording. With Dwemer offline, the complete reply appears as text.
 
+## Group Talk
+
+Press **T** during normal play near two or three available residents. Each walks to an open spot near you. Press **Enter** to speak, **Tab** to listen, or **Esc** to leave. Type a resident’s name at the start of a question to address them directly. If someone else arrives nearby, press **T** between replies to invite them. Time pauses while you write. You can change the shortcut under `Controls / GroupTalk` in `BepInEx/config/mirthwood.echoes.cfg`.
+
+Each line goes into the journals of the residents who heard it. If Averil tells Drystan about gathering flour, he can remember hearing it from her. Averil’s work also appears in her daily history.
+
 ## Character journal
 
 | Section | What it contains |
 | --- | --- |
 | Profile | The saved character and an optional backstory. Existing authored text takes precedence. **Generate backstory** uses the memory model or provider default to write one from available facts such as town, work, origin, family, traits and tastes. Echoes keeps its provenance and never overwrites an existing story. |
 | Interactions | Recorded NPC social encounters and hired-work collections, completed conversations, promises and reports of fulfillment, ordered by campaign day. |
-| Conversations | Scrollable player and NPC wording for every completed turn, including the promises first recorded in that exchange. Earlier pages stay available after compaction. |
-| Memory summaries | Older activity and dialogue grouped into short, attributed excerpts. Expand a summary to read every original entry. This background work does not require a model call. |
+| Conversations | Each visit has its own recap and transcript. Open a private exchange or a group conversation to read the speakers’ words, gestures and recorded promises. A resident’s group record contains the lines they were present to hear. Older private exchanges with unknown boundaries remain individually readable. |
+| Daily history | Each day with recorded activity has a dated recap. Open it to read what the resident did or witnessed. Recent activity used in dialogue defaults to today and yesterday and can be set to one through seven days in Options. |
 | Commitments | Read-only record of each promise, its speaker, original words, model and any earlier proposal needed to understand a short acceptance. Includes the issue day, supported due day and any existing fulfillment report. Open promises survive daily memory compaction. |
 | Dynamic personality | The native baseline, developing tendencies and recorded turning points. Repeated observed social choices can move a tendency. A player-marked turning point must reference an actual interaction or conversation and include a reason. |
 

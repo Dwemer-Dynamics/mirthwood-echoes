@@ -67,6 +67,7 @@ namespace Mirthwood.Echoes
         int waitingDots;
         float waitStarted;
         string campaign,actor,person="",accepted,pendingFinish;
+        string conversationId;
         UnityWebRequest active;
         Canvas[] contextPrompts=Array.Empty<Canvas>();
         NPCController resident;
@@ -93,6 +94,7 @@ namespace Mirthwood.Echoes
         bool Build(NPCController npc)
         {
             var player=PlayerCharacterController.Instance;if(player==null)return false;
+            conversationId=Guid.NewGuid().ToString();
             generation++;person=npc.CharacterInfo.name;busy=false;ready=false;resolving=false;conversationOver=false;positiveRun=0;resident=npc;accepted=pendingFinish=null;
             root=SpeechSurface("Mirthwood Echoes • Conversation",true);
             var surface=(RectTransform)root.transform;npcBubble=OverheadSpeech.Create(npc,surface);playerBubble=OverheadSpeech.Create(npc,surface,player);
@@ -202,13 +204,15 @@ namespace Mirthwood.Echoes
         public void Open(NPCController npc,object target)
         {
             if(npc?.CharacterInfo==null||Visible||GameState.GetCurrentState(1)!=GameState.State.Gameplay)return;
-            string opener=null;
+            string opener=null,openedSession=null;
             if(passing?.Speaker==npc&&passing.CanReply&&(passing.Kind!="address"||passing.Heard)&&passing.Bubble!=null&&InReplyRange(npc)){
                 opener=passing.Line;
+                if(passing.Kind=="address")openedSession=passing.Id;
                 if(passing.EventId!=null)NativeCues.Recent(npc,passing.EventId,passing.Kind,passing.Line);
             }
             DismissPassingLine();
             if(!Build(npc))return;
+            if(openedSession!=null)conversationId=openedSession;
             if(opener!=null){npcBubble.Show(opener);Follow();}
             var brain=npc.GetComponent<NPCChatController>();var player=PlayerCharacterController.Instance.GetComponent<PlayerChat>();
             if(brain!=null&&player!=null)FaceForTalk(brain,player);
@@ -249,6 +253,7 @@ namespace Mirthwood.Echoes
         }
         void Submit(string words)
         {
+            if(GroupActive){SubmitGroup(words);return;}
             if(!Visible||busy||phase!=Phase.Draft||(IsolatedGameRun.Active!=null&&fixtureUrl==null&&IsolatedGameRun.Active.TalkAddress==null))return;
             if(string.IsNullOrWhiteSpace(words)){host.StartCoroutine(Refocus(generation));return;}
             WaitForReply(words.Trim());
@@ -482,6 +487,7 @@ namespace Mirthwood.Echoes
         }
         public void Close()
         {
+            ReleaseGroup();
             waitingDots=0;
             DismissPassingLine();
             if(!Visible)return;generation++;if(active!=null){active.Abort();active=null;}

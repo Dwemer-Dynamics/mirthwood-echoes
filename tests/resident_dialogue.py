@@ -178,6 +178,23 @@ def run(package, mode, resident=None, starting_desire=None):
         for check in (probe["result"] or {}).get("checks",[]):print(check,flush=True)
         if probe["state"]!="passed":raise RuntimeError(mode+" check "+probe["state"])
         if mode=="interface":return
+        if mode=="grouptalk":
+            result=probe["result"]
+            attendance=result["attendance"]
+            assert all((attendance["late"] in row["line"]["audience"])==
+                       (attendance["joinedAfter"]<row["line"]["seq"]<=attendance["departedAfter"]) for row in result["groupLines"])
+            for guest in result["guests"]:
+                base="saves/"+result["campaign"]+"/characters/"+guest["actor"]+"/history/sessions"
+                lines=api(base+"/"+result["groupSession"])
+                expected=[row["line"]["words"] for row in result["groupLines"] if guest["actor"] in row["line"]["audience"]]
+                assert [row["text"] for row in lines]==expected, (guest["name"],lines,expected)
+                write(work/(guest["actor"]+"-transcript.json"),lines)
+                history=api(base.replace("/sessions","/daily"))["items"]
+                records=[entry for day in history for entry in api(base.replace("/sessions","/daily/")+day["id"])]
+                flour=[item for item in records if "2 Flour" in item["text"]]
+                assert bool(flour)==(guest["name"]=="Averil"), (guest["name"],flour)
+            subprocess.run(["node","tests/journal_browser.cjs",str(work),"--group"],check=True,timeout=90)
+            return
         result=probe["result"]
         first=result["turns"][0]
         path="saves/"+first["campaign"]+"/characters/"+first["actor"]+"/history/conversations"
@@ -211,7 +228,8 @@ def run(package, mode, resident=None, starting_desire=None):
         write(work/"isolation.json",receipt)
         if not all(receipt[k] for k in ("unchanged","closed","databaseRemoved")):raise RuntimeError("Isolation check failed")
         if (game/"BepInEx/LogOutput.log").exists():shutil.copyfile(game/"BepInEx/LogOutput.log",work/"game-module.log")
-        for capture in (harness.parent/"Diagnostics").glob("latest-roleplay-*.png" if resident else "latest-averil-*.png"):
+        pattern="latest-group-*.png" if mode=="grouptalk" else "latest-roleplay-*.png" if resident else "latest-averil-*.png"
+        for capture in (harness.parent/"Diagnostics").glob(pattern):
             if capture.stat().st_mtime>=(session/"harness.json").stat().st_mtime:shutil.copyfile(capture,work/capture.name)
         if session.resolve().parent==harness.resolve() and json.loads((session/"harness.json").read_text())["id"]==token:
             shutil.rmtree(session)
@@ -219,7 +237,7 @@ def run(package, mode, resident=None, starting_desire=None):
 
 
 if __name__=="__main__":
-    modes={"--live-averil":"residentdialogue","--interface-fixture":"interface","--live-topic-flow":"dialogueflow"}
+    modes={"--live-averil":"residentdialogue","--interface-fixture":"interface","--live-topic-flow":"dialogueflow","--group":"grouptalk"}
     if len(sys.argv)==3 and sys.argv[1] in modes:run(Path(sys.argv[2]).resolve(strict=True),modes[sys.argv[1]])
     elif sys.argv[1:2]==["--play"] and os.name=="nt" and (len(sys.argv)==4 or len(sys.argv)==5 and sys.argv[4] in ("tired","eager")):
         run(Path(sys.argv[2]).resolve(strict=True),"roleplay",*sys.argv[3:])

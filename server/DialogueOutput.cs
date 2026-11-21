@@ -15,7 +15,8 @@ internal sealed class DialogueOutput(Func<string,Task> speak)
         For each agreement use {"speaker":"player" or "npc","quote":"an exact, complete sentence or utterance from that speaker in this exchange"}. Preserve spelling, punctuation and apostrophes. If their acceptance alone does not name the task, include "proposal" with the other speaker's exact earlier question or proposal from this exchange or recentSpeech. Omit the agreement when its terms are unclear. Include at most four, without inventing a date, action or wording.
         """;
     static readonly Regex Header=new("^\\s*(?:```(?:json)?[ \\t]*\\r?\\n\\s*)?\\{\\s*\"reply\"\\s*:\\s*\"",RegexOptions.CultureInvariant);
-    static readonly Regex BareAcceptance=new(@"^(?:yes|yeah|yep|aye|okay|ok|sure|of course|agreed|deal|you have my word|i (?:will|agree)|consider it done)[.!…]*$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant);
+    static readonly Regex BareAcceptance=new(@"^(?:(?:yes|aye|sure),?\s+i will|yes|yeah|yep|aye|okay|ok|sure|of course|agreed|deal|you have my word|i (?:will|agree)|consider it done)[.!…]*$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant);
+    internal static bool RequiresProposal(string quote)=>BareAcceptance.IsMatch(quote);
     readonly StringBuilder wire=new(), speech=new();
     int offset;
     bool opened,closed;
@@ -71,7 +72,7 @@ internal sealed class DialogueOutput(Func<string,Task> speak)
     internal sealed record Agreement(string Speaker,string Quote,string? Proposal,Guid? ProposalTurn);
     internal sealed record Review(string Status,List<Agreement> Items);
     record Line(string Speaker,string Text,Guid Turn);
-    static bool IsWholeQuote(string line,string quote)
+    internal static bool IsWholeQuote(string line,string quote)
     {
         if(quote.Length is <2 or >800||quote!=quote.Trim())return false;
         int start=0;
@@ -127,7 +128,7 @@ internal sealed class DialogueOutput(Func<string,Task> speak)
                 if(match==null)return Unavailable();
                 proposalTurn=match.Turn;
             }
-            if(proposal==null&&BareAcceptance.IsMatch(quote))return Unavailable();
+            if(proposal==null&&RequiresProposal(quote))return Unavailable();
             var item=new Agreement(speaker,quote,proposal,proposalTurn);
             if(!accepted.Contains(item))accepted.Add(item);
         }

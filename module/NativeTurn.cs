@@ -40,7 +40,7 @@ namespace Mirthwood.Echoes
         {
             if(!SameResident(epoch)){if(epoch==generation)Close();yield break;}
             var outbox=exchange;JObject turn=null;
-            try{turn=outbox.Accept(message,positiveRun,NativeCues.Binding(freshCue,resident),resident);freshCue=null;}catch(Exception){Retry(message,"Could not save this exchange. Enter to retry.");}
+            try{turn=outbox.Accept(message,positiveRun,NativeCues.Binding(freshCue,resident,conversationId),resident);freshCue=null;}catch(Exception){Retry(message,"Could not save this exchange. Enter to retry.");}
             if(turn==null)yield break;
             string id=(string)turn["id"],original=(string)turn["text"];
             if(original!=message){Retry(original,"An earlier exchange is pending. Enter to recover your original words.");yield break;}
