@@ -281,7 +281,7 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
         }
         var result=JsonSerializer.SerializeToNode(new{passed=pass,checks},Database.Json)!;
         if(p.Mode=="grouptalk")
-            foreach(var key in new[]{"gathered","released","groupLines","guests","campaign","groupSession","probeError","pair","spacing","firstMs","totalMs","capture","setup","typedT","escape","gBindings","attendance","reload"})result[key]=input[key]?.DeepClone();
+            foreach(var key in new[]{"gathered","released","groupLines","guests","campaign","groupSession","probeError","pair","spacing","firstMs","totalMs","capture","setup","typedT","escape","gBindings","attendance","reload","startingDesire","heldFarewell"})result[key]=input[key]?.DeepClone();
         if(p.Mode is "residentdialogue" or "dialogueflow" or "roleplay")
             foreach(var key in new[]{"resident","turns","openers","backgroundNative","probeError","startingDesire"})result[key]=input[key]?.DeepClone();
         if(p.Mode=="voices"){

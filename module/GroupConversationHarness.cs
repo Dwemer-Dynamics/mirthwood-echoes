@@ -128,6 +128,9 @@ namespace Mirthwood.Echoes
                     "Typing t changed the group or failed to enter text: "+playerBubble.Input.text);
                 report["typedT"]=true;
                 report["pair"]=ComparePairScores(first,other,player);
+                string desireFile=Path.Combine(IsolatedGameRun.Active.Root,"starting-desire.txt");
+                string desire=File.Exists(desireFile)?File.ReadAllText(desireFile).Trim():null;
+                if(desire=="eager")foreach(var g in seated)g.Npc.CharacterInfo.personality.values[5]=1f;
                 nextGroupReply=0;
                 first.Npc.AddToHiringItemList("Flour",2);
                 string opening="Averil, what did you collect for work today? Could you tell Drystan too?";
@@ -152,16 +155,30 @@ namespace Mirthwood.Echoes
                 ((JArray)report["guests"]).Add(new JObject{["name"]=late.CharacterInfo.name,["actor"]=lateGuest.Actor});
                 int joinedAfter=groupSequence;
                 yield return GroupQuestion("Drystan, who told you about the flour?",other.Actor);
+                if(desire=="eager"){
+                    late.CharacterInfo.personality.values[5]=-1f;
+                    yield return GroupQuestion("Graham, have you had much time to yourself today?",lateGuest.Actor);
+                    Require(!groupParting,"One resident taking leave ended a gathering of three.");
+                }else StageGuest(late,lateStart);
                 int departedAfter=groupSequence;
-                StageGuest(late,lateStart);yield return Await(()=>!gathering.Guests.Contains(lateGuest),"The absent resident remained in the audience.",5);
+                yield return Await(()=>GroupActive&&!gathering.Guests.Contains(lateGuest),"The departing resident remained in the audience.",20);
                 report["attendance"]=new JObject{["late"]=lateGuest.Actor,["joinedAfter"]=joinedAfter,["departedAfter"]=departedAfter};
+                if(desire=="eager"||desire=="tired"){
+                    foreach(var g in Participants())g.Npc.CharacterInfo.personality.values[5]=desire=="eager"?1f:-1f;
+                    report["startingDesire"]=desire;
+                }
                 if(File.Exists(Path.Combine(IsolatedGameRun.Active.Root,"resident.txt"))){
                     for(int turn=0;turn<8&&GroupActive&&!groupParting;turn++)
-                        yield return GroupQuestion(null,null,turn,seen);
+                        yield return GroupQuestion(null,null,turn,seen,(JArray)report["guests"]);
                 }
                 if(!groupParting)yield return GroupQuestion("I should head home. Thank you both, and good night.",null);
-                Require(groupParting,"The group missed the player's spoken goodbye.");
+                Require(groupParting,"The group missed the spoken goodbye.");
                 report["totalMs"]=Mathf.RoundToInt((Time.unscaledTime-started)*1000);
+                if(desire=="tired"){
+                    yield return new WaitForSecondsRealtime(8.5f);
+                    Require(GroupActive&&groupParting&&!groupTyping&&npcBubble.Visible,"The native farewell closed before the player finished reading.");
+                    report["heldFarewell"]=true;
+                }
                 yield return Await(()=>NativeCues.Pending==0,"The delivered group lines did not reach the server.",18);
                 report["groupLines"]=new JArray(seen.Where(e=>(string)e["kind"]=="group").Select(e=>e.DeepClone()));
                 int pages=npcBubble.Pages;
@@ -275,7 +292,7 @@ namespace Mirthwood.Echoes
             }finally{spouseField.SetValue(spouseManager,originalSpouse);self.relationships=original;self.mood=originalMood;listener.Unique=unique;UnityEngine.Random.state=random;}
         }
 
-        IEnumerator GroupQuestion(string words,string expectedSpeaker,int turn=-1,JArray heard=null)
+        IEnumerator GroupQuestion(string words,string expectedSpeaker,int turn=-1,JArray heard=null,JArray guests=null)
         {
             int previous=groupSequence;
             yield return null;
@@ -285,13 +302,14 @@ namespace Mirthwood.Echoes
                 string folder=IsolatedGameRun.Active.Root;
                 var recent=heard.Where(e=>(string)e["kind"]=="group").Select(e=>e["line"]).Reverse().Take(3).Reverse().Select(line=>{
                     string key=(string)line["speaker"];
-                    string name=Participants().FirstOrDefault(g=>g.Actor==key)?.Npc.CharacterInfo.name??"Player";
+                    string name=key=="player"?"Player":(string)guests.First(g=>(string)g["actor"]==key)["name"];
                     return name+": "+(string)line["words"];
                 });
                 string output=Path.Combine(folder,"reply-"+turn+".json"),draft=Path.Combine(folder,"draft-"+turn+".txt");
                 File.WriteAllText(output+".tmp",new JObject{["reply"]=string.Join("\n",recent)}.ToString());File.Move(output+".tmp",output);
                 File.WriteAllText(Path.Combine(folder,"ready-"+turn),"Group");
-                yield return Await(()=>File.Exists(draft),"No player input for the copied group conversation.",180);
+                yield return Await(()=>File.Exists(draft)||!GroupActive,"No player input for the copied group conversation.",180);
+                Require(GroupActive&&groupTyping,"The group closed while the player was writing.");
                 words=File.ReadAllText(draft);
             }
             playerBubble.Input.text=words;yield return null;

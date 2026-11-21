@@ -19,6 +19,7 @@ namespace Mirthwood.Echoes
     internal sealed partial class NativeConversation
     {
         GroupGathering gathering;
+        GroupGathering.Guest departingGuest;
         readonly Dictionary<string,int> groupTurns=new Dictionary<string,int>();
         readonly Dictionary<string,float> groupRuns=new Dictionary<string,float>();
         readonly Dictionary<string,string> groupCues=new Dictionary<string,string>();
@@ -79,6 +80,9 @@ namespace Mirthwood.Echoes
                 return;
             }
             if(!seated.Any(g=>g.Npc==resident))SelectSpeaker(seated[0]);
+            if(departingGuest!=null&&seated.Contains(departingGuest)&&seated.Length==2){
+                groupParting=true;departingGuest=null;npcBubble.Note("Enter to leave");
+            }
             if(groupTyping){
                 if(Input.GetKeyDown(KeyCode.Tab)&&string.IsNullOrWhiteSpace(playerBubble.Input.text)){
                     groupTyping=false;DraftPause.End();GameState.SetCurrentState(1,GameState.State.Gameplay,false);
@@ -160,6 +164,7 @@ namespace Mirthwood.Echoes
         GroupGathering.Guest[] Participants()=>gathering.Guests.Where(g=>g.Arrived&&g.Actor!=null).ToArray();
         void WriteToGroup()
         {
+            FinishDeparture();
             groupProbe?.Invoke("Player composing after line "+groupSequence);
             groupRevision++;if(active!=null){active.Abort();active=null;}
             busy=false;nextGroupReply=0;groupReplies=0;groupTyping=true;
@@ -210,6 +215,7 @@ namespace Mirthwood.Echoes
         void BeginGroupReply()
         {
             if(!GroupActive||groupTyping||busy)return;
+            FinishDeparture();
             var seated=Participants();if(seated.Length<2){Close();return;}
             var nextGuest=seated.FirstOrDefault(g=>g.Actor==groupTo)??seated.FirstOrDefault(g=>groupLastSpeaker=="player"&&g.Actor==invitedAnswer)??seated.Where(g=>g.Actor!=groupLastSpeaker)
                 .OrderBy(g=>groupTurns.TryGetValue(g.Actor,out int count)?count:0).First();
@@ -255,7 +261,7 @@ namespace Mirthwood.Echoes
                     (int?)answer["positiveDesireCostPercent"]??100,run);
                 if(native!=null)groupRuns[guest.Actor]=native.PositiveRun;
             }
-            groupParting=groupLastSpeaker=="player"&&(string)answer["previous"]==groupLastId&&(bool?)answer["playerParting"]==true;
+            bool playerParting=groupLastSpeaker=="player"&&(string)answer["previous"]==groupLastId&&(bool?)answer["playerParting"]==true;
             bool leaves=(string)native?.Handoff?["kind"]=="ended";
             if(leaves){words=(string)answer["farewell"];if(string.IsNullOrWhiteSpace(words))words="I'll see you later.";addressed="player";}
             JObject prior=answer["previousPromise"]!=null&&groupLastId==(string)answer["previous"]?
@@ -263,6 +269,7 @@ namespace Mirthwood.Echoes
             if(prior!=null&&answer["previousProposal"]!=null)prior["proposal"]=answer["previousProposal"];
             string id=RecordGroupLine(guest.Actor,addressed,words,leaves?null:(string)answer["promise"],prior,leaves?null:answer["proposal"]);
             if(id==null){GroupRetry("The conversation could not be saved.");yield break;}
+            groupParting=playerParting||leaves&&seated.Length==2;
             groupCues.Remove(guest.Actor);
             if(native?.Handoff!=null)groupCues[guest.Actor]=(string)native.Handoff["cue"];
             invitedAnswer=addressed=="player"?guest.Actor:null;
@@ -276,11 +283,18 @@ namespace Mirthwood.Echoes
             npcBubble.Note(hint);speech.Say(id,guest.Npc,words,(value,partial)=>{if(group==gathering&&resident==guest.Npc){npcBubble.Show(value,partial);npcBubble.Note(hint);}},false);
             bool yieldToPlayer=addressed=="player"&&(words.Contains("?")||(bool?)answer["yieldToPlayer"]==true);
             nextGroupReply=leaves||groupParting||yieldToPlayer?0:Time.unscaledTime+Mathf.Clamp(words.Length/16f,2.7f,8f);
-            if(leaves){
+            if(leaves&&!groupParting){
+                departingGuest=guest;
                 float end=Time.unscaledTime+Mathf.Clamp(words.Length/16f,2.7f,8f);
-                while(group==gathering&&(Time.unscaledTime<end||speech?.Busy==true))yield return null;
-                if(group==gathering&&!groupParting)group.Release(guest);
+                while(group==gathering&&departingGuest==guest&&(Time.unscaledTime<end||speech?.Busy==true))yield return null;
+                if(group==gathering&&departingGuest==guest)FinishDeparture();
             }
+        }
+        void FinishDeparture()
+        {
+            var guest=departingGuest;
+            departingGuest=null;
+            if(guest!=null&&gathering.Guests.Contains(guest))gathering.Release(guest);
         }
         void GroupRetry(string reason)
         {
@@ -291,7 +305,7 @@ namespace Mirthwood.Echoes
         void ReleaseGroup()
         {
             if(gathering==null)return;
-            groupRevision++;gathering.Close();gathering=null;
+            groupRevision++;gathering.Close();gathering=null;departingGuest=null;
             groupReady=groupTyping=groupParting=false;groupCampaign=groupLastId=groupLastSpeaker=groupTo=invitedAnswer=null;
             groupReplies=groupSequence=0;nextGroupReply=0;groupRuns.Clear();groupTurns.Clear();groupCues.Clear();
         }
