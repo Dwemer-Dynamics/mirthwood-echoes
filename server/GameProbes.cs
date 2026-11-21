@@ -148,7 +148,7 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
                 string.Join(", ",clips.Select(c=>c.S("voice")+" "+c.S("mixPeak"))));
             Check("Captions follow playback in the character bubbles",input["playerPartial"]?.GetValue<bool>()==true&&
                 input["npcPartial"]?.GetValue<bool>()==true&&input["speakerAnchor"]?.GetValue<bool>()==true&&
-                input["speechComplete"]?.GetValue<bool>()==true,"Read text in both live bubble components while the game audio channel advanced.");
+                input["speechComplete"]?.GetValue<bool>()==true,"Both bubbles showed the complete line and marked the word reached by the game audio channel.");
             Check("Repeated presentation speaks the reply once",clips.Length==3&&clips.Select(x=>x.S("waveSha256")).Distinct().Count()==3,"Two spoken lines and one narrated action.");
             Check("Complete text when speech is unreachable",input["audioFallback"]?.GetValue<bool>()==true,"The native bubble retained speech and italic action after the audio request failed.");
         }
@@ -197,7 +197,8 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
                 Check("Selected reply replaces the waiting dots",Yes("waitVoiceQueued")&&Yes("waitVoiceReply"),
                     Yes("waitVoiceQueued")?$"Tested the delayed local speech failure with game voices {voiceSetting}.":"The local speech fixture did not queue a reply.");
                 Check("Growing, wrapping player bubble",Yes("grows")&&Yes("wrapped")&&Yes("editAfterWrap")&&Yes("literalTags")&&Yes("editorEdges"),"Measured width and height, a 36-character hard wrap, caret deletion, literal tags and four screen corners.");
-                Check("Extended draft editing",Yes("longDraftCaret")&&Yes("middleEdit")&&Yes("shortDraftVisible"),"The caret remains visible in a long draft; shortening it brings every fitting line back into view. Mid-action edits preserve the raw position.");
+                Check("Extended draft editing",Yes("longDraftCaret")&&Yes("middleEdit")&&Yes("shortDraftVisible")&&Yes("wholeLongDraft")&&Yes("fullDraftCapture"),
+                    $"Long caret {Yes("longDraftCaret")}, middle edit {Yes("middleEdit")}, short draft {Yes("shortDraftVisible")}, 1,200 characters {Yes("wholeLongDraft")}. "+input.S("draftBounds")+". "+input.S("shortDraftBounds"));
                 Check("Player clock pause and restoration",Yes("clockPaused")&&Yes("resumeSpeed")&&Yes("nextDraftPaused")&&Yes("closeRestoresClock"),"Measured the scaled simulation and campaign calendar across typing, submission, the next draft and closing.");
                 Check("Player anchor and draft capture",Yes("playerTracks")&&Yes("draftCapture"),"Player motion and the visible writing bubble were checked in the copied world.");
                 Check("Native context prompts",Yes("contextSuppressed")&&Yes("contextRestored"),"The player’s stock interaction prompts yield to the speech bubble and return on closing.");
@@ -205,8 +206,9 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
                 Check("Native Talk and Escape",Yes("talkKey")&&Yes("escapeRestored"),"Invoked the resident’s native Talk option, sent Escape and restored half-speed gameplay.");
                 Check("Independent native pause",Yes("otherPausePreserved")&&Yes("alreadyPaused"),"The closing editor preserved an existing native pause and a pause requested while typing.");
                 Check("Speech follows the resident",input["tracksSpeaker"]?.GetValue<bool>()==true,"Moved and restored the native overhead anchor in the test copy.");
-                Check("Long replies and screen edges",input.I("pages")>1&&input.I("nextPage")==2&&input.I("backPage")==1&&input["edgeFit"]?.GetValue<bool>()==true,input.I("pages")+" pages, previous and next controls, four screen corners.");
-                Check("Player draft leaves the resident's reply visible",Yes("separateBubbles"),"Long draft and paged resident response both fit on screen with separate bounds.");
+                Check("Complete speech in one bubble",Yes("wholeSubmitted")&&Yes("wholeLongReply")&&Yes("fullPlayerCapture")&&Yes("fullResidentCapture")&&Yes("edgeFit")&&
+                    input["relativeTypeSize"]?.GetValue<float>() is >.83f and <.87f,"Checked the entire submitted player line, a long marked reply, native type at 85% and four screen corners.");
+                Check("Player draft leaves the resident's reply visible",Yes("separateBubbles"),input.S("pairBounds"));
                 Check("Native reference capture",input["referenceCapture"]?.GetValue<bool>()==true,"The game’s own bark on the same resident with matching words.");
             }
             Check("Game capture",input["capture"]?.GetValue<bool>()==true,"Latest interface image in the local Echoes Diagnostics folder.");

@@ -92,17 +92,11 @@ namespace Mirthwood.Echoes
             }
             if(Time.frameCount==phaseFrame)return;
             if(groupParting){
-                if(Input.GetKeyDown(KeyCode.PageUp))npcBubble.TurnPage(-1);
-                if(Input.GetKeyDown(KeyCode.PageDown))npcBubble.TurnPage(1);
-                if(Input.GetKeyDown(KeyCode.Return)||Input.GetKeyDown(KeyCode.KeypadEnter)){
-                    if(npcBubble.Page<npcBubble.Pages)npcBubble.TurnPage(1);else Close();
-                }
+                if(Input.GetKeyDown(KeyCode.Return)||Input.GetKeyDown(KeyCode.KeypadEnter))Close();
                 return;
             }
             if(key.IsDown()){gathering.Invite();return;}
             if(Input.GetKeyDown(KeyCode.Return)||Input.GetKeyDown(KeyCode.KeypadEnter)){WriteToGroup();return;}
-            if(Input.GetKeyDown(KeyCode.PageUp)||Input.GetKeyDown(KeyCode.PageDown))
-                npcBubble.TurnPage(Input.GetKeyDown(KeyCode.PageUp)?-1:1);
             bool listen=Input.GetKeyDown(KeyCode.Tab);
             if(!busy&&(listen||groupReplies<2&&nextGroupReply>0&&Time.unscaledTime>=nextGroupReply&&speech?.Busy!=true)){
                 if(listen&&groupReplies>=2)groupReplies=0;
@@ -280,7 +274,9 @@ namespace Mirthwood.Echoes
             busy=false;waitingDots=0;phase=Phase.Reading;phaseFrame=Time.frameCount;groupReplies++;
             playerBubble.SetVisible(false);npcBubble.Show(words);
             string hint=groupParting?"Enter to leave":"Enter to speak   •   Tab to listen   •   Esc to leave";
-            npcBubble.Note(hint);speech.Say(id,guest.Npc,words,(value,partial)=>{if(group==gathering&&resident==guest.Npc){npcBubble.Show(value,partial);npcBubble.Note(hint);}},false);
+            npcBubble.Note(hint);speech.Say(id,guest.Npc,words,(heard,partial)=>{
+                if(group==gathering&&resident==guest.Npc){npcBubble.ShowSpoken(words,heard,partial);npcBubble.Note(hint);}
+            },false);
             bool yieldToPlayer=addressed=="player"&&(words.Contains("?")||(bool?)answer["yieldToPlayer"]==true);
             nextGroupReply=leaves||groupParting||yieldToPlayer?0:Time.unscaledTime+Mathf.Clamp(words.Length/16f,2.7f,8f);
             if(leaves&&!groupParting){

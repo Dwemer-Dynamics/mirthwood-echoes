@@ -97,8 +97,10 @@ namespace Mirthwood.Echoes
                 Close();
                 Require(!GroupActive&&approaching.All(g=>!GroupGathering.Holds(g.Chat)&&g.Agent.isStopped==g.WasStopped),
                     "Cancelling the approach did not release native movement.");
+                StageGuest(two[0],left.position);StageGuest(two[1],right.position);
                 Require(StartGroup(),"Could not gather for the Escape check.");
-                yield return Await(()=>groupReady,"The residents did not arrive for the Escape check.",15);
+                yield return Await(()=>groupReady||!GroupActive,"The residents did not arrive for the Escape check.",18);
+                Require(groupReady,"The Escape gathering ended before arrival. "+stages.ToString(Newtonsoft.Json.Formatting.None));
                 playerBubble.Input.text="An unfinished thought";
                 yield return GroupEscape();
                 Require(GroupActive&&!groupTyping&&groupSequence==0&&!GameState.IsPaused,
@@ -181,11 +183,8 @@ namespace Mirthwood.Echoes
                 }
                 yield return Await(()=>NativeCues.Pending==0,"The delivered group lines did not reach the server.",18);
                 report["groupLines"]=new JArray(seen.Where(e=>(string)e["kind"]=="group").Select(e=>e.DeepClone()));
-                int pages=npcBubble.Pages;
-                for(int page=0;GroupActive&&page<pages;page++){
-                    yield return null;Require(IsolatedGameRun.PostReturn(),"Could not advance the spoken farewell.");
-                    yield return new WaitForSecondsRealtime(.15f);
-                }
+                Require(npcBubble.EntireSpeechInView(),"The farewell did not fit in its overhead bubble.");
+                yield return null;Require(IsolatedGameRun.PostReturn(),"Could not dismiss the spoken farewell.");
                 yield return Await(()=>!GroupActive,"Enter did not end the group after the goodbye.",4);
                 report["released"]=!GroupActive&&!Visible&&!GameState.IsPaused&&seated.All(g=>!GroupGathering.Holds(g.Chat));
                 string scoreKey="mirthwood.echoes.group.score."+ownSession;
