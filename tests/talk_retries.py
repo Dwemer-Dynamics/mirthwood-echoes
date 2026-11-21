@@ -94,12 +94,14 @@ def check_talk_retries(api, model, say, twin, checked, legacy_packet):
     check_endings(api,model,current_turn,path,ending)
     check_impressions(api,model,current_turn,answer,coat)
     check_resident_speech(api,model,current_turn,path,answer)
+    check_topic_flow(api,model,current_turn,answer)
     api("/api/options",settings,"PUT",204)
     checked("social desire settings, older clients, legacy prepared turns and stable per-exchange cost across settings changes")
     checked("parallel Talk retries, scoped UUIDs, grounded promises, Small Talk fallback, silent actions, direct trade and malformed replies")
     checked("spoken farewells on confirmed endings, open and uncertain replies, duplicate farewells, trailing questions and promises")
     checked("resident knowledge, spoken introductions, visible clothing and frozen first impressions on retries")
     checked("selected native card as spoken dialogue, physical gestures, sensitive subjects, immutable replay and unspoken promises")
+    checked("four spoken exchanges in order, including the selected card and excluding unspoken alternatives")
 
 
 def check_resident_speech(api, model, say, path, common):
@@ -133,6 +135,33 @@ def check_resident_speech(api, model, say, path, common):
     assert ready["cardChoices"]=={} and ready["choices"]["neutral"]==line
     end={"kind":"ended","cue":"Averil is done talking."}
     assert api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=end))["reply"]==line+" Be well."
+
+
+def check_topic_flow(api, model, say, common):
+    history=[]
+    for words,cue,base,beat in (
+        ("How do you spend a quiet evening?","playing chess","I set out the board.","The carved knights are my favourites."),
+        ("What draws you to it?","playing chess","Finding a way out with one piece left.",""),
+        ("I enjoy a game too.","exploring old ruins","Then I'd fancy a match.","I'd also love to see inside the old ruins."),
+        ("What would you look for inside?","playing chess","A mark left by the mason.",""),
+        ("Do the fields need rain?","talking about hobbies","The soil could use a soaking.",""),
+    ):
+        turn=dict(say(words),returnCues={"Leisure":cue,"Deep":"asking a question"})
+        model.samples[words]=json.dumps(dict(common,warm=base,neutral=base,cool=base,
+            continuations={"Leisure":beat,"Deep":"Who carved the little birds?"},commitments=[]))
+        before=len(model.calls)
+        ready=api("/api/dialogue/prepare",turn)
+        assert ready["state"]=="ready"
+        prompt=model.calls[-1]["messages"][0]["content"]
+        recall=json.JSONDecoder().raw_decode(prompt.split("\nRecall: ",1)[1])[0]["recentSpeech"]
+        if history:
+            assert [(r["player"],r["npc"]) for r in recall[-len(history):]]==history
+        assert len(recall)<=4
+        event=dict(kind="followup",action="Leisure",cue=cue)
+        done=api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=event))
+        assert done["reply"]==(base+" "+beat).strip() and api("/api/dialogue/prepare",turn)==done
+        assert len(model.calls)==before+1
+        history.append((words,done["reply"]))
 
 
 def check_impressions(api, model, say, answer, coat):

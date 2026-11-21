@@ -1,4 +1,4 @@
-"""Windows: python tests/resident_dialogue.py (--interface-fixture | --live-averil) <built server package>.
+"""Windows: python tests/resident_dialogue.py (--interface-fixture | --live-averil | --live-topic-flow) <built server package>.
 
 Runs the bundled module in Steam against a private WSL server and a copy of slot 0.
 The interface test uses the local fixture. The Averil test uses the selected Windows Codex subscription.
@@ -130,7 +130,7 @@ def run(package, mode):
             except OSError: pass
             time.sleep(.4)
         else: raise RuntimeError("The private server did not index the copied save")
-        if mode=="residentdialogue":
+        if mode!="interface":
             api("providers/codex_subscription",dict(defaultModel="gpt-6.1-terra",conversation="gpt-6.1-terra",
                                                     conversationEffort="medium",codexHost="windows"),"PUT")
             api("options",dict(provider="codex_subscription",replyTokens=96,dailyDays=2),"PUT")
@@ -190,7 +190,7 @@ def run(package, mode):
 
 
 if __name__=="__main__":
-    modes={"--live-averil":"residentdialogue","--interface-fixture":"interface"}
+    modes={"--live-averil":"residentdialogue","--interface-fixture":"interface","--live-topic-flow":"dialogueflow"}
     if len(sys.argv)==3 and sys.argv[1] in modes:run(Path(sys.argv[2]).resolve(strict=True),modes[sys.argv[1]])
     elif len(sys.argv)==5 and sys.argv[1]=="--server" and os.name=="posix":serve(*sys.argv[2:])
     else:raise SystemExit(__doc__)
