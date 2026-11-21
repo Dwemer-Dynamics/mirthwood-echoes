@@ -19,10 +19,12 @@ namespace Mirthwood.Echoes
         {
             public string Key, Text, Voice;
             public int Pitch;
+            public bool ShowPlaceholder;
             public Action<string,bool> Draw;
         }
         readonly Plugin host;
         readonly string speechAddress;
+        readonly Func<bool> voicesEnabled;
         readonly Queue<Line> waiting = new Queue<Line>();
         readonly Dictionary<string,string> offered = new Dictionary<string,string>();
         Coroutine runner;
@@ -34,10 +36,14 @@ namespace Mirthwood.Echoes
         internal Action<JObject> Witness;
         internal string LastError {get;private set;}
 
-        internal ConversationSpeech(Plugin host,string speechAddress="http://127.0.0.1:17841/api/voices/speech")
-        { this.host = host; this.speechAddress = speechAddress; }
+        internal ConversationSpeech(Plugin host,string speechAddress="http://127.0.0.1:17841/api/voices/speech",Func<bool> voicesEnabled=null)
+        {
+            this.host = host;
+            this.speechAddress = speechAddress;
+            this.voicesEnabled = voicesEnabled ?? (() => Plugin.Voices?.Enabled == true);
+        }
 
-        internal void Say(string key, Character speaker, string text, Action<string,bool> draw)
+        internal void Say(string key, Character speaker, string text, Action<string,bool> draw,bool showPlaceholder=true)
         {
             if (string.IsNullOrWhiteSpace(text)) return;
             if (offered.TryGetValue(key,out string previous))
@@ -52,14 +58,14 @@ namespace Mirthwood.Echoes
             }
             offered.Add(key,text);
             var cast = Plugin.Voices;
-            if (cast == null || !cast.Enabled || (IsolatedGameRun.Active != null && Witness == null))
+            if (cast == null || !voicesEnabled() || (IsolatedGameRun.Active != null && Witness == null))
             {
                 if(Busy)Stop(true);
                 draw?.Invoke(text,false); return;
             }
             string voice = cast.Select(speaker,out int pitch);
             if (voice == null) { draw?.Invoke(text,false); return; }
-            waiting.Enqueue(new Line { Key=key, Text=text, Voice=voice, Pitch=pitch, Draw=draw });
+            waiting.Enqueue(new Line { Key=key, Text=text, Voice=voice, Pitch=pitch, Draw=draw, ShowPlaceholder=showPlaceholder });
             if (runner == null) runner = host.StartCoroutine(Drain());
         }
 
@@ -70,7 +76,7 @@ namespace Mirthwood.Echoes
             while (waiting.Count > 0)
             {
                 current = waiting.Dequeue();
-                if (Plugin.Voices?.Enabled == true)
+                if (voicesEnabled())
                     yield return Speak(current);
                 current.Draw?.Invoke(current.Text,false);
                 current = null;
@@ -80,12 +86,12 @@ namespace Mirthwood.Echoes
 
         IEnumerator Speak(Line line)
         {
-            line.Draw?.Invoke("…",true);
+            if(line.ShowPlaceholder)line.Draw?.Invoke("…",true);
             request = NativeConversation.Post(speechAddress,
                 new {voice=line.Voice,text=line.Text});
             request.timeout = 40;
             var operation = request.SendWebRequest();
-            while (!operation.isDone && Plugin.Voices?.Enabled == true) yield return null;
+            while (!operation.isDone && voicesEnabled()) yield return null;
             JArray parts = null;
             if (operation.isDone && request.responseCode == 200)
             {
@@ -98,7 +104,7 @@ namespace Mirthwood.Echoes
             if (parts == null) yield break;
             foreach (var part in parts)
             {
-                if (Plugin.Voices?.Enabled != true) yield break;
+                if (!voicesEnabled()) yield break;
                 int pitch = (bool?)part["narrated"] == true ? 0 : line.Pitch;
                 byte[] bytes;
                 try { bytes = Convert.FromBase64String((string)part["audio"] ?? ""); }
@@ -112,7 +118,7 @@ namespace Mirthwood.Echoes
                     channel.getPitch(out appliedPitch);
                     if(channel.getDSP(CHANNELCONTROL_DSP_INDEX.FADER,out meter)==RESULT.OK)meter.setMeteringEnabled(false,true);
                 }
-                while (Plugin.Voices?.Enabled == true && channel.isPlaying(out bool on) == RESULT.OK && on)
+                while (voicesEnabled() && channel.isPlaying(out bool on) == RESULT.OK && on)
                 {
                     if (channel.getPosition(out uint ms,TIMEUNIT.MS) == RESULT.OK)
                     {

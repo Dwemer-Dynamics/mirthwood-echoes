@@ -34,9 +34,7 @@ namespace Mirthwood.Echoes
             conversationOver=kind=="ended"||kind=="unknown";
             if(!string.IsNullOrWhiteSpace(cue))reply+="\n*"+cue.Replace("*","")+"*";
             phase=Phase.Reading;phaseFrame=Time.frameCount;
-            speech.Say(id+"/npc",resident,reply,(value,partial)=>{
-                playerBubble.SetVisible(false);npcBubble.Show(value,partial);ReadingHint();
-            });
+            speech.Say(id+"/npc",resident,reply,ShowResidentReply,showPlaceholder:false);
             ReadingHint();
         }
         IEnumerator NativeTurn(string message,int epoch)
