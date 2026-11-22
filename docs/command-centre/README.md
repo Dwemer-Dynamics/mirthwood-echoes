@@ -32,11 +32,11 @@ For a fresh checkout, use Windows PowerShell 7, Python 3.11 or later, Node, Git,
 
 ## Assign and follow a build
 
-Select the Echoes project and give the owner the [worker brief](templates/WORKER.md), including the exact base, paths, dependencies, authority and acceptance. Set `model: gpt-6.2-astra` and `thinking: max` in the Codex call for each new visible Echoes coding or coordination worker and each follow-up assignment. Continue in the same chat when its ownership carries forward. Record its ID and verify the requested settings against the dispatch and the executing turn when available. Changing a saved setting during a turn takes effect on a subsequent turn. If the active turn differs, preserve the work and resume the owner on the selected settings. Independent Claude review and the player's conversation model use their own settings.
+Select the Echoes project and give the owner the [worker brief](templates/WORKER.md), including the exact base, paths, dependencies, authority and acceptance. Set `model: gpt-6.2-astra` and `thinking: max` in the Codex call for each new visible Echoes coding or coordination worker and each follow-up assignment. Continue in the same chat when its ownership carries forward. Record its ID and check the executing turn when available. If a saved setting changes mid-turn, preserve the work and verify the setting on the resumed turn. If the host cannot apply the requested settings, report the limitation and obtain the maintainer's choice before substituting another model. Independent Claude review and the player's conversation model use their own settings.
 
 The coordinator follows the assigned chats with bounded waits and saved status cursors. Check the owner's evidence when an outcome, dependency or blocker changes. Before handing off shared paths, identify the commit, released paths, acceptance already verified and any continuing ownership. Allocate the validation lane, copied-save harness and playable updater separately as needed. Recheck each resource just before use and record its restoration or any exception before passing it on.
 
-The build owner hands back the draft PR, exact head, changed-path receipt, independent review verdict and remaining checks. The coordinator checks the evidence and controls integration. Use the maintainer's existing permissions for an authorised PR or batch. A blocked action goes back with its reason and evidence.
+The build owner hands back the draft and the evidence listed under Delivery in the [worker brief](templates/WORKER.md). The coordinator verifies the handoff and controls integration. Use existing GitHub access under the authority recorded for that PR or batch. A blocked action goes back with its reason and evidence.
 
 ## Git and validation
 
