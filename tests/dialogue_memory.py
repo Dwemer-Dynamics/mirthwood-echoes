@@ -720,5 +720,32 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release, m
     greeting = concordance(ordinary,"What did I mean by the greeting?",455)[0]
     assert greeting["note"]=="Said they meant every word of the greeting.", greeting
     print("PASS named actions distinguish objects from landmarks, and a withdrawal and its reason keep their separate sources.",flush=True)
+
+    beat(490)
+    older_need = exchange([("player",averil,"I need my cart for the harvest.")])
+    loan_chat, (grant,withdrawal) = exchange([("player",averil,"You may borrow my cart."),
+                                             ("player",averil,"I take that back. I need it for the harvest.")])
+    offers = exchange([("player",averil,"I can lend you my lantern."),("player",averil,"I can lend you my axe beside the cart.")])
+    forge = exchange([("player",averil,"I caught the pike by the mill. I was mistaken. Jo needs my help at the forge.")])
+    crossing = exchange([("player",averil,"I crossed the ford.")])
+    _, (hat,marker) = exchange([("player",averil,"You may use my hat."),("player",averil,"I was mistaken. I didn't cross the ford.")])
+    beat(491)
+    loan = concordance((loan_chat,[grant]),"Did you lend me your cart?",490)[0]
+    assert loan["correction"]["source"]==withdrawal and loan["correction"]["note"]=="Withdrew their earlier account.", loan
+    def body(scene):
+        return next(r["body"] for r in view(averil,"sessions") if r["id"]=="day-490-"+scene)
+    assert "Said they need it for the harvest." in body(loan_chat)
+    assert body(older_need[0]).endswith("Said they need the speaker's cart for the harvest.") and "Withdrew" not in body(older_need[0])
+    lantern = concordance((offers[0],[offers[1][0]]),"Who can lend me a lantern?",490)[0]
+    assert "lantern" in lantern["note"] and "correction" not in lantern, lantern
+    assert not native_turn("Did you lend me your chisel?")[1]
+    catch = concordance(forge,"Who caught the pike by the mill?",490)[0]
+    assert catch["correction"]["note"]=="Corrected their earlier account." and "forge" not in catch["note"], catch
+    jo = concordance(forge,"What does Jo need at the forge?",490)[0]
+    assert jo["sentence"]==2 and "correction" not in jo, jo
+    denied = concordance(crossing,"Who crossed the ford?",490)[0]
+    assert denied["correction"]["source"]==marker and "didn't cross the ford" in denied["note"], denied
+    assert sql(f"SELECT count(*) FROM dialogue_recap_parts WHERE corrects_source='{hat}'")=="0"
+    print("PASS a repeated explanation preserves the local withdrawal, a new subject preserves the bare correction, and an item-specific loan survives competing offers.",flush=True)
     memory_model("historian")
     print("PASS Talk and journal agree on sourced roles, recipients, corrections and unresolved claims after an unavailable overnight model.", flush=True)

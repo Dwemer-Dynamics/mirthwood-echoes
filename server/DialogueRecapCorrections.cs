@@ -26,24 +26,30 @@ internal static partial class DialogueRecaps
         public string[]? Possible { get; init; }
         public string Address => $"{Source:D}/{Position}/{Sentence}";
     }
-    sealed record Account(PartKey Key,string Note,string[] Terms,bool SameVisit);
-    sealed record SpokenEvent(string Verb,string[] Object,string[] Qualifier,bool PronounObject,bool ActorReplacement);
+    sealed record Account(PartKey Key,string Note,string[] Terms,bool SameVisit,string AddresseeName)
+    {
+        public SpokenEvent? Event { get; } = ResolveYou(ReportedEvent(Note),AddresseeName);
+    }
+    sealed record SpokenEvent(string Verb,string[] Object,string[] Qualifier,bool PronounObject,bool ActorReplacement,
+        string Actor,string Modal,bool Negative);
 
     // A named event and a topic have different proof requirements. A failed event
     // comparison must never be retried as an unordered keyword comparison.
     sealed record TargetReference(SpokenEvent? Action,string[] Topic)
     {
         public string[] Search => Action is {} e ? [e.Verb,..e.Object] : Topic;
-        public bool Matches(Account a) => Action!=null ? Describes(Action,a.Note) : Topic.Length>0 && Includes(a.Terms,Topic);
+        public bool Matches(Account a) => Action!=null ? a.Event!=null && Describes(Action,a.Event) : Topic.Length>0 && Includes(a.Terms,Topic);
     }
 
     // Compare the predicate at the same grammatical position in both clauses. A pronoun
     // object can leave the object unspecified. An impersonal subject supplies no action.
-    static readonly Regex Predicate = new(@"^(?:(?<cleft>(?:it|that) (?:was|is) " + ActorAnswer + @" (?:who|that))|" +
-        @"they and others|the (?:speaker|addressee)|(?!(?:it|this|that|the|a|an)\b)[\p{L}’'-]+(?: (?-i:\p{Lu})[\p{L}’'-]*)*)\s+" +
-        @"(?:(?:may|might|can|could|will|would|should|must|did|not|never|(?:had|has|have)(?=\s+\w+(?:ed|en)\b)|(?:was|were|is|are)(?=\s+\w+ing\b))\s+)*(?<verb>[\p{L}’'-]+)\b(?<object>.*)$",RegexOptions.IgnoreCase);
+    static readonly Regex Predicate = new(@"^(?:(?<cleft>(?:it|that) (?:was|is) (?<actor>" + ActorAnswer + @") (?:who|that))|" +
+        @"(?<actor>they and others|the (?:speaker|addressee)|(?!(?:it|this|that|the|a|an)\b)[\p{L}’'-]+(?: (?-i:\p{Lu})[\p{L}’'-]*)*))\s+" +
+        @"(?:(?:(?<modal>may|might|can|could|will|would|shall|should|must)|(?<negative>not|never|no longer)|do|does|did|(?:had|has|have)(?=\s+\w+(?:ed|en)\b)|(?:was|were|is|are)(?=\s+\w+ing\b))\s+)*(?<verb>[\p{L}’'-]+)\b(?<object>.*)$",RegexOptions.IgnoreCase);
+    static readonly Regex ContractedNegation = new(@"\b(?:(?<aux>ca|wo|sha|do|does|did|could|would|should|must|might|had|has|have|is|was|are|were)n['’]t|cannot)\b",RegexOptions.IgnoreCase);
     static readonly Regex ObjectReference = new(@"^(?:it|them|this|that|these|those)\b",RegexOptions.IgnoreCase);
-    static readonly Regex Qualifier = new(@"\b(?:at|in|on|by|near|beside|alongside|under|beneath|over|above|below|behind|beyond|outside|inside|across|through|around|with|from|to|for|of|before|after|during|until|while|when|unless|because)\b|[,;:]",RegexOptions.IgnoreCase);
+    const string QualifierWords = "at|in|on|by|near|beside|alongside|under|beneath|over|above|below|behind|beyond|outside|inside|across|through|around|with|from|to|for|of|before|after|during|until|while|when|unless|because";
+    static readonly Regex Qualifier = new(@"\b(?:"+QualifierWords+@")\b|[,;:]",RegexOptions.IgnoreCase);
 
     static string[] Phrase(string text) => Words.Matches(text.ToLowerInvariant().Replace('’','\'')
         .Replace("the speaker's","my").Replace("the addressee's","your")).Select(m=>m.Value)
@@ -56,9 +62,16 @@ internal static partial class DialogueRecaps
         if(verb is "is" or "are" or "was" or "were" or "am" or "be" or "have" or "has" or "had") return null;
         string rest = match.Groups["object"].Value.Trim();
         int end = Qualifier.Match(rest) is {Success:true} qualifier ? qualifier.Index : rest.Length;
-        return new(verb,Phrase(ObjectReference.Replace(rest[..end],"",1)),Phrase(rest[end..]),ObjectReference.IsMatch(rest),match.Groups["cleft"].Success);
+        string actor = match.Groups["actor"].Value.ToLowerInvariant() switch {
+            "me" or "the speaker" => "i", "us" or "they and others" => "we", "the addressee" => "you",
+            "he" or "him" or "she" or "her" or "they" or "them" or "who" or "someone" => "",
+            var name => name
+        };
+        return new(verb,Phrase(ObjectReference.Replace(rest[..end],"",1)),Phrase(rest[end..]),ObjectReference.IsMatch(rest),
+            match.Groups["cleft"].Success,actor,match.Groups["modal"].Value.ToLowerInvariant(),match.Groups["negative"].Success);
     }
-    static SpokenEvent? Event(string clause) => Event(Predicate.Match(clause));
+    static SpokenEvent? Event(string clause) => Event(Predicate.Match(ContractedNegation.Replace(clause,m=>
+        (m.Groups["aux"].Value.ToLowerInvariant() switch { "" or "ca"=>"can", "wo"=>"will", "sha"=>"shall", var aux=>aux })+" not")));
 
     // For an actor question the contiguous predicate is stronger lookup evidence
     // than the same words separated by a landmark. Only ask SQL for an ordering hint.
@@ -98,16 +111,22 @@ internal static partial class DialogueRecaps
 
     static bool SameWord(string a,string b) => a==b || EventWords.Any(forms=>forms.Contains(a) && forms.Contains(b));
     static bool Includes(string[] evidence,string[] required) => required.All(word=>evidence.Any(other=>SameWord(word,other)));
-    static bool Describes(SpokenEvent action,SpokenEvent prior) =>
-        (SameWord(action.Verb,prior.Verb) || VerbStem(action.Verb)==VerbStem(prior.Verb)) &&
+    static bool SamePredicate(SpokenEvent a,SpokenEvent b) => SameWord(a.Verb,b.Verb) || VerbStem(a.Verb)==VerbStem(b.Verb);
+    static bool Describes(SpokenEvent action,SpokenEvent prior) => SamePredicate(action,prior) &&
         prior.Object.AsSpan().EndsWith(action.Object) && prior.Qualifier.AsSpan().StartsWith(action.Qualifier);
-    static bool Describes(SpokenEvent? action,string note)
+    static SpokenEvent? ReportedEvent(string note)
     {
-        if(action==null) return false;
-        string? clause = note.StartsWith("Said ",StringComparison.Ordinal) ? note["Said ".Length..] :
-            note.StartsWith("Recounted “",StringComparison.Ordinal) ? note["Recounted “".Length..] : null;
-        return clause!=null && Event(clause) is {} prior && Describes(action,prior);
+        if(note.StartsWith("Said they ",StringComparison.Ordinal) && !note.StartsWith("Said they and others ",StringComparison.Ordinal))
+            return Event("I "+note["Said they ".Length..]);
+        if(note.StartsWith("Said ",StringComparison.Ordinal)) return Event(note["Said ".Length..]);
+        return note.StartsWith("Recounted “",StringComparison.Ordinal) ? Event(note["Recounted “".Length..]) : null;
     }
+    static bool ChangesAccount(SpokenEvent a,SpokenEvent b,string speakerName)
+    {
+        string Actor(SpokenEvent e) => e.Actor=="i" && speakerName.Length>0 ? speakerName : e.Actor;
+        return a.Actor.Length>0 && b.Actor.Length>0 && (Actor(a)!=Actor(b) || a.Negative!=b.Negative || a.Modal!=b.Modal);
+    }
+    static SpokenEvent? ResolveYou(SpokenEvent? action,string name) => action?.Actor=="you" ? action with {Actor=name} : action;
 
     static PartKey? ChooseTarget(Source row,List<Account> grounded,List<Account> eligible,Part[] local,bool fallback,bool denial,bool useProximity)
     {
@@ -171,23 +190,27 @@ internal static partial class DialogueRecaps
             if(next!=null && (next.Question || next.Gesture || Retraction.IsMatch(next.Text) || Clarification.IsMatch(next.Text))) next=null;
             string following = next?.Text ?? inline;
             bool actorOnly = EllipticalAnswer.IsMatch(following);
-            var action = actorOnly ? null : Event(following);
+            var action = actorOnly ? null : ResolveYou(Event(following),row.AddresseeName);
             bool withdrawal = denial || marker.Value.Contains("take that back",StringComparison.OrdinalIgnoreCase) ||
                 marker.Value.Contains("scratch that",StringComparison.OrdinalIgnoreCase);
-            // A speaker can give a reason for taking back their words. Whether that reason
-            // names the item or uses a pronoun does not change which grant was withdrawn.
-            bool fallback = bare && (action==null || withdrawal && !action.ActorReplacement);
             bool describesTopic = reference is {Action:null,Topic.Length:>0} && action!=null &&
                 (action.PronounObject || Includes(action.Object,reference.Topic));
             if(describesTopic && action is {PronounObject:true,Object.Length:0})
                 action = action with {Object=Phrase(scope)};
             var local = notes.Where(p=>!p.Question && !p.Gesture && !p.Correction && p.Terms.Length>0 &&
                 !p.Note.StartsWith("Answered ",StringComparison.Ordinal)).ToArray();
-            var accounts = local.Select(p=>new Account(new(row.Id,row.Position,p.Index),p.Note,p.Terms,true)).ToList();
+            var accounts = local.Select(p=>new Account(new(row.Id,row.Position,p.Index),p.Note,p.Terms,true,row.AddresseeName)).ToList();
             var search = reference?.Search ?? (action==null ? [] : [action.Verb,..action.Object]);
-            if(search.Length>0 || local.Length==0) await AddEarlierAccounts(conn,row,search,fallback,accounts,ct);
+            if(search.Length>0 || local.Length==0) await AddEarlierAccounts(conn,row,search,bare,accounts,ct);
             var scopedAccounts = reference==null ? accounts : accounts.Where(reference.Matches).ToList();
-            var continued = action==null ? [] : scopedAccounts.Where(a=>Describes(action,a.Note)).ToList();
+            var matching = action==null ? [] : scopedAccounts.Where(a=>a.Event!=null && Describes(action,a.Event)).ToList();
+            // A repetition can explain a withdrawal. Only an actual change in the
+            // proposition supplies an antecedent on the strength of the following words.
+            bool reaffirms = bare && action!=null && matching.Any(a=>!ChangesAccount(action,a.Event!,row.SpeakerName));
+            var continued = reaffirms ? [] : matching;
+            bool competingEvent = action!=null && (action.ActorReplacement ||
+                scopedAccounts.Any(a=>a.Event!=null && SamePredicate(action,a.Event) && ChangesAccount(action,a.Event,row.SpeakerName)));
+            bool fallback = bare && (matching.Count>0 || !competingEvent);
             // A named action always constrains its own antecedent. A replacement supplying
             // the action for a named object must establish that event as well.
             var grounded = reference==null || describesTopic || continued.Count>0 ? continued : scopedAccounts;
@@ -225,14 +248,15 @@ internal static partial class DialogueRecaps
     static async Task AddEarlierAccounts(NpgsqlConnection conn,Source row,string[] reference,bool fallback,List<Account> accounts,CancellationToken ct)
     {
         if(!fallback && reference.Length==0) return;
-        await using var select = Database.Command(conn,"""
+        await using var select = Database.Command(conn,$"""
             WITH RECURSIVE past(id,parent) AS (
               SELECT id,parent FROM cue_events WHERE campaign=@c AND id=@anchor
               UNION ALL SELECT e.id,e.parent FROM cue_events e JOIN past ON e.id=past.parent WHERE e.campaign=@c
             )
             SELECT coalesce(p.corrects_source,p.source),coalesce(p.corrects_pos,p.pos),coalesce(p.corrects_sentence,p.sentence),
-              p.detail,p.keywords,p.mode=@mode AND p.session=@session
-            FROM dialogue_recap_parts p
+              p.detail,p.keywords,p.mode=@mode AND p.session=@session,{AddresseeName}
+            FROM dialogue_recap_parts p JOIN campaigns c ON c.id=p.campaign
+            {Recipient}
             WHERE p.campaign=@c AND p.speaker=@who AND p.source<>@source AND NOT p.question
               AND (p.anchor IS NULL OR p.anchor IN (SELECT id FROM past)) AND p.age BETWEEN @age-29 AND @age AND p.day<=@day AND p.said_at<=@at
               AND array_remove(p.audience,p.speaker) && @audience
@@ -243,6 +267,6 @@ internal static partial class DialogueRecaps
             ("age",row.Age),("day",row.Day),("at",row.At),("session",row.Session),("audience",row.Audience),("terms",Query(reference)),("fallback",fallback));
         await using var reader = await select.ExecuteReaderAsync(ct);
         while(await reader.ReadAsync(ct)) accounts.Add(new(new(reader.GetGuid(0),reader.GetInt32(1),reader.GetInt32(2)),
-            reader.GetString(3),reader.GetString(4).Split(' '),reader.GetBoolean(5)));
+            reader.GetString(3),reader.GetString(4).Split(' '),reader.GetBoolean(5),reader.GetString(6)));
     }
 }

@@ -93,6 +93,20 @@ internal static partial class DialogueRecaps
     // the grammatical roles of lending and borrowing in a sourced correction.
     static readonly string[] LoanWords =
         ["lend","lends","lent","lending","borrow","borrows","borrowed","borrowing","loan","loans","loaned","loaning"];
+    // Bound the object at the next clause or setting in both the question and the note.
+    static readonly Regex LoanObject = new(@"\b(?:"+string.Join("|",LoanWords)+@")\b\s+((?:(?!\b(?:"+
+        QualifierWords+@"|and|but|or)\b)[^.!?;,:“”])+)",RegexOptions.IgnoreCase);
+    static readonly string StoredLoanObject = "(?i)"+LoanObject.ToString().Replace(@"\b",@"\y");
+    static readonly Regex LoanRecipient = new(@"^(?:(?:me|us|him|her|them|you)\b|(?-i:\p{Lu}[\p{L}’'-]*(?: \p{Lu}[\p{L}’'-]*)*)(?=\s+(?:the|an?|my|your|his|her|our|their|this|that|these|those)\b))\s*",RegexOptions.IgnoreCase);
+    static readonly Regex FrontedLoanObject = new(@"^(?:which|what)\s+([\p{L}’' -]+?)\s+(?:did|do|does|was|were|can|could|may|might|should|will|would)\b",RegexOptions.IgnoreCase);
+    static string RequestedLoanItem(string question)
+    {
+        var complement = LoanObject.Match(question);
+        if(complement.Success && Regex.IsMatch(question[(complement.Index+complement.Length)..],@"^\s*(and|or)\b",RegexOptions.IgnoreCase)) return "";
+        var item = Terms(LoanRecipient.Replace(complement.Groups[1].Value.Trim(),"",1));
+        if(item.Length==0) item=Terms(FrontedLoanObject.Match(question).Groups[1].Value);
+        return string.Join(" ",item.Where(w=>!SpeechActs.Contains(w)));
+    }
     static string Query(string[] words)
     {
         var expanded = words.Concat(EventWords.Where(forms => forms.Intersect(words).Any()).SelectMany(forms => forms)).Distinct();
@@ -223,14 +237,16 @@ internal static partial class DialogueRecaps
         string Mode,DateTime At,int Sequence,string Speaker,string[] Audience,string Words,Guid? Branch,int Sentence=0)
     {
         public bool UnresolvedYou { get; init; }
+        public string SpeakerName { get; init; } = "";
+        public string AddresseeName { get; init; } = "";
         public string? Note { get; init; }
     }
     internal static async Task<List<Source>> Capture(NpgsqlConnection conn,CancellationToken ct)
     {
         // These exact words exist only in memory for the background model after the transaction commits.
         var samples=new List<Source>();
-        await using var read=Database.Command(conn,"""
-            WITH RECURSIVE speech(campaign,id,pos,anchor,day,age,session,mode,at,seq,speaker,audience,words) AS (
+        await using var read=Database.Command(conn,$"""
+            WITH RECURSIVE speech(campaign,source,pos,anchor,day,age,session,mode,at,seq,speaker,audience,words) AS (
             SELECT t.campaign,t.id,p.pos,t.cue_anchor,t.day,t.dialogue_age,x.session,'private',t.started,0,p.speaker,
                 ARRAY['player',t.actor],p.words FROM old_turns x JOIN turns t ON t.id=x.id
               CROSS JOIN LATERAL (VALUES(0,t.actor,t.quest_offer->'offer'->>'terms'),(1,'player',t.player_text),(2,t.actor,t.reply)) p(pos,speaker,words)
@@ -257,18 +273,19 @@ internal static partial class DialogueRecaps
               FROM past p JOIN branches b ON (b.campaign,b.id)=(p.campaign,p.parent)
               LEFT JOIN forks f ON (f.campaign,f.parent)=(p.campaign,p.parent)
             )
-            SELECT s.*,coalesce(b.branch,s.anchor),
-              s.mode='group' AND NOT coalesce(g.payload->'line'->>'to'=ANY(s.audience),false)
-            FROM speech s LEFT JOIN branches b ON (b.campaign,b.id)=(s.campaign,s.anchor)
-            LEFT JOIN cue_events g ON s.mode='group' AND (g.campaign,g.id)=(s.campaign,s.id)
-            ORDER BY s.campaign,s.day,s.at,s.seq,s.id,s.pos
+            SELECT p.*,coalesce(b.branch,p.anchor),p.mode='group' AND (contact.key IS NULL OR contact.key='group'),
+              lower(coalesce(CASE WHEN p.speaker='player' THEN c.player_name ELSE a.name END,'')),{AddresseeName}
+            FROM speech p LEFT JOIN branches b ON (b.campaign,b.id)=(p.campaign,p.anchor)
+            JOIN campaigns c ON c.id=p.campaign LEFT JOIN actors a ON (a.campaign,a.key)=(p.campaign,p.speaker)
+            {Recipient}
+            ORDER BY p.campaign,p.day,p.at,p.seq,p.source,p.pos
             """);
         var rows=new List<Source>();
         await using(var reader=await read.ExecuteReaderAsync(ct)){
             while(await reader.ReadAsync(ct))rows.Add(new(reader.GetString(0),reader.GetGuid(1),reader.GetInt32(2),
                 reader.IsDBNull(3)?null:reader.GetGuid(3),reader.GetInt32(4),reader.GetInt64(5),reader.GetString(6),
                 reader.GetString(7),reader.GetDateTime(8),reader.GetInt32(9),reader.GetString(10),reader.GetFieldValue<string[]>(11),reader.GetString(12),reader.IsDBNull(13)?null:reader.GetGuid(13))
-                {UnresolvedYou=reader.GetBoolean(14)});
+                {UnresolvedYou=reader.GetBoolean(14),SpeakerName=reader.GetString(15),AddresseeName=reader.GetString(16)});
         }
         foreach(var row in rows){
             foreach(var part in await ResolveNotes(conn,row,ct)){
@@ -293,16 +310,20 @@ internal static partial class DialogueRecaps
     // The retained group receipt still contains its validated target after its words
     // retire. This also resolves targets for previously compacted rows, without guessing
     // from the witness list when an old receipt has no target.
-    const string Eligible = """
-        SELECT p.*,CASE WHEN p.speaker='player' THEN coalesce(nullif(c.player_name,''),'Player') ELSE coalesce(speaker.name,'Resident') END AS name,
-          contact.key AS to_key,CASE contact.key WHEN 'player' THEN coalesce(nullif(c.player_name,''),'Player') WHEN 'group' THEN 'the group' ELSE recipient.name END AS to_name
-        FROM dialogue_recap_parts p JOIN dialogue_clock clock ON clock.campaign=p.campaign
-        JOIN campaigns c ON c.id=p.campaign LEFT JOIN actors speaker ON speaker.campaign=p.campaign AND speaker.key=p.speaker
+    const string Recipient = """
         CROSS JOIN LATERAL (SELECT CASE WHEN p.mode='group' THEN
             (SELECT CASE WHEN g.payload->'line'->>'to'='group' OR g.payload->'line'->>'to'=ANY(p.audience)
               THEN g.payload->'line'->>'to' END FROM cue_events g WHERE (g.campaign,g.id)=(p.campaign,p.source))
           WHEN p.speaker='player' THEN (array_remove(p.audience,'player'))[1] ELSE 'player' END AS key) contact
         LEFT JOIN actors recipient ON recipient.campaign=p.campaign AND recipient.key=contact.key
+        """;
+    const string AddresseeName = "lower(coalesce(CASE WHEN contact.key='player' THEN c.player_name ELSE recipient.name END,''))";
+    const string Eligible = $"""
+        SELECT p.*,CASE WHEN p.speaker='player' THEN coalesce(nullif(c.player_name,''),'Player') ELSE coalesce(speaker.name,'Resident') END AS name,
+          contact.key AS to_key,CASE contact.key WHEN 'player' THEN coalesce(nullif(c.player_name,''),'Player') WHEN 'group' THEN 'the group' ELSE recipient.name END AS to_name
+        FROM dialogue_recap_parts p JOIN dialogue_clock clock ON clock.campaign=p.campaign
+        JOIN campaigns c ON c.id=p.campaign LEFT JOIN actors speaker ON speaker.campaign=p.campaign AND speaker.key=p.speaker
+        {Recipient}
         WHERE p.campaign=@c AND p.audience @> ARRAY[@a]::text[] AND p.day<=@day AND p.age>clock.elapsed-30
           AND (p.anchor IS NULL OR p.anchor IN (SELECT id FROM ancestry))
         """;
@@ -369,7 +390,9 @@ internal static partial class DialogueRecaps
                 coalesce(ts_rank(p.search,to_tsquery('english',nullif(@event,''))),0) AS event_words,
                 cardinality(ARRAY(SELECT unnest(p.concepts) INTERSECT SELECT unnest(@subjects::text[]))) AS subject,
                 cardinality(ARRAY(SELECT unnest(p.concepts) INTERSECT SELECT unnest(@concepts::text[]))) AS meaning
-              FROM eligible p WHERE p.search @@ to_tsquery('english',@terms) OR p.concepts && @concepts
+              FROM eligible p WHERE (p.search @@ to_tsquery('english',@terms) OR p.concepts && @concepts)
+                AND (@item='' OR p.search @@ plainto_tsquery('english',@item) AND
+                  to_tsvector('english',coalesce(substring(p.detail FROM @loan_arg),p.detail)) @@ plainto_tsquery('english',@item))
             ), ranked AS (
               SELECT *,dense_rank() OVER(ORDER BY (subject>0 OR words>0) DESC,subject DESC,meaning DESC,named_target DESC,event_words DESC,(question=@requests) DESC,(words>0) DESC) AS tier FROM matches
             ), best AS MATERIALIZED (
@@ -402,7 +425,8 @@ internal static partial class DialogueRecaps
             """;
         return await db.ScopedOne(sql,scoped,head,("c",campaign),("a",actor),("day",day),("who",currentSpeaker),
             ("terms",Query([..terms,..related])),("focus",Query(focus)),("related",Query(related)),("subjects",Concepts(focus)),("concepts",Concepts(terms)),("listeners",audience),
-            ("names",names),("requests",seeksRequest),("event",eventQuery),("phrase",AskedEventPhrase(inquiry)));
+            ("names",names),("requests",seeksRequest),("event",eventQuery),("phrase",AskedEventPhrase(inquiry)),
+            ("item",related.Length==0 ? "" : RequestedLoanItem(inquiry)),("loan_arg",StoredLoanObject));
     }
 
     internal static async Task Refine(Database db,Providers providers,IReadOnlyList<Source> rows,CancellationToken ct)
