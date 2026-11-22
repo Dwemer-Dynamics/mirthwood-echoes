@@ -28,7 +28,8 @@ public sealed partial class Conversation
             .ToHashSet(StringComparer.Ordinal);
         var words=Words(evidence);
         var events=(scene["today"] as JsonArray??[]).Select(e=>e.S("title"))
-            .Append(scene["nextNotice"].S("title")).Append(scene["previousNotice"].S("title"));
+            .Append(scene["nextNotice"].S("title")).Append(scene["previousNotice"].S("title"))
+            .Concat((scene["nextByKind"] as JsonObject??[]).Select(pair=>pair.Value.S("title")));
         if(!events.Any(title=>Words(title).Overlaps(words)))return false;
         var job=Words(offer.S("title")+" "+offer.S("terms")+" "+string.Join(" ",offer["objectives"]!.AsArray()));
         job.UnionWith(["job","task","terms","offer","work"]);
@@ -148,7 +149,8 @@ public sealed partial class Conversation
             // The classifier must ground any consequential choice in the player's actual speech.
             // Quoted examples, directives and conditional assent never authorize a native decision.
             if(decisive&&(evidence.Length==0||!speech.Replace('’','\'').Contains(evidence.Replace('’','\''),StringComparison.OrdinalIgnoreCase)||
-                dispatch.Awareness!=null && (result.S("subject")=="world" || RefersOnlyToEvent(dispatch.Awareness,terms,evidence)) ||
+                dispatch.Awareness!=null && (result.S("subject")=="world" || RefersOnlyToEvent(dispatch.Awareness,terms,speech) ||
+                    evidence!=speech && RefersOnlyToEvent(dispatch.Awareness,terms,evidence)) ||
                 Regex.IsMatch(speech,"[“”\u0022]|(?:^|\\s)['‘].+['’](?=[\\s.,?!)]|$)|\\b(classif(y|ication)|return json|ignore (the |your )?instructions)\\b",RegexOptions.IgnoreCase)||
                 intent is "accept" or "decline"&&Regex.IsMatch(speech,@"\b(if|unless|provided|suppose|assuming|hypothetically)\b",RegexOptions.IgnoreCase))){
                 intent="unclear";line="Would you take the work on the terms I offered?";

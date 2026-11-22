@@ -102,7 +102,8 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
             ),
             reports AS (
                 SELECT n.source,n.day,n.name AS speaker,n.speaker AS speaker_key,n.at,m[1] AS subject,
-                  CASE WHEN NOT @groupOnly OR @listeners::text[] IS NOT NULL AND n.audience @> @listeners THEN left(spoken.words,360) END AS quote
+                  CASE WHEN length(spoken.words)<=1200 AND (NOT @groupOnly OR @listeners::text[] IS NOT NULL AND n.audience @> @listeners)
+                    THEN spoken.words END AS quote
                 FROM named n CROSS JOIN LATERAL (SELECT regexp_replace(n.words,'\*[^*]+\*','','g') AS words) spoken
                 CROSS JOIN LATERAL regexp_matches(lower(spoken.words),@news,'g') m
                 WHERE @hasWorld AND n.day=@day AND n.speaker<>@a AND (n.mode='group' OR NOT @groupOnly AND n.n>0)
@@ -126,15 +127,17 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
               'eventWitnesses',(SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT id AS source,day,description FROM eligible_daily,q
                 WHERE @hasWorld AND kind='worldEvent' AND (to_tsvector('english',description) @@ q.speech OR to_tsvector('english',description) @@ q.events)
                 ORDER BY ts_rank(to_tsvector('english',description),q.speech) DESC,day DESC,observed DESC LIMIT 2)x),
-              'eventAccounts',(SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT source,day,name AS speaker,addressed,words AS quote FROM named,q
+              'eventAccounts',(SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT source,day,name AS speaker,addressed,spoken.quote FROM named CROSS JOIN q
+                CROSS JOIN LATERAL (SELECT regexp_replace(named.words,'\*[^*]+\*','','g') AS quote) spoken
                 WHERE @recallSpeech AND (@listeners::text[] IS NULL OR mode='group' AND audience @> @listeners::text[])
-                  AND to_tsvector('english',words) @@ q.events
+                  AND (source_type<>'turn' OR n>0) AND length(spoken.quote)<=1200 AND to_tsvector('english',spoken.quote) @@ q.events
                 ORDER BY at DESC,seq DESC,n DESC LIMIT 2)x),
               'heardToday',(SELECT jsonb_agg(jsonb_strip_nulls(to_jsonb(x)-'recency'-'at') ORDER BY at) FROM (
                 SELECT fresh.*,row_number() OVER(PARTITION BY subject ORDER BY at DESC,source DESC) AS recency FROM (
                   SELECT DISTINCT ON(subject,speaker_key) source,day,speaker,subject,quote,at FROM reports
                   ORDER BY subject,speaker_key,at DESC,source DESC) fresh)x WHERE recency<=2),
-              'heardSpeech',(SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT source,session,day,mode,name AS speaker,audience,addressed,left(words,360) AS quote
+              'heardSpeech',(SELECT jsonb_agg(jsonb_strip_nulls(to_jsonb(x))) FROM (SELECT source,session,day,mode,name AS speaker,audience,addressed,
+                    CASE WHEN length(words)<=1200 THEN words END AS quote
                 FROM named,q WHERE @recallSpeech AND (@listeners::text[] IS NULL OR audience @> @listeners::text[]) AND (mode='group' OR (NOT @groupOnly AND (day<@earliest OR source_type='event'))) AND
                     to_tsvector('english',words||' '||name) @@ q.speech
                 ORDER BY ts_rank(to_tsvector('english',words||' '||name),q.speech) DESC,at DESC,seq DESC,n DESC LIMIT 3)x),

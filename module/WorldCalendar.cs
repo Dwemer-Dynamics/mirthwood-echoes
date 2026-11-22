@@ -39,6 +39,7 @@ namespace Mirthwood.Echoes
         {
             internal string Title;
             internal int Season, Day;
+            internal bool Jousting;
 
             internal JObject Date(int year, bool local) => Event(Title, "posted", "public notice", Season, Day, year,
                 local ? (Title == Joust ? "Jousting Arena" : "Brightoak") : null);
@@ -97,8 +98,8 @@ namespace Mirthwood.Echoes
                 }
                 int day = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
                 int index = Array.IndexOf(Seasons, season);
-                if (index >= 0 && day > 0 && !notices.Any(n => n.Title == title && n.Season == index && n.Day == day))
-                    notices.Add(new Notice { Title = title, Season = index, Day = day });
+                if (index >= 0 && day > 0 && !notices.Any(n => n.Jousting == jousting && n.Title == title && n.Season == index && n.Day == day))
+                    notices.Add(new Notice { Title = title, Season = index, Day = day, Jousting = jousting });
             }
             return notices.Count > count;
         }
@@ -120,17 +121,21 @@ namespace Mirthwood.Echoes
         {
             int seasonLength = clock.YearLength / 4;
             int position = season * seasonLength + clock.DayOfSeason;
-            int previous = int.MinValue, next = int.MaxValue;
-            foreach (var notice in ReadNotices())
+            int Offset(Notice n) => n.Season * seasonLength + n.Day - position;
+            int Until(Notice n) => Offset(n) > 0 ? Offset(n) : Offset(n) + clock.YearLength;
+            var known = ReadNotices().Where(n => n.Day <= seasonLength && (n.Jousting ? joustBoard : festivalBoard)).OrderBy(Until);
+            var nextByKind = new JObject();
+            int previous = int.MinValue;
+            foreach (var notice in known)
             {
-                if (notice.Day > seasonLength || (notice.Title == Joust ? !joustBoard : !festivalBoard)) continue;
-                int offset = notice.Season * seasonLength + notice.Day - position;
+                int offset = Offset(notice);
                 if (offset == 0) today[notice.Title] = notice.Date(clock.YearNumber, local);
-                int after = offset > 0 ? offset : offset + clock.YearLength;
-                if (after < next)
+                string kind = notice.Jousting ? "joust" : "festival";
+                if (nextByKind[kind] == null)
                 {
-                    next = after;
-                    snapshot["nextNotice"] = notice.Date(clock.YearNumber + (offset > 0 ? 0 : 1), local);
+                    var posted = notice.Date(clock.YearNumber + (offset > 0 ? 0 : 1), local);
+                    if (!nextByKind.HasValues) snapshot["nextNotice"] = posted.DeepClone();
+                    nextByKind[kind] = posted;
                 }
                 int before = offset < 0 ? offset : offset - clock.YearLength;
                 int year = clock.YearNumber - (offset < 0 ? 0 : 1);
@@ -140,6 +145,7 @@ namespace Mirthwood.Echoes
                     snapshot["previousNotice"] = notice.Date(year, local);
                 }
             }
+            if (nextByKind.HasValues) snapshot["nextByKind"] = nextByKind;
         }
 
         // Each venue belongs to an actual instance created by a running public story.
@@ -316,6 +322,11 @@ namespace Mirthwood.Echoes
                 ["season"] = clock.SeasonLocalized, ["seasonIndex"] = season, ["dayOfSeason"] = clock.DayOfSeason,
                 ["year"] = clock.YearNumber, ["timeOfDay"] = clock.TimeOfDayString
             };
+            int seasonLength = clock.YearLength / 4;
+            if (clock.YearLength % 4 == 0 && clock.DayNumber >= 0 && clock.YearNumber >= 0 &&
+                clock.DayNumber / seasonLength == season && clock.DayNumber % seasonLength + 1 == clock.DayOfSeason &&
+                (long)clock.YearNumber * clock.YearLength + clock.DayNumber == day)
+                snapshot["calendar"]["daysInSeason"] = seasonLength;
             var today = new SortedDictionary<string, JObject>(StringComparer.Ordinal);
             string actor = Actor(speaker);
             if (actor != null)

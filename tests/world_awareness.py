@@ -1,17 +1,23 @@
 """Exercise the installed server's real prompt builders with two same-ID residents and a local model."""
 import json
+import http.client
+import socket
+import struct
+import threading
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 
-def check_world_awareness(api, model, campaign, speaker, twin, checked):
+def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     def uid():
         return str(uuid4())
 
     load = uid()
     world = dict(slot=1, created="2025-01-03T12:00:00", player="p", day=12, memorySession=load, cueHead=None)
-    day = dict(season="Spring", seasonIndex=0, dayOfSeason=14, year=1, timeOfDay="Morning")
+    day = dict(season="Spring", seasonIndex=0, dayOfSeason=14, daysInSeason=25, year=1, timeOfDay="Morning")
     joust = dict(title="Grand Joust", status="posted", source="public notice", place="Brightoak",
                  season="Spring", seasonIndex=0, dayOfSeason=14, year=1)
     market = dict(title="Traveling merchant", status="active", source="firsthand", when="earlier today")
@@ -26,7 +32,9 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked):
                         dict(joust, title="Wrong day", dayOfSeason=13),
                         dict(market, title="Hidden quest", source="quest list"),
                         dict(joust, title="Unannounced random raid", status="scheduled")],
-                 nextNotice=next_notice, previousNotice=previous, agentInventory="sealed private letter")
+                 nextNotice=next_notice, previousNotice=previous,
+                 nextByKind=dict(festival=next_notice,joust=later,random=dict(later,title="Unannounced visitor")),
+                 agentInventory="sealed private letter")
     answer = dict(warm="I hear you.", neutral="I hear you.", cool="I hear you.",
                   topic="Deep", commitments=[], flow="follow")
     model.mode = "stream"
@@ -61,6 +69,10 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked):
         assert [e["title"] for e in scene["today"]] == ["Grand Joust", "Traveling merchant", "Another posted gathering"], scene
         assert scene["today"][1]["when"] == "earlier today"
         assert scene["nextNotice"]["title"] == "Festival of Blossoms" and scene["previousNotice"]["title"] == "Yuletide"
+        assert set(scene["nextByKind"])=={"festival","joust"} and scene["nextByKind"]["festival"]==scene["nextNotice"]
+        follow = scene["nextByKind"]["joust"]
+        assert (follow["title"], follow["season"], follow["dayOfSeason"]) == ("Grand Joust", "Summer", 10)
+        assert scene["calendar"]["daysInSeason"] == 25 and "year" not in scene["previousNotice"]
         assert scene["landmarks"][0]["direction"] == "east" and scene["interruptedActivity"] == "tending a field"
         assert scene["nearbyPeople"] == ["Anna"] and scene["bystandersPresent"] and scene["place"]["interior"] is False
         assert all(key not in scene for key in ("world", "nativeId", "owner", "agentInventory"))
@@ -69,7 +81,11 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked):
     observation("gift", "The player's private gift was a turquoise locket.")
     observation("worldEvent", "I saw the player at the Grand Joust.")
     visitor = next(row["key"] for row in api("/api/saves/"+campaign+"/characters") if row["owner"]=="Visitor-NPC")
-    report = "I saw a merchant at the docks. Our private meeting place was the old kiln."
+    report = ("I heard the merchant had arrived at the docks. Our private meeting place was the old kiln. "
+              "The carter saw a blue wagon take the road to the landing, and two of the apprentices ran to find the dockmaster. "
+              "The ferryman could see crates piled up by the rails. Everyone at the inn had heard about that wagon by the time I got there. "
+              "That's the story I was asked to pass on. I've since spoken to the dockmaster myself. The merchant never came.")
+    assert 360<report.index("The merchant never came") and len(report)<=1200
     source = uid()
     api("/api/module/cue", dict(id=source, parent=world["cueHead"], kind="group", people=[], world=world,
         line=dict(session=uid(),seq=1,speaker=twin,to=speaker,audience=[speaker,twin],
@@ -88,6 +104,12 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked):
     assert api(private, dict(original, worldAwareness=dict(facts, weather="Snow"))) == prepared
     assert len(model.calls) == calls + 1
     checked("accepted private world, overlapping events on a sensitive turn, dated sighting, and one model call across replay")
+    news_question = "What did you hear about the merchant?"
+    model.samples[news_question] = json.dumps(answer)
+    api(private,turn(deepcopy(facts),text=news_question))
+    recall = private_recall()
+    for field in ("heardToday","heardSpeech"):
+        assert any(x.get("source")==source and x.get("quote")==report for x in recall[field]),field
 
     address = dict(id=uid(), target=dict(world=deepcopy(world), owner="East-NPC", nativeId="twin"),
                    head=world["cueHead"], card="Small Talk", cue="Greet the player.", worldAwareness=deepcopy(facts))
@@ -97,6 +119,43 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked):
     assert "old kiln" not in str(context())
     calls = len(model.calls)
     assert api("/api/dialogue/address", address) == result and len(model.calls) == calls
+
+    # Drop a real client connection after the local provider has accepted its request.
+    endpoint = urlsplit(base)
+    lost = dict(address,id=uid())
+    wire = json.dumps(lost).encode()
+    def open_address():
+        connection = http.client.HTTPConnection(endpoint.hostname,endpoint.port,timeout=5)
+        connection.request("POST","/api/dialogue/address",wire,{"Content-Type":"application/json"})
+        return connection
+
+    entered, release = threading.Event(), threading.Event()
+    gate_key = model.calls[-1]["messages"][1]["content"]
+    model.gates[gate_key] = (entered,release)
+    first = open_address()
+    try:
+        assert entered.wait(5), "the greeting did not reach the provider"
+        first.sock.setsockopt(socket.SOL_SOCKET,socket.SO_LINGER,struct.pack("ii",1,0))
+        first.close()
+        api("/api/dialogue/address",lost,status=425)
+    finally:
+        first.close()
+        release.set()
+        model.gates.pop(gate_key,None)
+    until = time.monotonic()+5
+    while True:
+        retry = open_address()
+        try:
+            response = retry.getresponse()
+            body = json.loads(response.read())
+        finally:
+            retry.close()
+        if response.status==200:
+            assert body==result and len(model.calls)==calls+1
+            break
+        assert response.status==425 and time.monotonic()<until, (response.status,body)
+        time.sleep(.05)
+    checked("disconnect after the greeting provider starts returns the original reply once across repeated requests")
 
     group = dict(id=uid(), session=uid(), head=world["cueHead"], campaign=campaign, actor=speaker,
                  audience=[speaker,twin], worldAwareness=deepcopy(facts))
@@ -108,7 +167,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked):
     api("/api/dialogue/group", dict(group,actor=twin),status=409)
     assert len(model.calls) == calls
     other = dict(facts,owner="West-NPC",place=dict(name="A quiet room",interior=True),today=[],nearbyPeople=[])
-    for key in ("weather","landmarks","sights","interruptedActivity","bystandersPresent","nextNotice","previousNotice"):
+    for key in ("weather","landmarks","sights","interruptedActivity","bystandersPresent","nextNotice","previousNotice","nextByKind"):
         other.pop(key)
     api("/api/dialogue/group", dict(group,id=uid(),actor=twin,worldAwareness=other))
     assert context()["worldAwareness"]["place"]["interior"] and "saw the player" not in str(context())
@@ -116,7 +175,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked):
     api("/api/dialogue/group", dict(group,id=uid(),audience=[speaker,visitor]))
     news = context()["yourMemory"]["heardToday"]
     assert any(x["subject"]=="merchant" and x["source"]==source and "quote" not in x for x in news)
-    assert "old kiln" not in str(context())
+    assert "old kiln" not in str(context()) and "The merchant never came" not in str(context())
     distant = dict(other,owner="Visitor-NPC",nativeId="linn")
     api("/api/dialogue/group", dict(group,id=uid(),actor=visitor,audience=[speaker,visitor],worldAwareness=distant))
     assert "heardToday" not in context()["yourMemory"] and "saw the player" not in str(context())
@@ -134,16 +193,28 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked):
     assert api("/api/quests/turn", dict(quest,worldAwareness=other)) == result and len(model.calls) == calls
     api("/api/quests/finish",dict(quest,action="continue"))
     event_reply = "I'll attend the Grand Joust."
-    model.samples["quest/"+event_reply] = json.dumps(dict(intent="accept",evidence=event_reply,reply="Excellent."))
+    model.samples["quest/"+event_reply] = json.dumps(dict(intent="accept",evidence="I'll attend",reply="Excellent."))
     question = dict(quest,id=uid(),parent=session,text=event_reply)
     question.pop("offer")
     incidental = api("/api/quests/turn",question)
     assert incidental["state"]=="ready" and incidental["action"]=="continue" and incidental["intent"]=="unclear"
     assert context()["nativeOffer"]==offer and context()["latestPlayerSpeech"]==event_reply
     api("/api/quests/finish",dict(question,action="continue"))
-    assent = "I'll bring the flour."
-    model.samples["quest/"+assent] = json.dumps(dict(intent="accept",evidence=assent,reply="Thank you."))
+    assent = "After the joust, I'll bring you the flour."
+    model.samples["quest/"+assent] = json.dumps(dict(intent="accept",evidence="I'll bring you the flour",reply="Thank you."))
     assert api("/api/quests/turn",dict(question,id=uid(),parent=question["id"],text=assent))["action"]=="accept"
+    other_session = uid()
+    second_offer = dict(quest,id=other_session,session=other_session)
+    assert api("/api/quests/turn",second_offer)["action"]=="continue"
+    api("/api/quests/finish",dict(second_offer,action="continue"))
+    refuse_event = "I won't attend the Grand Joust."
+    model.samples["quest/"+refuse_event] = json.dumps(dict(intent="decline",evidence="I won't",reply="Take care."))
+    event_choice = dict(question,id=uid(),session=other_session,parent=other_session,text=refuse_event)
+    assert api("/api/quests/turn",event_choice)["action"]=="continue"
+    api("/api/quests/finish",dict(event_choice,action="continue"))
+    refuse_job = "I'm going to the joust, so I won't take the flour job."
+    model.samples["quest/"+refuse_job] = json.dumps(dict(intent="decline",evidence="I won't take the flour job",reply="Take care."))
+    assert api("/api/quests/turn",dict(event_choice,id=uid(),parent=event_choice["id"],text=refuse_job))["action"]=="decline"
     checked("quest offer and action remain native with a separately bound world context and replay")
 
     # Wrong save, owner, day, history head, or retired load cannot contribute facts.
@@ -168,7 +239,29 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked):
     assert api(private,delayed)["state"]=="ready" and private_recall()["worldAwareness"]["day"]==12
     world.update(memorySession=uid(),cueHead=None,day=12)
     beat()
+    calls = len(model.calls)
+    api("/api/dialogue/address",address,status=409)
+    api("/api/dialogue/group",group,status=409)
+    assert len(model.calls) == calls
     assert api(private,turn(old))["state"] == "ready" and "worldAwareness" not in private_recall()
     api(private,turn(dict(facts,world=world)))
     assert "eventWitnesses" not in private_recall()
     checked("older module compatibility, identity and day binding, future notice rollover, retired load and two save branches on the same date")
+
+    world["day"]=58
+    beat()
+    fall = dict(season="Fall",seasonIndex=2,dayOfSeason=9,daysInSeason=25,year=0,timeOfDay="Night")
+    fall_joust = dict(joust,season="Fall",seasonIndex=2,dayOfSeason=12,year=0)
+    hallows = dict(fall_joust,title="All Hallows Eve",dayOfSeason=17)
+    both_boards = dict(facts,world=world,day=58,calendar=fall,today=[],nextNotice=fall_joust,
+                       nextByKind=dict(joust=fall_joust,festival=hallows))
+    festival_question = "And what is on the next festival notice?"
+    model.samples[festival_question] = json.dumps(answer)
+    api(private,turn(both_boards,text=festival_question))
+    actual = private_recall()["worldAwareness"]
+    assert actual["nextNotice"]==actual["nextByKind"]["joust"] and actual["nextNotice"]["dayOfSeason"]==12
+    festival = actual["nextByKind"]["festival"]
+    assert (festival["title"],festival["dayOfSeason"],festival["source"])==("All Hallows Eve",17,"public notice")
+    api(private,turn(dict(both_boards,nextNotice=hallows,nextByKind=dict(festival=hallows,joust=dict(fall_joust,source="story list")))))
+    assert set(private_recall()["worldAwareness"]["nextByKind"])=={"festival"}
+    checked("Fall 9 follow-up finds both the Fall 12 joust and Fall 17 festival; a visitor gets only a known public board")

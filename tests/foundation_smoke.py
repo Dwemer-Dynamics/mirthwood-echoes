@@ -348,7 +348,7 @@ for line in sys.stdin:
                     from quest_dialogue import check_quest_guards
                     check_quest_guards(api,Model,say,twin,checked)
                     from world_awareness import check_world_awareness
-                    check_world_awareness(api,Model,c2,a,twin,checked)
+                    check_world_awareness(api,Model,c2,a,twin,checked,base)
                     profile["endpoint"]=endpoint.replace("127.0.0.1","localhost")
                     api("/api/providers/openai_compatible",profile,"PUT",204)
                     assert api("/api/providers/openai_compatible")["hasKey"] is False

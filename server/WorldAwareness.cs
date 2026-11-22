@@ -11,7 +11,7 @@ internal static class SpeakerWorld
         worldAwareness is what this resident can know at this moment. Answer the player's last point first. Follow an ongoing personal subject, especially grief or a disclosure. When invited, one fitting local detail is enough. Once mentioned, let it rest until asked, a detail changes, or there is a fresh angle. Answer direct follow-ups in your own words.
         Use place for where you are now (town in the profile is home). Describe only listed sights, weather, people and directions. A visible person has disclosed nothing. interruptedActivity was what you were doing before this conversation. Its outcome is unknown.
         heardToday identifies named people you heard discussing an event. With a quote, keep the speaker's actual claim, question or uncertainty. With only a subject, you know they mentioned it. Neither proves the event happened. Discuss dates naturally by season and day.
-        When asked what's on, cover the relevant today entries. A public notice gives an advertised date. It cannot prove attendance or a start. Report status from its source. "Earlier today" gives the time of the report or sighting. Its present status is unknown. An ended event is over. A cancellation needs confirmation. nextNotice is a plan. previousNotice gives a past posted date. Keep unannounced timing unknown. Attribute heardSpeech and dated accounts to their speakers. A plan or promise is a reason to ask whether it happened. Say "I saw you" only with your own recorded observation of that person there. Keep personal follow-ups for privacy when others are nearby.
+        When asked what's on, cover the relevant today entries. A public notice gives an advertised date. It cannot prove attendance or a start. Report status from its source. "Earlier today" gives the time of the report or sighting. Its present status is unknown. An ended event is over. A cancellation needs confirmation. nextNotice is the nearest advertised event overall. For a question about the next festival or joust, use its entry in nextByKind. previousNotice gives a past posted date. Keep unannounced timing unknown. Attribute heardSpeech and dated accounts to their speakers. A plan or promise is a reason to ask whether it happened. Say "I saw you" only with your own recorded observation of that person there. Keep personal follow-ups for privacy when others are nearby.
         """;
 
     static string? Label(JsonNode? node,int limit=120) =>
@@ -84,6 +84,8 @@ internal static class SpeakerWorld
         var calendar=new JsonObject();
         var nativeDate=data["calendar"] as JsonObject;
         AddDate(calendar,nativeDate);
+        if(Number(nativeDate?["daysInSeason"],1,366) is int length && length>=calendar.I("dayOfSeason"))
+            calendar["daysInSeason"]=length;
         AddText(calendar,nativeDate,"timeOfDay",64);
         if(calendar.Count>0)result["calendar"]=calendar;
         var place=new JsonObject();
@@ -115,9 +117,14 @@ internal static class SpeakerWorld
             var order=DateOrder(entry,nativeDate);
             if(field=="nextNotice"?order>0:order<0)result[field]=posted;
         }
+        var nextByKind=new JsonObject();
+        foreach(string kind in new[]{"festival","joust"})
+            if(data["nextByKind"] is JsonObject boards && boards[kind] is JsonObject entry &&
+               Event(entry,true) is {} posted && DateOrder(entry,nativeDate)>0)nextByKind[kind]=posted;
+        if(nextByKind.Count>0)result["nextByKind"]=nextByKind;
         // The ordinary HUD shows the day and season. The native zero-based year still
         // orders adjacent seasons correctly, but is not a spoken date on that display.
-        foreach(var date in today.OfType<JsonObject>().Concat(new[]{calendar,result["nextNotice"],result["previousNotice"]}.OfType<JsonObject>()))
+        foreach(var date in today.Concat(nextByKind.Select(pair=>pair.Value)).Append(calendar).Append(result["nextNotice"]).Append(result["previousNotice"]).OfType<JsonObject>())
             if(date["year"]!=null && date.I("year")==0)date.Remove("year");
         return result;
     }
@@ -130,7 +137,8 @@ internal static class SpeakerWorld
     {
         if(calendar==null || Number(calendar["year"],0,10000) is not int year ||
            Number(entry["year"],0,10000) is not int advertisedYear ||
-           Number(calendar["dayOfSeason"],1,366) is not int day)return null;
+           Number(calendar["dayOfSeason"],1,366) is not int day ||
+           Number(calendar["daysInSeason"],1,366) is int length && (day>length || entry.I("dayOfSeason")>length))return null;
         if(advertisedYear!=year)return advertisedYear.CompareTo(year);
         if(entry.S("season")==calendar.S("season"))return entry.I("dayOfSeason").CompareTo(day);
         int? current=Number(calendar["seasonIndex"],0,3),other=Number(entry["seasonIndex"],0,3);
@@ -160,6 +168,7 @@ public sealed partial class Conversation
         if(input["id"]==null)return await generate(ct);
         Guid id=input.Id();
         var world=(input["worldAwareness"] as JsonObject)?["world"] as JsonObject;
+        if(world==null && mode=="address")world=input["target"]?["world"] as JsonObject;
         var request=(JsonObject)input.DeepClone();
         request.Remove("worldAwareness");
         var binding=new JsonArray(mode,request,world.S("memorySession"));
@@ -167,24 +176,42 @@ public sealed partial class Conversation
         string? load=Guid.TryParse(world.S("memorySession"),out var session)?session.ToString():null;
         var args=new (string,object?)[]{("id",id),("binding",binding.ToJsonString()),("c",campaign),("load",load)};
         const string digest="sha256(convert_to(@binding::jsonb::text,'UTF8'))";
-        int won=await db.Run("INSERT INTO resident_reply_cache(id,campaign,load_id,binding) SELECT @id,@c,@load,"+digest+"""
-             WHERE NOT EXISTS(SELECT FROM cue_events WHERE campaign=@c AND id=@id AND dialogue_expired)
-               AND NOT EXISTS(SELECT FROM dialogue_clock WHERE campaign=@c AND @load::text=ANY(retired_loads))
-             ON CONFLICT DO NOTHING
-            """,args);
+        const string current="""
+            NOT EXISTS(SELECT FROM cue_events WHERE campaign=@c AND id=@id AND dialogue_expired)
+            AND NOT EXISTS(SELECT FROM dialogue_clock WHERE campaign=@c AND @load::text=ANY(retired_loads))
+            """;
+        int won=await db.Run("INSERT INTO resident_reply_cache(id,campaign,load_id,binding) SELECT @id,@c,@load,"+digest+
+            " WHERE "+current+" ON CONFLICT DO NOTHING",args);
+        JsonObject? response;
         if(won==0){
-            var existing=await db.One("SELECT jsonb_build_object('matches',binding="+digest+",'reply',reply)::text FROM resident_reply_cache WHERE id=@id",args);
+            var existing=await db.One("SELECT jsonb_build_object('matches',binding="+digest+
+                ",'reply',reply)::text FROM resident_reply_cache WHERE id=@id AND campaign=@c AND "+current,args);
             if(existing==null)throw new UserError("This speaker turn has retired. Start a new turn.",409);
             if(existing["matches"]?.GetValue<bool>()!=true)throw new UserError("That request belongs to a different speaker turn.",409);
-            return existing["reply"] as JsonObject??throw new UserError("The resident is preparing this line.",425);
+            response=existing["reply"] as JsonObject??throw new UserError("The resident is preparing this line.",425);
+        }else{
+            // The accepted draw belongs to the turn. A lost HTTP connection releases its
+            // waiter while the original provider request finishes and saves its answer.
+            response=await Complete().WaitAsync(ct);
         }
-        try{
-            var result=await generate(mode=="group"?CancellationToken.None:ct);
+        if(response["error"]!=null)throw new UserError(response.S("error"),response.I("status"));
+        return response;
+
+        async Task<JsonObject> Complete()
+        {
+            JsonObject result;
+            try{result=await generate(CancellationToken.None);}
+            catch(UserError e) when(e.Status==425){
+                // A preceding group cue has not reached the server; no draw has started.
+                await db.Run("DELETE FROM resident_reply_cache WHERE id=@id AND reply IS NULL",("id",id));
+                return new JsonObject{["error"]=e.Message,["status"]=e.Status};
+            }
+            catch(Exception e){
+                result=new JsonObject{["error"]=e is UserError?e.Message:"The resident could not finish this line.",
+                    ["status"]=e is UserError failure?failure.Status:502};
+            }
             await db.Run("UPDATE resident_reply_cache SET reply=@reply::jsonb WHERE id=@id",("id",id),("reply",result.ToJsonString()));
             return result;
-        }catch{
-            await db.Run("DELETE FROM resident_reply_cache WHERE id=@id AND reply IS NULL",("id",id));
-            throw;
         }
     }
 

@@ -258,7 +258,12 @@ namespace Mirthwood.Echoes
                         if(Time.unscaledTime<timeout){yield return new WaitForSecondsRealtime(.25f);continue;}
                         GroupRetry("The resident is still thinking.");yield break;
                     }
-                    if(answer==null){GroupRetry(Error(request,"The speaker lost their train of thought."));yield break;}
+                    if(answer==null){
+                        // A confirmed server error ends this attempt. Tab explicitly starts a new draw.
+                        // A transport loss keeps the accepted ID so its first reply can be recovered.
+                        if(request.responseCode>=400 && request.responseCode!=425)pendingGroupTurn=null;
+                        GroupRetry(Error(request,"The speaker lost their train of thought."));yield break;
+                    }
                 }
                 break;
             }
