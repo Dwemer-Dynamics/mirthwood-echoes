@@ -26,9 +26,13 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
     public async Task Heartbeat(JsonNode? n)
     {
         var w=n?["world"];
+        bool changedDay=false;
+        if(w!=null && Guid.TryParse(w.S("memorySession"),out var load)){
+            var accepted=await DialogueRetention.ObserveDay(db,World(w),w.I("day"),load.ToString());
+            if(accepted==null)return;
+            changedDay=accepted.GetValue<bool>();
+        }
         Volatile.Write(ref beat,new(n.Required("version",64),n.I("hooks",0),n.I("dropped",0),DateTime.UtcNow,w==null?null:World(w),w?.I("day")));
-        if(w!=null && Guid.TryParse(w.S("memorySession"),out var load) &&
-            await DialogueRetention.ObserveDay(db,World(w),w.I("day"),load.ToString())>0)MemoryCompactor.DayChanged();
         if(w is JsonObject live && live.ContainsKey("cueHead"))
             await db.Run("UPDATE campaigns SET cue_live=@h::uuid,cue_seen=now() WHERE id=@c",("h",CueHistory.OptionalId(w["cueHead"])),("c",World(w)));
         if(w!=null && w.I("yearLength") is >0 and <=10000)
@@ -39,6 +43,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                 WHERE id=@c AND year_length IS DISTINCT FROM @length
                 """,
                 ("length",w.I("yearLength")),("c",World(w)));
+        if(changedDay)MemoryCompactor.DayChanged();
     }
     public async Task<JsonNode> Resolve(JsonNode? n)
     {

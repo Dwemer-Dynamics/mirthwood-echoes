@@ -31,6 +31,9 @@ class Writer(BaseHTTPRequestHandler):
         elif "heardInOrder" in player:
             text=json.dumps({"words":"Who told you about the mill?","to":"player","ownTopic":"Intellectual",
                              "receivedTopic":"Small Talk","farewell":"Tell me about it another day."})
+        elif player=="Do you still keep a stone from the river?":
+            text=json.dumps({"topic":"Small Talk","warm":"My favorite color is ruby.","neutral":"I do.","cool":"Sometimes.","commitments":[],
+                             "learned":[{"speaker":"npc","subject":"self","facet":"favorite color","value":"ruby","quote":"My favorite color is ruby."}]})
         elif player.startswith("Do you still keep"):
             text=json.dumps({"topic":"Small Talk","warm":"I do.","neutral":"I do.","cool":"I do.","commitments":[]})
         self.wfile.write(json.dumps({"choices":[{"message":{"content":text}}]}).encode())

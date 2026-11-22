@@ -109,7 +109,7 @@ public sealed partial class Conversation
         await using var tx=await conn.BeginTransactionAsync();
         await using(var gate=Database.Command(conn,"SELECT pg_advisory_xact_lock(hashtextextended(@c,17))",("c",c)))await gate.ExecuteNonQueryAsync();
         await using(var receipt=Database.Command(conn,"""
-            SELECT CASE WHEN dialogue_expired THEN parent IS NOT DISTINCT FROM @p::uuid AND packet_digest=sha256(convert_to(@j::jsonb::text,'UTF8')) END
+            SELECT CASE WHEN packet_digest IS NOT NULL THEN parent IS NOT DISTINCT FROM @p::uuid AND packet_digest=sha256(convert_to(@j::jsonb::text,'UTF8')) END
             FROM cue_events WHERE campaign=@c AND id=@id FOR UPDATE
             """,("c",c),("id",id),("p",parent),("j",canonical.ToJsonString()))){
             if(await receipt.ExecuteScalarAsync() is bool same){

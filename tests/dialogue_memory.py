@@ -90,6 +90,13 @@ def check(api, beat, world, campaign, residents, sql, calls):
         prompt=json.loads(next(call["messages"][1]["content"] for call in reversed(calls) if "heardInOrder" in call["messages"][1]["content"]))
         assert ("plum tart" in str(prompt["yourMemory"].get("characterKnowledge",[])))==allowed
     full_head=world["cueHead"]
+    # Unseen alternatives and model annotations alone never grant knowledge.
+    alternate="Do you still keep a stone from the river?"
+    conditional=dict(id=str(uuid4()),campaign=campaign,actor=averil,text=alternate)
+    assert api("dialogue/prepare",conditional)["state"]=="ready"
+    assert "ruby" not in values(averil)
+    assert api("dialogue/finish",dict(conditional,reaction="neutral"))["reply"]=="I do."
+    assert "ruby" not in values(averil)
 
     # A native return card may nominate an interest without the player naming it.
     native = dict(id=str(uuid4()), campaign=campaign, actor=averil, text="Do you still keep a quiet afternoon?",
@@ -113,6 +120,10 @@ def check(api, beat, world, campaign, residents, sql, calls):
     # Restoring an earlier save consumes no days. Reaching the next date in that load consumes one.
     world["memorySession"]=str(uuid4());beat(25)
     assert clock()==elapsed
+    current_load=world["memorySession"]
+    world["memorySession"]=load;beat(65)
+    assert clock()==elapsed
+    world["memorySession"]=current_load;beat(25)
     fresh=say("The alder tree has a crooked limb.")
     beat(26)
     until(lambda: sql("SELECT dialogue_expired FROM turns WHERE id='"+old["id"]+"'")=="t")

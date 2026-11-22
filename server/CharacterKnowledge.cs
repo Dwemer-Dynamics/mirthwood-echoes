@@ -44,7 +44,7 @@ internal static class CharacterKnowledge
         """ + Visible + ") sightings ORDER BY subject,speaker,facet,lower(value),stance,day DESC,learned_at DESC,speech_position DESC,source DESC) v) history WHERE facet " + (moments ? "=" : "<>") + "'major moment'";
 
     // Never replace an actor's saved identity with their display name. Names in reports must resolve uniquely.
-    internal sealed record Line(Guid Source, Guid? Anchor, int Day, DateTimeOffset At, string Speaker, string Words, string[] Audience, string Mode);
+    internal sealed record Line(Guid Source, Guid? Anchor, int Day, DateTimeOffset At, string Speaker, string Words, string[] Audience, string Mode,string To="");
     internal sealed record Detail(string Subject,string Facet,string Value,string Stance,string Quote,string Question="");
 
     static readonly Regex Favorite = new(@"^(?:(?<who>my|[\p{L}-]+['’]s)\s+favou?rite\s+(?<facet>food|dish|meal|colou?r)\s+(?<tense>is|was|used to be)\s+(?<value>.+?)|(?<value>.+?)\s+(?<tense>is|was|used to be)\s+(?<who>my|[\p{L}-]+['’]s)\s+favou?rite(?:\s+(?<facet>food|dish|meal|colou?r))?)[.!…]*$",RegexOptions.IgnoreCase);
@@ -114,7 +114,7 @@ internal static class CharacterKnowledge
                 continue;
             }
             // A short answer can only identify a preference for people who heard its question.
-            if(prior!=null&&prior.Speaker!=line.Speaker&&(line.Speaker=="player"||prior.Audience.Contains(line.Speaker))&&prior.Words.TrimEnd().EndsWith('?')&&
+            if(prior!=null&&prior.Speaker!=line.Speaker&&(prior.To is "" or "group"||prior.To==line.Speaker)&&(line.Speaker=="player"||prior.Audience.Contains(line.Speaker))&&prior.Words.TrimEnd().EndsWith('?')&&
                 Regex.Match(prior.Words,@"\byour favou?rite (food|dish|meal|colou?r)\b",RegexOptions.IgnoreCase) is {Success:true} question){
                 string value=Clean(quote);
                 if(PlainValue(value)&&value.Split(' ').Length<=4&&
@@ -233,7 +233,7 @@ internal static class CharacterKnowledge
 
     internal static JsonArray ForSpeaker(JsonArray hints,string speaker)=>new(hints.Where(h=>h.S("speaker")==speaker).Select(h=>h!.DeepClone()).ToArray());
     internal static Line FromGroup(Guid id,int day,JsonNode line)=>new(id,id,day,DateTimeOffset.Parse(line.S("at")),line.S("speaker"),line.S("words"),
-        line["audience"]!.AsArray().Select(n=>n!.GetValue<string>()).ToArray(),"group");
+        line["audience"]!.AsArray().Select(n=>n!.GetValue<string>()).ToArray(),"group",line.S("to"));
 
     internal static async Task Group(NpgsqlConnection conn,string c,Guid id,Guid? parent,int day,JsonNode line)
     {
@@ -243,8 +243,8 @@ internal static class CharacterKnowledge
             await using var cmd=Database.Command(conn,CueHistory.Query("""
                 SELECT e.id,(payload->>'day')::int,(payload->'line')::text FROM cue_events e JOIN ancestry h ON e.id=h.id
                 WHERE e.campaign=@c AND payload->>'kind'='group' AND payload->'line'->>'session'=@session
-                  AND payload->'line' ? 'words' ORDER BY (payload->'line'->>'seq')::int DESC LIMIT 2
-                """),("c",c),("a",heard.Audience[0]),("session",line.S("session")),("explicit",true),("head",parent));
+                  AND payload->'line' ? 'words' AND (@speaker='player' OR payload->'line'->'audience' ? @speaker) ORDER BY (payload->'line'->>'seq')::int DESC LIMIT 2
+                """),("c",c),("a",heard.Audience[0]),("speaker",heard.Speaker),("session",line.S("session")),("explicit",true),("head",parent));
             await using var reader=await cmd.ExecuteReaderAsync();
             while(await reader.ReadAsync())previous.Add(FromGroup(reader.GetGuid(0),reader.GetInt32(1),JsonNode.Parse(reader.GetString(2))!));
         }

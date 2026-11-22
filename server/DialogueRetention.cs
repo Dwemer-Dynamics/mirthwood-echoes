@@ -8,6 +8,7 @@ internal static class DialogueRetention
         ALTER TABLE personality_turning_points ADD COLUMN IF NOT EXISTS evidence jsonb;
         CREATE TABLE IF NOT EXISTS dialogue_clock(campaign text PRIMARY KEY REFERENCES campaigns, day int NOT NULL,
           load_id text NOT NULL, elapsed bigint NOT NULL DEFAULT 0);
+        ALTER TABLE dialogue_clock ADD COLUMN IF NOT EXISTS retired_loads text[] NOT NULL DEFAULT '{}';
         ALTER TABLE turns ADD COLUMN IF NOT EXISTS dialogue_age bigint, ADD COLUMN IF NOT EXISTS dialogue_expired boolean NOT NULL DEFAULT false,
           ADD COLUMN IF NOT EXISTS knowledge_reviewed boolean NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS request_digest bytea;
         ALTER TABLE cue_events ADD COLUMN IF NOT EXISTS dialogue_age bigint, ADD COLUMN IF NOT EXISTS dialogue_expired boolean NOT NULL DEFAULT false,
@@ -30,14 +31,20 @@ internal static class DialogueRetention
         ALTER TABLE dialogue_day_recaps ADD COLUMN IF NOT EXISTS retry_at timestamptz;
         """;
 
-    internal static Task<int> ObserveDay(Database db,string campaign,int day,string session)=>db.Run("""
-        INSERT INTO dialogue_clock(campaign,day,load_id) SELECT id,@day,@session FROM campaigns WHERE id=@c
+    internal static Task<JsonNode?> ObserveDay(Database db,string campaign,int day,string session)=>db.One("""
+        WITH advanced AS (INSERT INTO dialogue_clock(campaign,day,load_id) SELECT id,@day,@session FROM campaigns WHERE id=@c
         ON CONFLICT(campaign) DO UPDATE SET
           elapsed=dialogue_clock.elapsed+CASE WHEN dialogue_clock.load_id=excluded.load_id
             THEN greatest(0,excluded.day-dialogue_clock.day) ELSE 0 END,
           day=CASE WHEN dialogue_clock.load_id=excluded.load_id THEN greatest(dialogue_clock.day,excluded.day) ELSE excluded.day END,
+          retired_loads=CASE WHEN dialogue_clock.load_id<>'' AND dialogue_clock.load_id<>excluded.load_id
+            THEN array_append(dialogue_clock.retired_loads,dialogue_clock.load_id) ELSE dialogue_clock.retired_loads END,
           load_id=excluded.load_id
-        WHERE dialogue_clock.load_id<>excluded.load_id OR excluded.day>dialogue_clock.day
+        WHERE NOT excluded.load_id=ANY(dialogue_clock.retired_loads) AND
+          (dialogue_clock.load_id<>excluded.load_id OR excluded.day>dialogue_clock.day) RETURNING 1)
+        SELECT CASE WHEN EXISTS(SELECT FROM advanced) THEN 'true'
+          WHEN EXISTS(SELECT FROM dialogue_clock WHERE campaign=@c AND
+            (@session=ANY(retired_loads) OR load_id=@session AND day>@day)) THEN NULL ELSE 'false' END
         """,("c",campaign),("day",day),("session",session));
 
     internal static async Task Maintain(Database db,CancellationToken ct)
@@ -116,18 +123,28 @@ internal static class DialogueRetention
                 EXISTS(SELECT FROM old_cues e WHERE e.campaign=m.campaign AND m.sources ? e.id::text));
             CREATE TEMP TABLE old_entries ON COMMIT DROP AS
               SELECT campaign,day,session FROM old_turns UNION SELECT campaign,day,session FROM old_cues;
+            -- A later turn can carry an earlier passing line in its native request. Retain the original request identity.
+            UPDATE turns t SET request_digest=coalesce(t.request_digest,sha256(convert_to(jsonb_build_array(t.player_text,t.cue_binding)::text,'UTF8'))),
+              cue_binding=t.cue_binding-'remark' FROM old_cues x WHERE t.campaign=x.campaign AND
+              t.cue_binding->'remark'->>'kind'='address' AND t.cue_binding->>'event'=x.id::text;
+            UPDATE turns t SET talk=t.talk-'recentSpeech' WHERE t.state='complete' AND t.talk ? 'recentSpeech'
+              AND EXISTS(SELECT FROM old_turns x WHERE x.campaign=t.campaign);
             DELETE FROM resident_recaps r USING old_entries x WHERE r.kind<>'daily' AND r.campaign=x.campaign AND
               r.entry IN (x.session,'day-'||x.day,'day-'||x.day||'-'||x.session);
             DELETE FROM dialogue_day_recaps r USING old_entries x WHERE r.campaign=x.campaign AND r.day=x.day;
             UPDATE turns t SET dialogue_expired=true,state=CASE WHEN t.state IN ('ready','pending') THEN 'interrupted' ELSE t.state END,
-              request_digest=sha256(convert_to(jsonb_build_array(t.player_text,t.cue_binding)::text,'UTF8')),
+              request_digest=coalesce(request_digest,sha256(convert_to(jsonb_build_array(t.player_text,t.cue_binding)::text,'UTF8'))),
               player_text='',reply=NULL,cue_binding=t.cue_binding-'remark',
               talk=CASE WHEN t.talk IS NULL THEN NULL ELSE jsonb_strip_nulls(jsonb_build_object('topic',t.talk->'topic','flow',t.talk->'flow','handoff',CASE WHEN jsonb_typeof(t.talk->'handoff')='object' THEN (t.talk->'handoff')-'cue' END)) END,
               quest_offer=t.quest_offer-'line'-'evidence'-'learned'
               FROM old_turns x WHERE t.id=x.id;
             UPDATE daily_events d SET description='' FROM old_cues x WHERE d.campaign=x.campaign AND d.cue_anchor=x.id AND d.kind='address';
             DELETE FROM cue_unindexed_people p USING old_cues x WHERE p.campaign=x.campaign AND p.event=x.id AND p.kind='address';
-            UPDATE cue_events e SET dialogue_expired=true,packet_digest=sha256(convert_to(e.payload::text,'UTF8')),
+            UPDATE cue_events e SET packet_digest=coalesce(packet_digest,sha256(convert_to(e.payload::text,'UTF8'))),
+              payload=jsonb_set(e.payload,'{line}',(e.payload->'line')-'learned'-'priorPromise'-'proposal')
+              WHERE e.knowledge_reviewed AND e.payload->>'kind'='group' AND (e.payload->'line' ?| ARRAY['learned','priorPromise','proposal'])
+                AND EXISTS(SELECT FROM old_cues x WHERE x.campaign=e.campaign AND x.session=e.payload->'line'->>'session');
+            UPDATE cue_events e SET dialogue_expired=true,packet_digest=coalesce(packet_digest,sha256(convert_to(e.payload::text,'UTF8'))),
               payload=CASE WHEN e.payload->>'kind'='group' THEN jsonb_set(e.payload,'{line}',
                 (e.payload->'line')-'words'-'learned'-'promise'-'proposal'-'priorPromise'-'priorProposal')
                 ELSE jsonb_set(e.payload,'{people}','[]'::jsonb) END FROM old_cues x WHERE (x.campaign,x.id)=(e.campaign,e.id);

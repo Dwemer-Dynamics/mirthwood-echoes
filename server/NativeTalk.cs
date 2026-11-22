@@ -104,8 +104,8 @@ public sealed partial class Conversation
 
     const string SameTalkRequest = """
          FROM turns WHERE id=@id AND campaign=@c AND actor=@a AND talk IS NOT NULL AND
-         (NOT dialogue_expired AND player_text=@w AND cue_binding IS NOT DISTINCT FROM @binding::jsonb OR
-            dialogue_expired AND request_digest=sha256(convert_to(jsonb_build_array(@w::text,@binding::jsonb)::text,'UTF8')))
+         (request_digest IS NULL AND NOT dialogue_expired AND player_text=@w AND cue_binding IS NOT DISTINCT FROM @binding::jsonb OR
+            request_digest=sha256(convert_to(jsonb_build_array(@w::text,@binding::jsonb)::text,'UTF8')))
         """;
     Task<JsonNode?> TalkState(Guid id,string c,string a,string words,JsonObject? binding)=>db.One("""
         SELECT jsonb_build_object( 'state',CASE WHEN dialogue_expired THEN 'expired' ELSE state END,'packet',talk,'reply',reply,'reaction',reaction)::text
