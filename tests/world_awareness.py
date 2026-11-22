@@ -376,7 +376,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
 
     world["cueHead"] = drystan_head
     beat()
-    asked_at_joust(dict(graham, today=[live_joust]), finish=True)
+    asked_at_joust(dict(graham, today=[underway]), finish=True)
     jouster = "a jouster at the Grand Joust"
     another_performer = witness.replace(juggler, jouster)
     observation("worldEvent", another_performer, dict(sighting, seen=jouster))
