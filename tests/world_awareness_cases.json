@@ -1,0 +1,203 @@
+{
+  "survey": {
+    "resident": "Averil",
+    "readPosters": true,
+    "turns": [
+      {
+        "words": "I've lost track of the days. What season is it, and is it early or late where we are?",
+        "check": "Compare the answer with the game's clock, season and part of day.",
+        "capture": true
+      },
+      {
+        "words": "Whereabouts are we? What's one landmark I could use to find my way back?",
+        "check": "Use only speaker-local and independently located landmarks."
+      },
+      {
+        "words": "Did I catch you in the middle of something?",
+        "check": "Name the activity at approach if observed. Leave an unverified errand open."
+      },
+      {
+        "words": "Have you seen a notice for the next festival or joust? What does the notice actually say?",
+        "check": "Distinguish the advertised date and location from today's activity."
+      },
+      {
+        "words": "I miss the afternoons I used to spend with my brother. Would you sit with me a moment?",
+        "check": "Stay with grief. Avoid an unsolicited calendar recital."
+      },
+      {
+        "words": "Thank you for listening. I should go. Goodbye, Averil.",
+        "check": "Close on Michael's parting.",
+        "capture": true
+      }
+    ]
+  },
+  "spring-joust": {
+    "resident": "Graham",
+    "startingDesire": "eager",
+    "readPosters": true,
+    "turns": [
+      {
+        "words": "I might come to the next joust. When do the notices say it's meant to be?",
+        "calendar": {
+          "season": "Spring",
+          "day": 13,
+          "time": 0.42
+        },
+        "check": "Compare the next posted date against the opened Grand Joust notice.",
+        "capture": true
+      },
+      {
+        "words": "I lost a good friend last spring. I still reach for his cup when I brew tea.",
+        "check": "Stay with grief. The applicable next notice remains in the input without an unsolicited switch."
+      },
+      {
+        "words": "A friend offered to visit. What could I do to make it easier to talk about him?",
+        "check": "Develop the same topic and refrain from repeating already volunteered event news."
+      },
+      {
+        "words": "What’s on in town today? Has anything actually started?",
+        "calendar": {
+          "season": "Spring",
+          "day": 14,
+          "time": 0.43
+        },
+        "check": "Distinguish posted for today from an active story. Include all applicable public entries.",
+        "capture": true
+      },
+      {
+        "words": "Were you there when it started, or is that what the poster says?",
+        "check": "Give the witnessed or public source. Avoid inventing attendance."
+      },
+      {
+        "words": "Do you know the date for the next one, if I miss this?",
+        "check": "Give the following independently advertised date."
+      },
+      {
+        "words": "The joust was on the notice. Did you see me there yesterday?",
+        "calendar": {
+          "season": "Spring",
+          "day": 15,
+          "time": 0.44
+        },
+        "check": "A previous statement of intent and a posted date do not establish attendance.",
+        "capture": true
+      },
+      {
+        "words": "Thanks for telling me what you know. I'll be on my way.",
+        "check": "Honor the player's departure."
+      }
+    ]
+  },
+  "posted-dates": {
+    "resident": "Graham",
+    "readPosters": true,
+    "turns": [
+      {
+        "words": "I'd like to see the joust. When do the notices say the next one will be?",
+        "calendar": { "season": "Spring", "day": 13, "time": 0.42 },
+        "check": "Give the actual posted date. A plan to go leaves attendance open.",
+        "capture": true
+      },
+      {
+        "words": "Is the joust on today? Do you know if it has started?",
+        "calendar": { "season": "Spring", "day": 14, "time": 0.43 },
+        "check": "Distinguish the posted date from a local observation of the active story.",
+        "capture": true
+      },
+      {
+        "words": "You remember I wanted to go. Did you actually see me at the joust yesterday?",
+        "calendar": { "season": "Spring", "day": 15, "time": 0.44 },
+        "check": "A stated intention and the poster cannot establish either person's attendance.",
+        "capture": true
+      }
+    ]
+  },
+  "ordinary": {
+    "resident": "Averil",
+    "turns": [
+      {
+        "words": "I woke before dawn. Is it still night here?",
+        "calendar": {
+          "season": "Spring",
+          "day": 20,
+          "time": 0.08
+        },
+        "check": "Use the speaker's verified native time of day."
+      },
+      {
+        "words": "Now that it’s getting light, what’s different outside?",
+        "calendar": {
+          "season": "Spring",
+          "day": 20,
+          "time": 0.33
+        },
+        "check": "Refresh clock and observable weather for this speaker."
+      },
+      {
+        "words": "Will a traveling merchant come here next week? Do you know on which day?",
+        "check": "Leave an unscheduled visit unknown unless the speaker has a dated public source."
+      },
+      {
+        "words": "What do the notices say about the Festival of Blossoms?",
+        "calendar": {
+          "season": "Spring",
+          "day": 21,
+          "time": 0.48
+        },
+        "check": "Distinguish the advertised festival from proof of active festivities."
+      },
+      {
+        "words": "I have to go. Take care.",
+        "check": "End naturally."
+      }
+    ]
+  },
+  "solstice": {
+    "resident": "Averil",
+    "turns": [
+      {
+        "words": "What does the village notice say is coming tomorrow?",
+        "calendar": {
+          "season": "Summer",
+          "day": 20,
+          "time": 0.72
+        },
+        "check": "Compare next notice to Summer Solstice on Summer 21."
+      },
+      {
+        "words": "I’m trying to mend things with a friend. Can you stay with me a little?",
+        "calendar": {
+          "season": "Summer",
+          "day": 21,
+          "time": 0.44
+        },
+        "check": "Today's public notice is in the prompt while the spoken reply follows the personal disclosure."
+      },
+      {
+        "words": "What did you mean by that? I want to understand.",
+        "check": "Deepen the preceding topic."
+      },
+      {
+        "words": "Shall we change the subject? What’s happening in town?",
+        "check": "Answer the invitation with relevant information."
+      },
+      {
+        "words": "Did you see it yourself?",
+        "check": "Distinguish the public date, an active event and personal attendance."
+      },
+      {
+        "words": "How about today? Is the celebration still happening?",
+        "calendar": {
+          "season": "Summer",
+          "day": 22,
+          "time": 0.4
+        },
+        "check": "Remove stale due-today status. Use native evidence for a continuing, ended or unknown event."
+      },
+      {
+        "words": "You've answered my questions. Goodbye.",
+        "check": "Close Talk."
+      }
+    ]
+  }
+}

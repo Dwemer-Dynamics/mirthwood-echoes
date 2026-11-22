@@ -70,6 +70,7 @@ def serve(token, saves, package, output):
                        MIRTHWOOD_ECHOES_DB="Host=/var/run/postgresql;Username=mirthwood_echoes;Database="+database,
                        MIRTHWOOD_ECHOES_PORT="17864",MIRTHWOOD_ECHOES_HARNESS_ID=token,MIRTHWOOD_ECHOES_STATE=temp,
                        MIRTHWOOD_ECHOES_CAPTURE_RECALL="1" if (Path(saves).parent/"memory-clock-test").is_file() else "0",
+                       MIRTHWOOD_ECHOES_CAPTURE_AWARENESS="1" if (Path(saves).parent/"world-awareness.json").is_file() else "0",
                        MIRTHWOOD_ECHOES_GAME=str((work/"game").resolve()),MIRTHWOOD_ECHOES_SAVES=saves)
             with (work/"server.log").open("w") as log:
                 process = subprocess.Popen(["/usr/bin/dotnet",str(app/"Mirthwood.Echoes.Server.dll")],cwd=app,env=env,
@@ -116,7 +117,7 @@ def send_line(token, words):
         tmp.unlink(missing_ok=True)
 
 
-def run(package, mode, resident=None, starting_desire=None, knowledge=False):
+def run(package, mode, resident=None, starting_desire=None, knowledge=False, awareness=None):
     import winreg
     token=uuid.uuid4().hex
     free_port()
@@ -138,6 +139,9 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
         assert digest(saves/p.name)==baseline[str(p)]
     write(session/"harness.json",dict(id=token,sourceSlot=0,sha256=digest(saves/"Slot0.savegame"),talkPort=17864,privateDiagnostics=True))
     if knowledge:(session/"memory-clock-test").touch()
+    if awareness:
+        write(session/"world-awareness.json",awareness.plan)
+        write(work/"world-awareness-plan.json",awareness.plan)
     if resident:
         (session/"resident.txt").write_text(resident,encoding="utf-8")
         if starting_desire:
@@ -162,7 +166,9 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
             except OSError: pass
             time.sleep(.4)
         else: raise RuntimeError("The private server did not index the copied save")
-        if mode not in ("interface","voices"):
+        if awareness:
+            awareness.configure(token,work)
+        elif mode not in ("interface","voices"):
             api("providers/codex_subscription",dict(defaultModel="gpt-6.1-terra",conversation="gpt-6.1-terra",
                                                     conversationEffort="medium",codexHost="windows"),"PUT")
             api("options",dict(provider="codex_subscription",replyTokens=96,dailyDays=2),"PUT")
@@ -181,6 +187,8 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
                     row=json.loads(reply_file.read_text(encoding="utf-8-sig"))
                     print(f"{resident}: {row['reply']}",flush=True);seen_reply+=1
                 if (session/f"ready-{seen_ready}").is_file():
+                    if awareness:
+                        send_line(token,awareness.words(seen_ready))
                     if knowledge:
                         words=[
                             "I like fishing. Plum tart is my favorite food. We landed a speckled trout beneath the alder footbridge.",
@@ -220,6 +228,9 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
         write(work/"probe.json",probe)
         for check in (probe["result"] or {}).get("checks",[]):print(check,flush=True)
         if probe["state"]!="passed":raise RuntimeError(mode+" check "+probe["state"])
+        if awareness:
+            awareness.verify(token,work,probe)
+            return
         if mode in ("interface","voices"):return
         if mode=="grouptalk":
             result=probe["result"]
@@ -281,6 +292,8 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
             while owned() and time.monotonic()<end:time.sleep(.7)
         (work/"stop-server").touch()
         server.wait(timeout=45)
+        if awareness and (session/"awareness-evidence").is_dir():
+            shutil.copytree(session/"awareness-evidence", work/"awareness-evidence")
         after={f:digest(Path(f)) for f in baseline}
         receipt=dict(run=token,before=baseline,after=after,unchanged=after==baseline,closed=not owned(),
                      databaseRemoved=server.returncode==0,module=digest(game/module) if (game/module).exists() else None)
