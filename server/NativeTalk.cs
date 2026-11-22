@@ -127,12 +127,14 @@ public sealed partial class Conversation
                 var sighting=new JsonObject{["title"]=item.S("title"),["status"]=item.S("status"),
                     ["when"]=when=="in sight now"?"during that conversation":"earlier that day"};
                 if(item["seen"] is {} seen)sighting["seen"]=seen.DeepClone();
+                if(when=="in sight now" && sighting["seen"]!=null && item["playerInSight"] is JsonValue player &&
+                   player.TryGetValue<bool>(out var inSight) && inSight)sighting["sawPlayer"]=true;
                 firsthand.Add(sighting);
                 if(firsthand.Count==6)break;
             }
         }
         if(firsthand.Count>0)scene["firsthand"]=firsthand;
-        if(scene.Count==0)return null;
+        // A timed visit with nothing in view can still precede a later firsthand sighting.
         scene["observedAt"]=observedAt;
         if(awareness["calendar"]?["timeOfDay"] is {} time)scene["timeOfDay"]=time.DeepClone();
         return scene;
@@ -142,12 +144,8 @@ public sealed partial class Conversation
     // preserve an earlier sighting here without turning the absence into a witnessed departure.
     static JsonObject? EarlierObservation(JsonObject previous,JsonObject current)
     {
-        // Three in-game hours cover a return visit. Keep the raw clock off the model input.
-        const double visitWindow=3.0/24;
-        if(previous["observedAt"] is not JsonValue prior || !prior.TryGetValue<double>(out var before) ||
-           current["observedAt"] is not JsonValue latest || !latest.TryGetValue<double>(out var now) ||
-           !double.IsFinite(before) || now<before || now-before>visitWindow)return null;
         var changed=new JsonObject();
+        if(previous["witnessedSince"] is JsonArray {Count:>0} witnesses)changed["witnessedSince"]=witnesses.DeepClone();
         foreach(string field in new[]{"place","weather","nearbyPeople","bystandersPresent","firsthand"}){
             if(previous[field] is not {} earlier || JsonNode.DeepEquals(earlier,current[field]))continue;
             if(earlier is JsonArray observations){

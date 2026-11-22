@@ -110,11 +110,50 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
             ),
             recent AS (
                 SELECT id AS turn,day,left(player_text,300) AS player,left(reply,600) AS npc,started,
-                    CASE WHEN @includeCues AND talk->>'deliveredContinuation'='true' THEN talk->'handoff'->>'cue' END AS "voicedCue",
-                    CASE WHEN @explicit AND day=@day AND cue_anchor=id AND cue_binding->>'session'=@observationLoad::text AND jsonb_typeof(talk->'observedScene')='object'
-                      THEN (talk->'observedScene') || jsonb_build_object('source',id,'day',day) END AS observed_scene
+                    CASE WHEN @includeCues AND talk->>'deliveredContinuation'='true' THEN talk->'handoff'->>'cue' END AS "voicedCue"
                 FROM turns WHERE NOT @groupOnly AND campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day AND state='complete' AND NOT dialogue_expired
                 ORDER BY started DESC,id DESC LIMIT @recentTurns
+            ), previous_turn AS (
+                SELECT t.id,h.depth FROM ancestry h JOIN turn_receipts t ON t.id=h.id AND t.cue_anchor=h.id
+                JOIN cue_events receipt ON receipt.campaign=@c AND receipt.id=h.id AND receipt.payload->>'kind'='talk'
+                WHERE @explicit AND NOT @groupOnly AND @observationLoad::text IS NOT NULL
+                  AND t.actor=@a AND t.talk IS NOT NULL AND t.state='complete'
+                ORDER BY h.depth LIMIT 1
+            ), previous_visit AS (
+                -- A witness between the accepted request and its spoken receipt has unknown order
+                -- relative to the statement. The two Talk clocks bound the comparison to three hours.
+                SELECT t.id,t.day,t.talk->'observedScene' AS scene,r.depth,accepted.depth AS accepted_depth
+                FROM previous_turn r JOIN turns t ON t.id=r.id
+                LEFT JOIN ancestry accepted ON accepted.id::text=t.cue_binding->>'head' AND accepted.depth>r.depth
+                WHERE t.day=@day AND t.cue_binding->>'session'=@observationLoad::text AND
+                  CASE WHEN jsonb_typeof(t.talk->'observedScene'->'observedAt')='number' THEN
+                    @observationTime::numeric-(t.talk->'observedScene'->>'observedAt')::numeric BETWEEN 0 AND 0.125 END
+            ), world_witnesses AS (
+                SELECT id AS source,day,description,cue_anchor,observed,ts_rank(to_tsvector('english',description),q.speech) AS relevance
+                FROM eligible_daily,q WHERE @hasWorld AND kind='worldEvent' AND
+                  (to_tsvector('english',description) @@ q.speech OR to_tsvector('english',description) @@ q.events)
+            ), witness_order AS (
+                SELECT w.id AS source,w.description,h.depth,v.depth AS visit_depth,v.accepted_depth,
+                  person.details->>'title' AS title,person.details->>'status' AS status,person.details->>'player' AS player
+                FROM previous_visit v CROSS JOIN eligible_daily w JOIN ancestry h ON h.id=w.cue_anchor
+                JOIN cue_events e ON e.campaign=@c AND e.id=h.id AND e.witness_load=@observationLoad::uuid
+                JOIN actors a ON a.campaign=@c AND a.key=@a JOIN campaigns c ON c.id=a.campaign
+                CROSS JOIN LATERAL (SELECT p->'details' AS details,p->>'description' AS description,count(*) OVER() AS matches
+                  FROM jsonb_array_elements(e.payload->'people') p WHERE p->>'owner'=a.owner AND p->>'nativeId'=a.native_id) person
+                WHERE w.kind='worldEvent' AND w.day=@day AND e.payload->>'kind'='worldEvent'
+                  AND person.matches=1 AND person.description=w.description AND person.details->>'source'='firsthand'
+                  AND person.details->>'day'=@day::text AND person.details->>'status' IN ('active','ended')
+                  AND nullif(person.details->>'title','') IS NOT NULL AND (
+                    NOT (person.details ? 'player') AND coalesce(person.details->'sawPlayer','false'::jsonb)='false'::jsonb OR
+                    person.details->'sawPlayer'='true'::jsonb AND person.details->>'player'=c.player)
+            ), already_known AS (
+                -- The performer can change while the resident still remembers seeing the same player there.
+                SELECT fresh.source,fresh.player IS NOT NULL AS saw_player FROM witness_order fresh
+                WHERE fresh.depth<fresh.visit_depth AND (
+                    EXISTS(SELECT FROM witness_order known WHERE known.depth>=known.accepted_depth
+                      AND (known.title,known.status)=(fresh.title,fresh.status) AND (fresh.player IS NULL OR known.player=fresh.player))
+                    OR fresh.player IS NOT NULL AND EXISTS(SELECT FROM previous_visit v,jsonb_array_elements(v.scene->'firsthand') sight
+                      WHERE sight->'sawPlayer'='true'::jsonb AND (sight->>'title',sight->>'status')=(fresh.title,fresh.status)))
             )
             SELECT jsonb_build_object(
               'daily', (SELECT coalesce(jsonb_agg(to_jsonb(x)),'[]') FROM (SELECT id AS source,day,kind,description FROM eligible_daily,q
@@ -126,9 +165,11 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
               'olderActivity',(SELECT to_jsonb(x) FROM (SELECT id AS source,day,kind,left(description,340) AS experience FROM eligible_daily,q
                 WHERE day<@earliest AND (day=@requestedDay::int OR to_tsvector('english',description) @@ q.speech)
                 ORDER BY (day=@requestedDay::int) DESC,ts_rank(to_tsvector('english',description),q.speech) DESC,day DESC,observed DESC LIMIT 1)x),
-              'eventWitnesses',(SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT id AS source,day,description FROM eligible_daily,q
-                WHERE @hasWorld AND kind='worldEvent' AND (to_tsvector('english',description) @@ q.speech OR to_tsvector('english',description) @@ q.events)
-                ORDER BY ts_rank(to_tsvector('english',description),q.speech) DESC,day DESC,observed DESC LIMIT 2)x),
+              'eventWitnesses',(SELECT jsonb_agg(jsonb_strip_nulls(to_jsonb(x))) FROM (SELECT w.source,w.day,w.description,
+                CASE WHEN o.depth>=o.accepted_depth THEN true END AS "knownBeforePreviousTalk",
+                CASE WHEN k.saw_player THEN true END AS "sawPlayerBeforePreviousTalk"
+                FROM world_witnesses w LEFT JOIN witness_order o USING(source) LEFT JOIN already_known k USING(source)
+                ORDER BY w.relevance DESC,w.day DESC,w.observed DESC,w.source LIMIT 2)x),
               'eventAccounts',(SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT source,day,name AS speaker,addressed,spoken.quote FROM named CROSS JOIN q
                 CROSS JOIN LATERAL (SELECT regexp_replace(named.words,'\*[^*]+\*','','g') AS quote) spoken
                 WHERE @recallSpeech AND (@listeners::text[] IS NULL OR mode='group' AND audience @> @listeners::text[])
@@ -143,8 +184,12 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                 FROM named,q WHERE @recallSpeech AND (@listeners::text[] IS NULL OR audience @> @listeners::text[]) AND (mode='group' OR (NOT @groupOnly AND (day<@earliest OR source_type='event'))) AND
                     to_tsvector('english',words||' '||name) @@ q.speech
                 ORDER BY ts_rank(to_tsvector('english',words||' '||name),q.speech) DESC,at DESC,seq DESC,n DESC LIMIT 3)x),
-              'recentSpeech',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(r)-'started'-'observed_scene') ORDER BY r.started,r.turn),'[]') FROM recent r),
-              'previousObservation',(SELECT observed_scene FROM recent ORDER BY started DESC,turn DESC LIMIT 1),
+              'recentSpeech',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(r)-'started') ORDER BY r.started,r.turn),'[]') FROM recent r),
+              'previousObservation',(SELECT v.scene || jsonb_strip_nulls(jsonb_build_object('source',v.id,'day',v.day,
+                'witnessedSince',(SELECT jsonb_agg(to_jsonb(x)-'depth' ORDER BY x.depth DESC) FROM (
+                    SELECT o.source,o.description,o.depth FROM witness_order o JOIN world_witnesses relevant USING(source)
+                    WHERE o.depth<o.visit_depth AND NOT EXISTS(SELECT FROM already_known k WHERE k.source=o.source)
+                    ORDER BY o.depth LIMIT 2)x))) FROM previous_visit v),
               'earlierSpeech',(SELECT jsonb_agg(to_jsonb(x)-'started' ORDER BY x.started,x.turn) FROM (
                 SELECT t.id AS turn,t.day,left(t.player_text,300) AS player,left(t.reply,600) AS npc,t.started
                 FROM turns t CROSS JOIN q
@@ -153,7 +198,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                   AND NOT EXISTS(SELECT FROM recent r WHERE r.turn=t.id) AND s.words @@ q.speech
                 ORDER BY ts_rank_cd(s.words,q.speech) DESC,t.started DESC,t.id DESC LIMIT 2)x)
             )::text
-            """,scoped,head,("terms",string.Join(" | ",terms)),("requestedDay",requestedDay),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech&&!groupOnly),("groupOnly",groupOnly),("listeners",audience),("eventTerms",eventTerms),("hasWorld",awareness!=null),("recallSpeech",recallSpeech),("news",SpeakerWorld.NewsSubjects),("observationLoad",privateObservation?.Load));
+            """,scoped,head,("terms",string.Join(" | ",terms)),("requestedDay",requestedDay),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech&&!groupOnly),("groupOnly",groupOnly),("listeners",audience),("eventTerms",eventTerms),("hasWorld",awareness!=null),("recallSpeech",recallSpeech),("news",SpeakerWorld.NewsSubjects),("observationLoad",privateObservation?.Load),("observationTime",privateObservation?.Scene["observedAt"]?.GetValue<double>()));
         if(facts is JsonObject obj){
             if(obj["previousObservation"] is JsonObject prior && privateObservation is {} current)
                 obj["previousObservation"]=EarlierObservation(prior,current.Scene);

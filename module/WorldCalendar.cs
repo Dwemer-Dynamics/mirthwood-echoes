@@ -399,13 +399,16 @@ namespace Mirthwood.Echoes
                         today[record.Name] = item;
                     }
                 }
+                var player = PlayerCharacterController.Instance;
                 foreach (var venue in ActiveVenues())
                 {
-                    if (!venue.Visible(speaker, out string seen)) continue;
+                    var visible = venue.Visible(speaker, out string seen);
+                    if (!visible) continue;
                     string place = (snapshot["place"] as JObject)?.Value<string>("name");
                     var item = Event(venue.Title, "active", "firsthand", season, clock.DayOfSeason, clock.YearNumber, place);
                     item["when"] = "in sight now";
                     item["seen"] = seen;
+                    if (SeesPlayerAt(speaker, player, visible)) item["playerInSight"] = true;
                     today[venue.Title] = item;
                 }
                 AddWeatherEvents(snapshot, today, clock, season);
@@ -466,6 +469,15 @@ namespace Mirthwood.Echoes
             return changed;
         }
 
+        static bool SeesPlayerAt(NPCController speaker, PlayerCharacterController player, Transform landmark)
+        {
+            return player && !string.IsNullOrWhiteSpace(player.CharacterInfo?.name) &&
+                !string.IsNullOrWhiteSpace(player.CharacterInfo.id) &&
+                (player.transform.position - landmark.position).sqrMagnitude <= 16f &&
+                (speaker.transform.position - landmark.position).sqrMagnitude <= 16f &&
+                SpeakerPerception.CanSee(speaker, player.transform);
+        }
+
         internal static void ObserveNearby()
         {
             try
@@ -496,14 +508,10 @@ namespace Mirthwood.Echoes
                         if (previousPlayer && previousDetail) continue;
                         var visible = venue.Visible(speaker, out string seen);
                         if (!visible) continue;
-                        bool withPlayer = (player.transform.position - visible.position).sqrMagnitude <= 16f &&
-                            (speaker.transform.position - visible.position).sqrMagnitude <= 16f &&
-                            SpeakerPerception.CanSee(speaker, player.transform);
-                        string playerName = player.CharacterInfo?.name;
-                        withPlayer &= !string.IsNullOrWhiteSpace(playerName);
+                        bool withPlayer = SeesPlayerAt(speaker, player, visible);
                         if (previousDetail && !withPlayer) continue;
                         string fact = venue.Title == "Werewolf sighting" ? "I saw a werewolf." : "I saw " + venue.Title + " underway.";
-                        if (withPlayer) fact += " I saw " + playerName + " there.";
+                        if (withPlayer) fact += " I saw " + player.CharacterInfo.name + " there.";
                         if (venue.Title != "Werewolf sighting") fact += " I saw " + seen + ".";
                         var details = new JObject { ["title"] = venue.Title, ["day"] = day, ["status"] = "active",
                             ["source"] = "firsthand", ["sawPlayer"] = withPlayer, ["seen"] = seen };

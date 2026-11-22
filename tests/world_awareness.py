@@ -89,7 +89,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
                  place=dict(name="Brightoak", region="Murkwater Marsh", interior=False),
                  nearbyPeople=["Anna"], bystandersPresent=True, sights=["the arena gate"], weather="Rain",
                  landmarks=[dict(name="Arena gate", direction="east")], interruptedActivity="tending a field",
-                 today=[underway, market, dict(joust, title="Another posted gathering"),
+                 today=[dict(underway, playerInSight=True), market, dict(joust, title="Another posted gathering"),
                         dict(joust, title="Wrong day", dayOfSeason=13),
                         dict(market, title="Hidden quest", source="quest list"),
                         dict(joust, title="Unannounced random raid", status="scheduled")],
@@ -109,9 +109,9 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     def beat():
         api("/api/module/heartbeat", dict(version="fixture", hooks=2, dropped=0, world=world))
 
-    def observation(kind, text, details=None):
+    def observation(kind, text, details=None, owner="East-NPC"):
         ident = uid()
-        person = dict(owner="East-NPC", nativeId="twin", description=text)
+        person = dict(owner=owner, nativeId="twin", description=text)
         if details is not None:
             person["details"] = details
         api("/api/module/cue", dict(id=ident, parent=world["cueHead"], kind=kind, world=world,
@@ -190,21 +190,29 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
             assert "previousobservation" in guidance and "chang" in guidance
             assert any("earlier" in rule and any(word in rule for word in ("mistak", "retract", "wrong", "error"))
                        for rule in guidance.splitlines()), "missing guidance on when to correct an earlier observation"
+            if "witnessedSince" in recall["previousObservation"]:
+                assert "playerinsight" in guidance and any(
+                    "witnessedsince" in rule and ("later" in rule or "after" in rule) for rule in guidance.splitlines())
+            if any(row.get("knownBeforePreviousTalk") for row in recall.get("eventWitnesses", [])):
+                assert "knownbeforeprevioustalk" in guidance
         return reply, recall
 
     def context(packet):
         payload = json.loads(packet["messages"][1]["content"])
         if "worldAwareness" in payload:
             sight_guidance(packet["messages"][0]["content"])
-        assert all("previousObservation" not in records for records in (
+        assert all("previousObservation" not in records and "witnessedSince" not in records for records in (
             payload, payload.get("yourMemory", {}), payload.get("worldAwareness", {})))
+        for memory in (payload, payload.get("yourMemory", {})):
+            assert all("knownBeforePreviousTalk" not in row and "sawPlayerBeforePreviousTalk" not in row
+                       for row in memory.get("eventWitnesses", []))
         return payload
 
     def finish_visit(body):
         ack = dict(body, reaction="neutral")
         complete = without_generation("/api/dialogue/finish", ack)
         assert complete["state"] == "complete" and without_generation(private, body) == complete
-        without_generation("/api/module/cue", dict(id=body["id"], parent=body["context"]["head"],
+        without_generation("/api/module/cue", dict(id=body["id"], parent=world["cueHead"],
                                                    kind="talk", world=deepcopy(world), people=[]))
         world["cueHead"] = body["id"]
         beat()
@@ -216,6 +224,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         event = scene["today"][0]
         assert (event["status"], event["source"], event["when"], event["seen"], event["advertised"]) == (
             "active", "firsthand", "in sight now", juggler, True)
+        assert event["playerInSight"] is True
         assert scene["sights"].count(juggler) == 1
         assert scene["today"][1]["when"] == "earlier today"
         assert scene["nextNotice"]["title"] == "Festival of Blossoms" and scene["previousNotice"]["title"] == "Yuletide"
@@ -232,63 +241,156 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     beat()
     sight_question = "What can you actually see here? Who's with you at the joust gathering?"
     plan_words = "I'm thinking of going to the joust. Have you seen me at it yet, or only heard me talk about it?"
-    model.samples[sight_question] = model.samples[plan_words] = json.dumps(answer)
-    graham = dict(facts, weather="clear weather", sights=[], nearbyPeople=[], bystandersPresent=False,
+    unseen_line = "I haven't seen you at the joust. I've only heard you mention going just now."
+    plan_choices = dict.fromkeys(expected_choices, unseen_line)
+    model.samples[plan_words] = json.dumps(dict(answer, **plan_choices))
+    model.samples[sight_question] = json.dumps(answer)
+    graham = dict(facts, observedAt=12.468407, weather="clear weather", sights=[], nearbyPeople=[], bystandersPresent=False,
                   landmarks=[dict(name="joust poster", direction="northwest")])
-    plan = visit(dict(graham, today=[joust]), plan_words)
-    prepare(plan)
-    finish_visit(plan)
+    plan = visit(dict(graham, observedAt=12.442963, today=[joust]), plan_words)
+    _, before_joust = prepare(plan, plan_choices)
+    assert not before_joust.get("eventWitnesses") and "playerInSight" not in before_joust["worldAwareness"]["today"][0]
+    assert finish_visit(plan)["reply"] == unseen_line
 
-    def asked_at_joust(scene, actor=speaker, finish=False):
-        request = visit(scene, sight_question, actor)
+    def asked_at_joust(scene, actor=speaker, finish=False, text=sight_question):
+        request = visit(scene, text, actor)
         ready, facts_heard = prepare(request)
         assert without_generation(private, request) == ready
         if finish:
             finish_visit(request)
         return facts_heard
 
+    live_joust = dict(underway, playerInSight=True)
+    direct = asked_at_joust(dict(graham, today=[live_joust]))
+    assert direct["worldAwareness"]["today"][0]["playerInSight"] is True and not direct.get("eventWitnesses")
+    assert not direct["worldAwareness"].get("nearbyPeople")
     here = asked_at_joust(dict(graham, today=[underway]), finish=True)
     current = here["worldAwareness"]
     assert current["landmarks"] == [dict(name="joust poster", direction="northwest")]
     assert current["sights"] == [juggler] and not current.get("nearbyPeople")
     assert current["today"][0]["seen"] == juggler and current["today"][0]["when"] == "in sight now"
-    assert current["today"][0]["advertised"] is True and not here.get("eventWitnesses")
+    assert current["today"][0]["advertised"] is True and "playerInSight" not in current["today"][0] and not here.get("eventWitnesses")
     assert any(line["turn"] == plan["id"] and line["player"] == plan_words for line in here["recentSpeech"])
 
     event_only = "I saw Grand Joust underway."
-    observation("worldEvent", event_only, dict(title="Grand Joust", status="active", source="firsthand", sawPlayer=False, day=12))
+    event_details = dict(title="Grand Joust", status="active", source="firsthand", sawPlayer=False, day=12)
+    observation("worldEvent", event_only, event_details)
     beat()
-    earlier = asked_at_joust(dict(graham, today=[dict(underway, when="earlier today", advertised=False)]))
+    earlier = asked_at_joust(dict(graham, today=[dict(underway, when="earlier today", advertised=False, playerInSight=True)]))
     remembered = earlier["worldAwareness"]
     assert remembered["today"][0]["when"] == "earlier today" and remembered["today"][0]["seen"] == juggler
-    assert not remembered["today"][0].get("advertised") and not remembered.get("nearbyPeople")
+    assert "playerInSight" not in remembered["today"][0] and not remembered["today"][0].get("advertised") and not remembered.get("nearbyPeople")
     assert juggler not in remembered.get("sights", [])
     assert [(row["day"], row["description"]) for row in earlier["eventWitnesses"]] == [(12, event_only)]
     last_seen = earlier["previousObservation"]
     assert any(row["turn"] == last_seen["source"] and row["player"] == sight_question for row in earlier["recentSpeech"])
     assert [(row["title"], row["seen"], row["when"]) for row in last_seen["firsthand"]] == [
         ("Grand Joust", juggler, "during that conversation")]
+    assert "sawPlayer" not in last_seen["firsthand"][0]
 
     remote = dict(graham, owner="West-NPC")
     invented = "a masked rider beside the player"
-    forged = dict(joust, seen=invented, when="in sight now", advertised=True, attendees=["Anna"])
+    forged = dict(joust, seen=invented, when="in sight now", advertised=True, attendees=["Anna"], playerInSight=True)
     other_poster = asked_at_joust(dict(remote, today=[forged]), twin)
     posted = other_poster["worldAwareness"]
     assert posted["today"] == [{k: v for k, v in joust.items() if k not in ("year", "seasonIndex")}]
     assert not posted.get("sights") and not posted.get("nearbyPeople") and not other_poster.get("eventWitnesses")
 
-    untimed = dict(underway, title="Traveling merchant", seen=invented)
+    untimed = dict(underway, title="Traveling merchant", seen=invented, playerInSight=True)
     del untimed["when"]
     del untimed["advertised"]
     uncertain = asked_at_joust(dict(remote, today=[untimed, dict(untimed, title="Trade ship", when="sometime"),
         dict(untimed, title="Town Raid", source="public announcement", when="in sight now"),
-        dict(underway, title="Stale sighting", dayOfSeason=13)]), twin)
+        dict(underway, title="Stale sighting", dayOfSeason=13, playerInSight=True),
+        dict(underway, title="Ended gathering", status="ended", when="earlier today", playerInSight=True, seen=None)]), twin)
     scene = uncertain["worldAwareness"]
     entries = {row["title"]: row for row in scene["today"]}
     assert entries["Traveling merchant"]["source"] == "firsthand" and entries["Traveling merchant"]["status"] == "active"
-    assert "Stale sighting" not in entries and all("seen" not in row and row.get("when") != "in sight now" for row in entries.values())
+    assert "Stale sighting" not in entries and all(
+        "seen" not in row and "playerInSight" not in row and row.get("when") != "in sight now" for row in entries.values())
     assert not scene.get("sights") and not scene.get("nearbyPeople") and not uncertain.get("eventWitnesses")
     checked("Graham's sight and company question separates a juggler in view, an earlier event-only witness, a poster and the player's earlier plan")
+
+    # Replay Drystan's two visits on a sibling branch with the same location and weather.
+    event_only_head = world["cueHead"]
+    world["cueHead"] = plan["id"]
+    beat()
+    observation("worldEvent", event_only, event_details)
+    beat()
+    alone = asked_at_joust(dict(graham, today=[underway]))
+    assert alone["previousObservation"]["witnessedSince"] == [dict(source=alone["eventWitnesses"][0]["source"], description=event_only)]
+    assert "playerInSight" not in alone["worldAwareness"]["today"][0] and not alone["worldAwareness"].get("nearbyPeople")
+    world["cueHead"] = plan["id"]
+    beat()
+    witness = "I saw Grand Joust underway. I saw Test player there. I saw a juggler at the Grand Joust."
+    sighting = dict(title="Grand Joust", day=12, status="active", source="firsthand", sawPlayer=True, player="p", seen=juggler)
+    observation("worldEvent", "I saw the player at the joust.", sighting, owner="West-NPC")
+    observation("worldEvent", "I saw a werewolf.", dict(title="Werewolf sighting", day=12, status="active", source="firsthand"))
+    observation("worldEvent", "A poster advertised the Grand Joust.", dict(title="Grand Joust", day=12, status="posted", source="public notice"))
+    observation("worldEvent", witness, sighting)
+    drystan_head = world["cueHead"]
+    beat()
+    newly_seen = asked_at_joust(dict(graham, today=[live_joust]))
+    current = newly_seen["worldAwareness"]
+    assert current["today"][0]["playerInSight"] is True and not current.get("nearbyPeople")
+    assert current["place"] == before_joust["worldAwareness"]["place"] and current["weather"] == before_joust["worldAwareness"]["weather"]
+    evidence = next(row for row in newly_seen["eventWitnesses"] if row["description"] == witness)
+    new_fact = dict(source=evidence["source"], description=witness)
+    assert "knownBeforePreviousTalk" not in evidence
+    assert newly_seen["previousObservation"] == dict(source=plan["id"], day=12, timeOfDay="Morning", witnessedSince=[new_fact])
+    assert any(row["turn"] == plan["id"] and row["npc"] == unseen_line for row in newly_seen["recentSpeech"])
+    distant_player = asked_at_joust(dict(graham, today=[underway]))
+    assert distant_player["previousObservation"]["witnessedSince"] == [new_fact]
+    assert "playerInSight" not in distant_player["worldAwareness"]["today"][0]
+    for clock_time in (12.43, 12.59, None):
+        unbound = asked_at_joust(dict(graham, observedAt=clock_time, today=[underway]))
+        assert "previousObservation" not in unbound and not any(
+            "knownBeforePreviousTalk" in row for row in unbound.get("eventWitnesses", [])), clock_time
+
+    # The same spoken denial can genuinely have been mistaken on a visit after the sighting.
+    mistaken = visit(dict(graham, today=[live_joust]), plan_words)
+    _, already_seen = prepare(mistaken, plan_choices)
+    assert new_fact in already_seen["previousObservation"]["witnessedSince"]
+    # This sighting falls after the accepted native snapshot but before its spoken reply receipt.
+    ended_line = "I saw Grand Joust end. I saw a juggler at the Grand Joust."
+    observation("worldEvent", ended_line, dict(title="Grand Joust", day=12, status="ended", source="firsthand", seen=juggler))
+    assert finish_visit(mistaken)["reply"] == unseen_line
+    end_question = "Did you see the jousting stop, or does the notice just give today's date?"
+    model.samples[end_question] = json.dumps(answer)
+    ended = dict(graham, observedAt=12.484505, today=[dict(underway, status="ended", when="earlier today")])
+    correction = asked_at_joust(ended, text=end_question)
+    existing = next(row for row in correction["eventWitnesses"] if row["source"] == new_fact["source"])
+    assert existing["knownBeforePreviousTalk"] is True and existing["description"] == witness
+    in_flight = next(row for row in correction["eventWitnesses"] if row["description"] == ended_line)
+    assert "knownBeforePreviousTalk" not in in_flight
+    prior = correction["previousObservation"]
+    assert prior["source"] == mistaken["id"] and "witnessedSince" not in prior and prior["firsthand"][0]["sawPlayer"] is True
+    assert "playerInSight" not in correction["worldAwareness"]["today"][0]
+    assert any(row["turn"] == mistaken["id"] and row["npc"] == unseen_line for row in correction["recentSpeech"])
+    shared = dict(id=uid(), session=uid(), head=world["cueHead"], campaign=campaign, actor=speaker,
+                  audience=[speaker, twin], worldAwareness=deepcopy(ended))
+    _, group_packet = generate("/api/dialogue/group", shared)
+    public = context(group_packet)
+    assert "playerInSight" not in public["worldAwareness"]["today"][0]
+    assert any(row["source"] == new_fact["source"] for row in public["yourMemory"]["eventWitnesses"])
+
+    world["cueHead"] = drystan_head
+    beat()
+    asked_at_joust(dict(graham, today=[live_joust]), finish=True)
+    jouster = "a jouster at the Grand Joust"
+    another_performer = witness.replace(juggler, jouster)
+    observation("worldEvent", another_performer, dict(sighting, seen=jouster))
+    beat()
+    familiar_attendance = asked_at_joust(dict(graham, today=[dict(live_joust, seen=jouster)]))
+    newer = next(row for row in familiar_attendance["eventWitnesses"] if row["description"] == another_performer)
+    assert newer["source"] != new_fact["source"] and newer["sawPlayerBeforePreviousTalk"] is True
+    assert "knownBeforePreviousTalk" not in newer and "witnessedSince" not in familiar_attendance["previousObservation"]
+    assert any(row["source"] == new_fact["source"] and row["knownBeforePreviousTalk"] is True for row in familiar_attendance["eventWitnesses"])
+    world["cueHead"] = event_only_head
+    beat()
+    event_visit = asked_at_joust(dict(graham, today=[underway]), finish=True)
+    assert any(row["description"] == event_only for row in event_visit["eventWitnesses"])
+    checked("Drystan's separate visits distinguish a new sighting, live player visibility and evidence for a genuine correction")
 
     observation("gift", "The player's private gift was a turquoise locket.")
     saw_player = "I saw the player at the Grand Joust."
@@ -307,7 +409,9 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     beat()
     together = asked_at_joust(dict(graham, sights=[juggler], nearbyPeople=["Anna"], bystandersPresent=True, today=[underway]))
     assert together["worldAwareness"]["nearbyPeople"] == ["Anna"] and together["worldAwareness"]["sights"] == [juggler]
-    assert any(row["day"] == 12 and row["description"] == saw_player for row in together["eventWitnesses"])
+    added_player = next(row for row in together["eventWitnesses"] if row["day"] == 12 and row["description"] == saw_player)
+    assert "sawPlayerBeforePreviousTalk" not in added_player and "knownBeforePreviousTalk" not in added_player
+    assert together["previousObservation"]["witnessedSince"] == [dict(source=added_player["source"], description=saw_player)]
     original = turn(deepcopy(facts))
     prepared, recall = prepare(original)
     verify(recall["worldAwareness"])
@@ -615,7 +719,13 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     ready, recall = prepare(delayed)
     assert recall["worldAwareness"]["day"] == 12
     assert without_generation(private, saved_request) == ready
-    world.update(memorySession=uid(),cueHead=None,day=12)
+    world.update(memorySession=uid(),cueHead=drystan_head,day=12)
+    beat()
+    reloaded = asked_at_joust(dict(graham, today=[underway]))
+    assert any(row["source"] == new_fact["source"] for row in reloaded["eventWitnesses"])
+    assert "previousObservation" not in reloaded and all(
+        "knownBeforePreviousTalk" not in row for row in reloaded["eventWitnesses"])
+    world["cueHead"] = None
     beat()
     without_generation("/api/dialogue/address",address,status=409)
     without_generation("/api/dialogue/group",group,status=409)
