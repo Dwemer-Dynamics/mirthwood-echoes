@@ -122,10 +122,10 @@ internal static class SpeakerWorld
             if(data["nextByKind"] is JsonObject boards && boards[kind] is JsonObject entry &&
                Event(entry,true) is {} posted && DateOrder(entry,nativeDate)>0)nextByKind[kind]=posted;
         if(nextByKind.Count>0)result["nextByKind"]=nextByKind;
-        // The ordinary HUD shows the day and season. The native zero-based year still
-        // orders adjacent seasons correctly, but is not a spoken date on that display.
+        // The HUD displays season and day. Keep the native year for the comparisons
+        // above and remove it from every date the resident receives.
         foreach(var date in today.Concat(nextByKind.Select(pair=>pair.Value)).Append(calendar).Append(result["nextNotice"]).Append(result["previousNotice"]).OfType<JsonObject>())
-            if(date["year"]!=null && date.I("year")==0)date.Remove("year");
+            date.Remove("year");
         return result;
     }
 

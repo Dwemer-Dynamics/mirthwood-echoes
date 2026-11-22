@@ -171,7 +171,9 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         assert set(scene["nextByKind"])=={"festival","joust"} and scene["nextByKind"]["festival"]==scene["nextNotice"]
         follow = scene["nextByKind"]["joust"]
         assert (follow["title"], follow["season"], follow["dayOfSeason"]) == ("Grand Joust", "Summer", 10)
-        assert scene["calendar"]["daysInSeason"] == 25 and "year" not in scene["previousNotice"]
+        assert scene["calendar"]["daysInSeason"] == 25
+        dates = [scene["calendar"], *scene["today"], scene["nextNotice"], scene["previousNotice"], *scene["nextByKind"].values()]
+        assert all("year" not in date for date in dates), dates
         assert scene["landmarks"][0]["direction"] == "east" and scene["interruptedActivity"] == "tending a field"
         assert scene["nearbyPeople"] == ["Anna"] and scene["bystandersPresent"] and scene["place"]["interior"] is False
         assert all(key not in scene for key in ("world", "nativeId", "owner", "agentInventory"))
@@ -447,5 +449,51 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     assert (festival["title"],festival["dayOfSeason"],festival["source"])==("All Hallows Eve",17,"public notice")
     _, recall = prepare(turn(dict(both_boards,nextNotice=hallows,nextByKind=dict(festival=hallows,joust=dict(fall_joust,source="story list")))))
     assert set(recall["worldAwareness"]["nextByKind"])=={"festival"}
-    assert len(foreground_since(fixture_start)) == expected_calls
     checked("Fall 9 follow-up finds both the Fall 12 joust and Fall 17 festival; a visitor gets only a known public board")
+
+    winter = dict(day, season="Winter", seasonIndex=3, dayOfSeason=25, year=1, timeOfDay="Night")
+    spring = dict(day, season="Spring", seasonIndex=0, dayOfSeason=1, year=2, timeOfDay="Morning")
+    past_yuletide = dict(previous, year=1)
+    spring_joust = dict(joust, year=2)
+    spring_festival = dict(next_notice, year=2)
+
+    def visible_date(native):
+        return {key: value for key, value in native.items() if key not in ("year", "seasonIndex")}
+
+    for game_day, date, question in [
+        (199, winter, "What is on the boards on this last night of winter, and what gathering comes next?"),
+        (200, spring, "Now that spring has started, what was the last posted festival and when is the next joust?"),
+    ]:
+        world["day"] = game_day
+        beat()
+        at = {key: date[key] for key in ("season", "seasonIndex", "dayOfSeason", "year")}
+        posted = dict(joust, **at, title="Brightoak public meeting")
+        sighting = dict(market, **at)
+        wrong_year = spring["year"] if date == winter else winter["year"]
+        boundary = dict(facts, world=deepcopy(world), day=game_day, calendar=date,
+                        today=[posted, dict(posted, title="Meeting in another year", year=wrong_year),
+                               sighting, dict(sighting, title="Merchant sighting in another year", year=wrong_year)],
+                        nextNotice=spring_joust, previousNotice=past_yuletide,
+                        nextByKind=dict(joust=spring_joust, festival=spring_festival))
+        model.samples[question] = json.dumps(answer)
+        request = turn(boundary, text=question)
+        ready, recall = prepare(request)
+        actual = recall["worldAwareness"]
+        assert actual["day"] == game_day and actual["calendar"] == visible_date(date)
+        assert actual["today"] == [visible_date(posted), visible_date(sighting)], actual["today"]
+        assert actual["nextNotice"] == visible_date(spring_joust) and actual["previousNotice"] == visible_date(past_yuletide)
+        assert actual["nextByKind"] == dict(joust=actual["nextNotice"], festival=visible_date(spring_festival))
+        if date == winter:
+            winter_request, winter_ready = deepcopy(request), ready
+    assert without_generation(private, winter_request) == winter_ready
+
+    question = "Do the old and upcoming notices belong in that order?"
+    model.samples[question] = json.dumps(answer)
+    reversed_notices = dict(boundary, nextNotice=past_yuletide, previousNotice=spring_festival,
+                            nextByKind=dict(joust=past_yuletide, festival=spring_festival))
+    _, recall = prepare(turn(reversed_notices, text=question))
+    actual = recall["worldAwareness"]
+    assert "nextNotice" not in actual and "previousNotice" not in actual
+    assert actual["nextByKind"] == {"festival": visible_date(spring_festival)}
+    checked("Winter 25 to Spring 1 uses native years to select today's and adjacent notices, then shows only season and day")
+    assert len(foreground_since(fixture_start)) == expected_calls
