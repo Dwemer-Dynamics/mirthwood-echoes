@@ -65,6 +65,8 @@ QUEST_CHOICES = [
     ("I'll bring you some flour.", "I'll bring you some flour.", "job", "accept", "accept"),
     ("I won't take the flour job.", "I won't take the flour job.", "job", "decline", "decline"),
     ("Yes, on those terms.", "Yes, on those terms.", "job", "accept", "accept"),
+    ("I'll take the flour mill job.", "I'll take the flour mill job.", "job", "accept", "continue"),
+    ("I'll take the flour job.", "I'll take the flour job.", "job", "accept", "accept"),
 ]
 
 
@@ -80,7 +82,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     market = dict(title="Traveling merchant", status="active", source="firsthand", when="earlier today")
     next_notice = dict(joust, title="Festival of Blossoms", dayOfSeason=21)
     later = dict(joust, season="Summer", seasonIndex=1, dayOfSeason=10)
-    previous = dict(joust, season="Winter", seasonIndex=3, year=0, dayOfSeason=10, title="Yuletide")
+    yuletide = dict(joust, season="Winter", seasonIndex=3, year=0, dayOfSeason=10, title="Yuletide")
     facts = dict(owner="East-NPC", nativeId="twin", world=world, day=12, calendar=day,
                  place=dict(name="Brightoak", region="Murkwater Marsh", interior=False),
                  nearbyPeople=["Anna"], bystandersPresent=True, sights=["the arena gate"], weather="Rain",
@@ -89,7 +91,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
                         dict(joust, title="Wrong day", dayOfSeason=13),
                         dict(market, title="Hidden quest", source="quest list"),
                         dict(joust, title="Unannounced random raid", status="scheduled")],
-                 nextNotice=next_notice, previousNotice=previous,
+                 nextNotice=next_notice, previousNotice=yuletide,
                  nextByKind=dict(festival=next_notice,joust=later,random=dict(later,title="Unannounced visitor")),
                  agentInventory="sealed private letter")
     answer = dict(warm="I hear you.", neutral="I hear you.", cool="I hear you.",
@@ -363,32 +365,109 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         assert actual["action"] == expected and actual["warned"] is False, (speech, actual)
     checked("a named job and a numbered offer preserve the requested item and quantity across replay")
 
-    for speech, evidence, real_counter in [
-        ("If it rains, I'll attend the Grand Joust instead.", "If it rains", False),
-        ("No, unless you pay more", "No, unless you pay more", True),
-        ("Can you pay double?", "Can you pay double?", True),
+    # The native contract shown by Averil in the copied game includes a return objective.
+    gathering = dict(key="2dabf693-055f-42a9-8425-fac46c242110", title="A Helping Hand",
+                     terms="Ah, you there! I could use a hand. I’m running low on a few things—Iron Bar and Ginseng Root, "
+                           "to be exact. Think you could help me gather them? I’d make it worth your while.",
+                     objectives=["Gather Iron Bar", "Gather Ginseng Root", "Return to Averil"])
+    delivery = dict(key="native-apples-to-averil", title="A Helping Hand", terms="Please bring three red apples to Averil.",
+                    objectives=["Return to Averil"])
+    narrative = dict(key="native-miller-help", title="A Helping Hand",
+                     terms="The mill still smells of flour. Could you lend me a hand?", objectives=["Return to Averil"])
+
+    def finish_choice(body, result):
+        ack = dict(body, action=result["action"])
+        complete = without_generation("/api/quests/finish", ack)
+        assert complete == dict(result, state="complete")
+        assert without_generation("/api/quests/finish", ack) == complete
+        next_body = dict(body, id=uid(), parent=body["id"])
+        if result["action"] != "continue":
+            without_generation(quest_route, next_body, status=409)
+        return next_body
+
+    def named_choice(native_offer, speech, intent, expected, detail=None, evidence=None):
+        body = dict(fresh_offer(native_offer), text=speech)
+        classification = dict(intent=intent, subject="job", evidence=speech if evidence is None else evidence, reply="I hear you.")
+        if detail is not None:
+            classification["offerDetail"] = detail
+        actual = classified_turn(body, classification, native_offer)
+        assert actual["intent"] == ("unclear" if expected == "continue" else intent), (speech, actual)
+        assert actual["action"] == expected and actual["warned"] is False, (speech, actual)
+        finish_choice(body, actual)
+
+    for native_offer, speech, detail, intent, expected in [
+        (gathering, "I'll gather Iron Bar and Ginseng Root.", None, "accept", "accept"),
+        (gathering, "I'll gather Iron Bar molds.", None, "accept", "continue"),
+        (delivery, "I will bring three red apples.", "three red apples", "accept", "accept"),
+        (delivery, "I will bring apples.", "apples", "accept", "continue"),
+        (delivery, "I will bring Averil.", "Averil", "accept", "continue"),
+        (delivery, "I will bring 2 red apples.", "red apples", "accept", "continue"),
+        (delivery, "I will bring 3 red apples to Averil.", "red apples", "accept", "accept"),
+        (delivery, "I will bring three red apples to Heath.", "three red apples", "accept", "continue"),
+        (delivery, "I won't bring Averil.", "Averil", "decline", "continue"),
+        (delivery, "I won't bring three red apples.", "three red apples", "decline", "decline"),
+        (delivery, "Yes.", None, "accept", "accept"),
+        (delivery, "I decline.", None, "decline", "decline"),
+        (narrative, "I will bring flour.", "flour", "accept", "continue"),
+        (narrative, "Yes.", None, "accept", "accept"),
+        (narrative, "No thanks.", None, "decline", "decline"),
     ]:
-        body = dict(fresh_offer(), text=speech)
-        classification = dict(intent="counter", subject="job", termChange="reward", evidence=evidence, manner="plain")
-        for repeated in (False, True):
-            actual = classified_turn(body, classification, previously_warned=repeated and real_counter)
-            action = "decline" if repeated and real_counter else "continue"
-            assert actual["intent"] == ("counter" if real_counter else "unclear"), (speech, actual)
-            assert actual["warned"] is real_counter and actual["action"] == action, (speech, repeated, actual)
-            ack = dict(body, action=action)
-            confirmed = without_generation("/api/quests/finish", ack)
-            assert confirmed == dict(actual, state="complete")
-            assert without_generation("/api/quests/finish", ack) == confirmed
-            body = dict(body, id=uid(), parent=body["id"])
-        if real_counter:
-            without_generation(quest_route, body, status=409)
-    checked("only a genuine reward counter warns on its first turn and closes the offer on its second")
+        named_choice(native_offer, speech, intent, expected, detail=detail)
+
+    for speech, evidence, intent, expected in [
+        ("Yes, I'll gather Iron Bar and Ginseng Root on the original terms. By the way, when is the Grand Joust?",
+         "Yes, I'll gather Iron Bar and Ginseng Root on the original terms.", "accept", "accept"),
+        ("I'll attend the Grand Joust, but I won't gather Iron Bar and Ginseng Root for this job.",
+         "I won't gather Iron Bar and Ginseng Root for this job.", "decline", "decline"),
+        ("Yes, I'll gather Iron Bar molds on the original terms. By the way, when is the Grand Joust?",
+         "Yes, I'll gather Iron Bar molds on the original terms.", "accept", "continue"),
+    ]:
+        named_choice(gathering, speech, intent, expected, evidence=evidence)
+    checked("native terms distinguish item, quantity and recipient while narrative offers still allow a direct answer to the invitation")
+
+    def counter_turn(body, native_offer, speech, qualifies, was_warned, evidence=None):
+        body = dict(body, text=speech)
+        classification = dict(intent="counter", subject="job", termChange="reward",
+                              evidence=speech if evidence is None else evidence, manner="plain")
+        actual = classified_turn(body, classification, native_offer, was_warned)
+        action = "decline" if qualifies and was_warned else "continue"
+        assert actual["intent"] == ("counter" if qualifies else "unclear"), (speech, actual)
+        assert actual["warned"] is (was_warned or qualifies) and actual["action"] == action, (speech, was_warned, actual)
+        return finish_choice(body, actual)
+
+    for native_offer, speech, qualifies, evidence in [
+        (offer, "If it rains, I'll attend the Grand Joust instead.", False, "If it rains"),
+        (offer, "No, unless you pay more", True, None),
+        (offer, "Can you pay double?", True, None),
+        (gathering, "Can you pay double?", True, None),
+        (gathering, "I will gather Iron Bar and Ginseng Root if you pay more.", True, None),
+        (gathering, "I will gather Iron Bar and Ginseng Root if you pay more.", False, "if you pay more"),
+        (gathering, "I will gather Iron Bar molds if you pay more.", False, None),
+        (gathering, "I will gather Iron Bar molds if you pay more.", False, "if you pay more"),
+        (gathering, "If it rains, I will attend the Grand Joust instead.", False, None),
+        (gathering, "I will gather Iron Bar molds, if you pay more.", False, None),
+        (gathering, "I will gather Iron Bar molds, can you pay double?", False, None),
+        (gathering, "If you pay more, I will gather Iron Bar molds.", False, None),
+        (gathering, "I will gather Iron Bar and Ginseng Root, if you pay more.", True, None),
+        (gathering, "If you pay more, I will gather Iron Bar and Ginseng Root.", True, None),
+    ]:
+        body = counter_turn(fresh_offer(native_offer), native_offer, speech, qualifies, False, evidence)
+        counter_turn(body, native_offer, speech, qualifies, qualifies, evidence)
+
+    # A misclassified counter after a genuine warning also preserves the existing warning.
+    pay_question = "Can you pay double?"
+    wrong_work = "I will gather Iron Bar molds, can you pay double?"
+    body = counter_turn(fresh_offer(gathering), gathering, pay_question, True, False)
+    for _ in range(2):
+        body = counter_turn(body, gathering, wrong_work, False, True)
+    counter_turn(body, gathering, pay_question, True, True)
+    checked("a reward counter must concern the offered work in either clause order, and repeat closes the offer exactly once")
 
     # A bare answer to the resident's subsequent question about attendance belongs to that question.
     body=dict(fresh_offer(),text="Are you going to the joust?")
-    previous="I might. Will you be going?"
-    model.samples["quest/"+body["text"]]=json.dumps(dict(intent="question",subject="world",evidence="",reply=previous))
-    assert quest_turn(body)["reply"]==previous
+    attendance_reply="I might. Will you be going?"
+    model.samples["quest/"+body["text"]]=json.dumps(dict(intent="question",subject="world",evidence="",reply=attendance_reply))
+    assert quest_turn(body)["reply"]==attendance_reply
     api("/api/quests/finish",dict(body,action="continue"))
     model.samples["quest/Yes."]=json.dumps(dict(intent="accept",subject="job",evidence="Yes",reply="Thank you."))
     actual, packet = generate(quest_route,dict(body,id=uid(),parent=body["id"],text="Yes."))
@@ -453,7 +532,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
 
     winter = dict(day, season="Winter", seasonIndex=3, dayOfSeason=25, year=1, timeOfDay="Night")
     spring = dict(day, season="Spring", seasonIndex=0, dayOfSeason=1, year=2, timeOfDay="Morning")
-    past_yuletide = dict(previous, year=1)
+    past_yuletide = dict(yuletide, year=1)
     spring_joust = dict(joust, year=2)
     spring_festival = dict(next_notice, year=2)
 
