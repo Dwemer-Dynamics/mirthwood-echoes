@@ -677,6 +677,8 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     assert any(line["turn"] == rain_request["id"] and line["npc"] == rain_line for line in observed["recentSpeech"])
     finish_visit(inn_request)
     assert without_generation(private, clear_request) == clear_receipt
+    wrong_day = weather_recall(visit(dict(rainy, observedAt=13.00), rainy_words), rain_line)
+    assert wrong_day["worldAwareness"]["day"] == 12 and "previousObservation" not in wrong_day
 
     other_weather = weather_recall(visit(dict(rainy, owner="West-NPC", observedAt=12.91), rainy_words, twin), rain_line)
     assert other_weather["worldAwareness"]["weather"] == "Rain"
@@ -704,7 +706,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     assert "previousObservation" not in weather_recall(visit(dict(rainy, observedAt=12.92), rainy_words), rain_line)
     world.update(day=13, cueHead=inn_request["id"])
     beat()
-    tomorrow = dict(rainy, day=13, observedAt=13.08, calendar=dict(night, dayOfSeason=15))
+    tomorrow = dict(rainy, day=13, observedAt=13.01, calendar=dict(night, dayOfSeason=15))
     assert "previousObservation" not in weather_recall(visit(tomorrow, rainy_words), rain_line)
     world.update(day=12, memorySession=uid(), cueHead=rain_request["id"])
     beat()
