@@ -172,9 +172,10 @@ class AwarenessPlay:
                       if task["sameOwner"] and task["enabled"] and task["status"] == "Continue"}
             if "Go To Work" not in active or walking["resident"]["stopped"] or walking["extra"]["moved"] <= .4:
                 raise AssertionError("The copied visit did not establish the resident's own walk to work.")
-            activity = records[0]["provider"][0]["awareness"].get("interruptedActivity", "")
-            if "work" not in activity.casefold():
-                raise AssertionError("The accepted provider input lost the resident's observed trip to work.")
+            for record in records[:2]:
+                activity = record["provider"][0]["awareness"].get("interruptedActivity", "")
+                if "work" not in activity.casefold():
+                    raise AssertionError("The accepted provider input lost the resident's observed trip to work.")
         if not self.baseline:
             for step, row in zip(self.plan["turns"], records):
                 if "venue" not in step:
@@ -305,6 +306,8 @@ class AwarenessPlay:
         portrait, = [o for o in observations if o["stage"] == "quest-portrait"]
         intention, = [o for o in observations if o["stage"] == "quest-attendance-intention"]
         outcome, = [o for o in observations if o["stage"] == "quest-outcome"]
+        if self.plan.get("questDecision") and outcome["extra"]["request"]["text"] != self.plan["questDecision"]:
+            raise AssertionError("The native decision used different words from the player's mixed-subject response.")
         question = portrait["extra"]
         decline = self.plan.get("declineQuest", False)
         if before["extra"]["terms"] != offer["extra"]["nativeTerms"] or question["terms"] != outcome["extra"]["terms"] or outcome["extra"]["count"] != int(not decline):

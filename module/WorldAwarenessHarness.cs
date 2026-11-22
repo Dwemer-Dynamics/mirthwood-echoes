@@ -18,6 +18,8 @@ using _Mirthwood.Scripts.Demo.Menus;
 using _Mirthwood.Scripts.Demo.Stories;
 using _Mirthwood.Scripts.Demo.Triggers;
 using _Mirthwood.Scripts.Demo.Weather;
+using _Mirthwood.Scripts.Runtime.Demo.Menus.Views;
+using _Mirthwood.Scripts.Runtime.Demo.Minigame;
 using Object = UnityEngine.Object;
 
 namespace Mirthwood.Echoes
@@ -58,6 +60,8 @@ namespace Mirthwood.Echoes
             public int TurnCount => ((JArray)plan["turns"]).Count;
             public string QuestQuestion => (string)plan["questQuestion"];
             public bool DeclineQuest => (bool?)plan["declineQuest"] == true;
+            public string QuestDecision => (string)plan["questDecision"] ??
+                (DeclineQuest ? "No thank you. I won't take this job." : "Yes, I'll do the work on the original terms.");
             public bool RetryAddress => (bool?)plan["retryAddress"] == true;
             public string HearingQuestion => (string)plan["hearingQuestion"];
 
@@ -315,11 +319,19 @@ namespace Mirthwood.Echoes
                 if ((bool?)plan["turns"][index]["watchResidentWalk"] == true) {
                     // Stream the resident into the active simulation before trying to interrupt them.
                     // Never start an NPC task or supply its destination for this observation.
-                    yield return Approach(npc.transform.position+Vector3.right*6);
+                    var player = PlayerCharacterController.Instance;
+                    var waitPoint = StandBackFrom(npc.transform.position, false);
+                    if (!waitPoint.HasValue) throw new InvalidOperationException("No walking surface near the resident's routine.");
+                    yield return player.CoTeleport(waitPoint.Value, 0, 0, false, false);
                     GameState.UnPause();
+                    yield return Await(() => StandBackFrom(npc.transform.position, true).HasValue,
+                        "No solid ground streamed beside the moving resident.", 8);
+                    var actual = StandBackFrom(npc.transform.position, true);
+                    if (!actual.HasValue) throw new InvalidOperationException("The path alongside the resident was unloaded.");
+                    yield return player.CoTeleport(actual.Value, 0, 0, false, false);
                     var start=npc.transform.position;
                     var agent=npc.GetComponent<NavMeshAgent>();
-                    Record("waiting-for-routine",index,npc);
+                    Record("waiting-for-routine",index,npc,new {groundedPoint=At(actual.Value)});
                     yield return Await(()=>agent && agent.isActiveAndEnabled && agent.isOnNavMesh &&
                         agent.hasPath && !agent.isStopped && agent.velocity.sqrMagnitude>.04f &&
                         (npc.transform.position-start).sqrMagnitude>.16f,"The resident did not walk under their own routine.",28);
@@ -327,6 +339,21 @@ namespace Mirthwood.Echoes
                 }
                 if (plan["turns"][index]["doorway"] == null && plan["turns"][index]["venue"] == null)
                     yield return Approach(npc.transform.position);
+            }
+
+            static Vector3? StandBackFrom(Vector3 resident, bool requireGround)
+            {
+                for (int i=0; i<16; i++) {
+                    var sample=resident+Quaternion.Euler(0,i*22.5f,0)*Vector3.right*5.5f;
+                    if (!NavMesh.SamplePosition(sample,out var hit,1.5f,NavMesh.AllAreas)) continue;
+                    float distance=(hit.position-resident).sqrMagnitude;
+                    if (distance<16f || distance>49f) continue;
+                    if (requireGround && !Physics.RaycastAll(hit.position+Vector3.up*.65f,Vector3.down,1.3f,
+                        Physics.DefaultRaycastLayers,QueryTriggerInteraction.Ignore).Any(p=>
+                        p.normal.y>.4f && !p.collider.GetComponentInParent<Character>() && Mathf.Abs(p.point.y-hit.position.y)<.45f)) continue;
+                    return hit.position;
+                }
+                return null;
             }
 
             IEnumerator Doorway(int index, NPCController npc, JObject spec)
@@ -410,6 +437,7 @@ namespace Mirthwood.Echoes
                 var field = AccessTools.Field(story.story.GetType(), "_spawnedObject");
                 var root = field?.GetValue(story.story) as GameObject;
                 if (!root || !root.activeInHierarchy) throw new InvalidOperationException("The native event has no active venue.");
+                if (title=="Grand Joust") yield return VisitJoustHerald(index,npc,root);
                 string target = (string)spec["landmark"];
                 var marks=root.GetComponentsInChildren<Renderer>(true)
                     .Where(r=>r.name.StartsWith(target,StringComparison.OrdinalIgnoreCase))
@@ -424,11 +452,11 @@ namespace Mirthwood.Echoes
                 foreach(var candidate in marks.Where(r=>r&&r.enabled&&r.gameObject.activeInHierarchy)){
                     int walkable=0;
                     string blockedBy=null;
-                    foreach(float radius in new[]{1.4f,2f,2.7f,3.2f}){
+                    foreach(float radius in new[]{1.4f,2f,2.7f,3.2f,4.5f,6f,7.5f,8.8f}){
                         for(int i=0;i<16;i++){
                             var point=candidate.transform.position+Quaternion.Euler(0,i*22.5f,0)*Vector3.forward*radius;
                             if(!NavMesh.SamplePosition(point,out var hit,3f,NavMesh.AllAreas)||
-                                (hit.position-candidate.transform.position).sqrMagnitude>12.25f)continue;
+                                (hit.position-candidate.transform.position).sqrMagnitude>81f)continue;
                             walkable++;
                             var eye=hit.position+Vector3.up*.85f;
                             var direction=candidate.bounds.ClosestPoint(eye)-eye;
@@ -449,10 +477,17 @@ namespace Mirthwood.Echoes
                 }
                 if(!mark)throw new InvalidOperationException("No walkable view of the active venue.");
                 StageGuest(npc,landing);
-                yield return Approach(npc.transform.position);
                 var spot=mark.transform.position;
+                var toward=Vector3.ProjectOnPlane(spot-landing,Vector3.up).normalized;
+                if(!NavMesh.SamplePosition(landing+toward*.8f,out var playerPoint,1f,NavMesh.AllAreas))
+                    throw new InvalidOperationException("No walkable spot beside the witness.");
+                var observer=PlayerCharacterController.Instance;
+                yield return observer.CoTeleport(playerPoint.position,0,0,false,false);
+                GroupGathering.Face(npc,spot);
                 recentVenue=spot;
                 Record("at-venue",index,npc,new {title,root=root.name,landmark=PathOf(mark.transform),position=At(spot),
+                    speakerDistance=Vector3.Distance(npc.transform.position,spot),playerDistance=Vector3.Distance(observer.transform.position,spot),
+                    spawnedInstance=root.GetInstanceID(),landmarkInstance=mark.GetInstanceID(),
                     boundsCenter=At(mark.bounds.center),render=mark.isVisible,live=teller.HasActiveStory(title)});
                 yield return Screenshot("venue-" + (index+1));
                 yield return new WaitForSecondsRealtime(3);
@@ -461,6 +496,34 @@ namespace Mirthwood.Echoes
                     yield return Await(() => !teller.HasActiveStory(title),"The native event did not end.",8);
                     Record("after-native-event-end",index,npc,new {title});
                     yield return DismissGroupTestCards();
+                }
+            }
+
+            IEnumerator VisitJoustHerald(int index, NPCController witness, GameObject root)
+            {
+                var joust=root.GetComponentInChildren<JoustingMiniGame>(true);
+                var herald=joust ? AccessTools.Field(typeof(JoustingMiniGame),"npcEventStarter")?.GetValue(joust) as NPCChatController : null;
+                if(!herald || !herald.transform.IsChildOf(root.transform)) throw new InvalidOperationException("The active joust has no public starter.");
+                yield return Approach(herald.transform.position);
+                yield return Await(()=>herald.isActiveAndEnabled && herald.GetDialogueData()!=null,
+                    "No public tournament dialogue at the native herald.",10);
+                yield return DismissGroupTestCards();
+                var player=PlayerCharacterController.Instance.GetComponent<PlayerChat>();
+                var selected=Plugin.Selected.GetValue(player);
+                var target=player.chatTarget;
+                var offer=herald.GetDialogueData();
+                DialogueView stock=null;
+                try {
+                    stock=ChooseSpeak(herald.GetComponent<NPCController>());
+                    yield return null;
+                    Record("joust-public-starter",index,witness,new {path=PathOf(herald.transform),position=At(herald.transform.position),
+                        nativeDialogue=offer?.Dialogue,choices=offer?.Choices?.Select(c=>c.choiceText).ToArray(),spawnedInstance=root.GetInstanceID(),
+                        loadedScenes=Enumerable.Range(0,SceneManager.sceneCount).Select(i=>SceneManager.GetSceneAt(i).name).ToArray()});
+                    yield return Screenshot("joust-herald-"+index);
+                } finally {
+                    if(stock) stock.HideDialogue();
+                    player.chatTarget=target;
+                    Plugin.Selected.SetValue(player,selected);
                 }
             }
 

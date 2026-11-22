@@ -192,7 +192,7 @@ namespace Mirthwood.Echoes
             RequireQuest(QuestPanel.Current==panel && (string)panel.Last["action"]=="continue" && player.QuestList.Get(quest)==null &&
                 ReferenceEquals(chat.GetDialogueData(),start) && panel.NativeTerms==terms && Friendship(npc)==friendship,
                 "Agreeing to attend the joust resolved or altered the unrelated job.");
-            panel.Editor.text=play.DeclineQuest?"No thank you. I won't take this job.":"Yes, I'll do the work on the original terms.";
+            panel.Editor.text=play.QuestDecision;
             panel.Editor.onSubmit.Invoke(panel.Editor.text);
             yield return Await(()=>QuestPanel.Current==null,"The native decision did not close the offer.",85);
             int count=player.QuestList.CountQuestsInProgress(quest);

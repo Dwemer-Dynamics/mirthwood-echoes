@@ -44,8 +44,10 @@
   },
   "interrupted-work": {
     "resident": "Baldwin",
+    "startingDesire": "eager",
     "turns": [
-      { "words": "Did I catch you on your way to something? I can walk with you.", "watchResidentWalk": true, "check": "Compare independently observed movement and the running native task before Talk with the accepted and spoken activity.", "capture": true },
+      { "words": "Did I catch you on your way to something? I can walk with you.", "calendar": { "season": "Fall", "day": 9, "time": 0.32 }, "watchResidentWalk": true, "check": "Compare independently observed movement and the running native task before Talk with the accepted and spoken activity.", "capture": true },
+      { "words": "What were you headed to do before we stopped to talk?", "check": "Keep the observed errand available on the second turn, after the resident has stopped walking.", "capture": true },
       { "words": "No need to stop on my account. I'll let you get on.", "check": "Do not invent completion of the interrupted job." }
     ]
   },
@@ -193,6 +195,7 @@
   },
   "quest": {
     "resident": "Averil",
+    "questDecision": "Yes, I'll do the work on the original terms. By the way, when is the Grand Joust?",
     "questQuestion": "Before I decide about the job, what time of year is it here and is anything announced for today?",
     "turns": [
       {
@@ -204,6 +207,7 @@
   },
   "quest-decline": {
     "resident": "Averil",
+    "questDecision": "I'll attend the Grand Joust, but I won't take this job.",
     "questQuestion": "Before I decide about work, what do the notices say about the Grand Joust today?",
     "declineQuest": true,
     "turns": [
@@ -263,13 +267,13 @@
         "check": "Source the posted event and leave unobserved attendance open."
       },
       {
-        "venue": { "title": "Grand Joust", "landmark": "fenceJousting" },
-        "words": "What can you actually see here? Who's with you at the joust?",
-        "check": "Pair the live native event, visible arena, both people, and actual bubble with the firsthand cue.",
+        "venue": { "title": "Grand Joust", "landmark": "Dummy Juggler" },
+        "words": "What can you actually see here? Who's with you at the joust gathering?",
+        "check": "Pair the event's own visible performers in Brightoak, both people and the spoken words with the firsthand cue.",
         "capture": true
       },
       {
-        "venue": { "title": "Grand Joust", "landmark": "fenceJousting", "end": true },
+        "venue": { "title": "Grand Joust", "landmark": "Dummy Juggler", "end": true },
         "words": "Did you see the jousting stop, or does the notice just give today's date?",
         "check": "Only a direct witness of the actual end can call it finished.",
         "capture": true
