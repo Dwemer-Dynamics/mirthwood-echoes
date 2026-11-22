@@ -99,7 +99,8 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     answer = dict(warm="I hear you.", neutral="I hear you.", cool="I hear you.",
                   topic="Deep", commitments=[], flow="follow")
     model.mode = "stream"
-    model.samples["group speaker"] = json.dumps(dict(words="Good morning.", to="player", ownTopic="Small Talk"))
+    model.samples["group speaker"] = json.dumps(dict(words="Good morning.", to="player",
+                                                    receivedTopic="Small Talk", ownTopic="Small Talk"))
     model.samples["passing speaker"] = "Good morning."
     model.samples["quest/opening"] = json.dumps(dict(intent="offer", evidence="", reply="Will you help?"))
     words = "My mother passed away. Could you sit with me?"
