@@ -643,5 +643,43 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release, m
     print("Withdrawal witnesses",json.dumps(dict(withdrawal=withdrawal,partialWitness=partial,rewound=rewind)),flush=True)
     world["cueHead"]=withdrawal; beat(246)
     print("PASS a bare withdrawal survives the next sentence, actor-only replacements stay attributed, and ambiguous withdrawals qualify possible permissions.",flush=True)
+
+    beat(280)
+    bell_scene = exchange([("player",averil,"I caught a pike by the mill. You may borrow my lantern. "
+                                            "I take that back. It is the mill bell ringing.")])
+    yard_scene = exchange([("player",averil,"I carved the bowl in the old stone yard. You may use my awl. "
+                                            "I was mistaken. The old stone yard is empty.")])
+    beat(281)
+    for scene, item in [(bell_scene,"pike"),(bell_scene,"lantern"),(yard_scene,"bowl"),(yard_scene,"awl")]:
+        note = concordance(scene,f"What did I tell you about the {item}?",280)[0]
+        assert note["correction"]["targetUnclear"] and "unclear target" in note["note"], note
+    bell_note = concordance(bell_scene,"What was ringing at the mill?",280)[0]
+    assert bell_note["sentence"]==3 and "correction" not in bell_note, bell_note
+
+    for day, mixed in [(315,False),(350,True)]:
+        beat(day)
+        previous = exchange([("player",averil,"I painted the red handcart.")])
+        grant = "You may borrow my fishing rod."
+        amendment = "I was mistaken. It was Nia who painted the red handcart."
+        visit, ids = exchange([("player",averil,text) for text in ([grant+" "+amendment] if mixed else [grant,amendment])])
+        beat(day+1)
+        query = "Who painted the red handcart in that visit?" if mixed else "Who painted my old red handcart?"
+        paint = concordance(previous,query,day)[0]
+        assert paint["correction"]["source"]==ids[-1] and "Nia who painted the red handcart" in paint["note"], paint
+        query = "Did you let me borrow the fishing rod in that visit?" if mixed else "What did we say about lending the fishing rod?"
+        rod = concordance((visit,[ids[0]]),query,day)[0]
+        assert rod["note"]=="Said the addressee may borrow the speaker's fishing rod." and "correction" not in rod, rod
+
+    beat(385)
+    sail = exchange([("player",averil,"I stitched the torn sail.")])
+    missing = exchange([("player",averil,"You may use my shovel. I was mistaken. It was Nell who stitched the quilt.")])
+    needlework = exchange([("player",averil,"I stitched the hood. I stitched the blue banner. I was mistaken. Mara stitched the blue banner.")])
+    beat(386)
+    shovel = concordance(missing,"Who may use the shovel?",385)[0]
+    assert shovel["note"]=="Said the addressee may use the speaker's shovel." and "correction" not in shovel, shovel
+    assert "correction" not in concordance(sail,"Who stitched the torn sail?",385)[0]
+    banner = concordance(needlework,"Who stitched the blue banner?",385)[0]
+    assert banner["sentence"]==1 and "Mara stitched the blue banner" in banner["correction"]["note"], banner
+    print("PASS incidental scenery preserves uncertainty, and a repeated action selects its source across visits and inline grants.",flush=True)
     memory_model("historian")
     print("PASS Talk and journal agree on sourced roles, recipients, corrections and unresolved claims after an unavailable overnight model.", flush=True)
