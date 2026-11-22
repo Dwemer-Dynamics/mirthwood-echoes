@@ -232,8 +232,6 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
             assert len(result["turns"])==5 and "plum" in result["turns"][-1]["reply"].lower(),result["turns"][-1]
             for answer in result["turns"][2:4]:
                 assert any(word in answer["reply"].lower() for word in ("alder","footbridge","speckled")),answer
-            subprocess.run(["node","tests/journal_browser.cjs",str(work),"--knowledge"],check=True,timeout=90)
-            print("PASS Averil found the fishing discussion after the words were retired, remembered the place on day 30, and remembered the favorite after its recap expired.",flush=True)
         expected={r["id"]:r["reply"] for r in (result["turns"][-1:] if knowledge else result["turns"])}
         for r in result["openers"]:
             if knowledge and r["id"]!=result["turns"][-1]["id"]:continue
@@ -243,9 +241,12 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
         while True:
             entries=[r for r in api(path)["items"] if r["id"] in expected]
             if {r["id"]:r["reply"] for r in entries}==expected:break
-            if time.monotonic()>=end:raise AssertionError("Journal differs from the in-game speech")
+            if time.monotonic()>=end:raise AssertionError(("Journal differs from the in-game speech",expected,entries))
             time.sleep(.5)
         write(work/"journal.json",entries)
+        if knowledge:
+            subprocess.run(["node","tests/journal_browser.cjs",str(work),"--knowledge"],check=True,timeout=90)
+            print("PASS Averil recalled the fishing place on days 2 and 30, and the favorite after its recap expired.",flush=True)
         if not resident:
             subprocess.run(["node","tests/journal_browser.cjs",str(work),"--averil"],check=True,timeout=90)
         log=(work/"server.log").read_text(encoding="utf-8",errors="replace")

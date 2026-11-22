@@ -4,7 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
-public sealed partial class Conversation(Database db,Providers providers,CharacterJournal journal,NativeProfile native)
+public sealed partial class Conversation(Database db,Providers providers,CharacterJournal journal,NativeProfile native,MemoryCompactor compactor)
 {
     public sealed record Beat(string Version,int Hooks,int Dropped,DateTime Seen,string? Campaign,int? Day);
     public Beat? LastBeat => Volatile.Read(ref beat);
@@ -43,7 +43,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                 WHERE id=@c AND year_length IS DISTINCT FROM @length
                 """,
                 ("length",w.I("yearLength")),("c",World(w)));
-        if(changedDay)MemoryCompactor.DayChanged();
+        if(changedDay)await compactor.CloseDays(CancellationToken.None);
     }
     public async Task<JsonNode> Resolve(JsonNode? n)
     {

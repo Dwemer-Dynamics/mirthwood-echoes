@@ -42,6 +42,11 @@ public static class CueHistory
             ON CONFLICT(id) DO NOTHING
         )
         DELETE FROM cue_unindexed_people p USING matches m WHERE (p.campaign,p.event,p.owner,p.native_id)=(m.campaign,m.event,m.owner,m.native_id);
+        -- A passing remark may reach midnight before its speaker first appears in a save scan.
+        UPDATE dialogue_recap_parts p SET speaker=a.key,audience=ARRAY['player',a.key]
+        FROM (SELECT owner,native_id,min(key) AS key FROM actors WHERE campaign=@campaign
+              GROUP BY owner,native_id HAVING count(*)=1) a
+        WHERE p.campaign=@campaign AND cardinality(p.audience)=0 AND p.speaker=jsonb_build_array(a.owner,a.native_id)::text;
         """;
     // Scoped CTEs leave legacy journals readable. A compacted page is visible only when every contributing source is visible.
     public const string Scope = """
@@ -53,10 +58,10 @@ public static class CueHistory
         ), turn_receipts AS (
             SELECT * FROM public.turns WHERE campaign=@c AND (cue_anchor IS NULL OR cue_anchor IN (SELECT id FROM ancestry))
         ), turns AS (SELECT * FROM turn_receipts t WHERE NOT dialogue_expired AND NOT EXISTS(SELECT FROM dialogue_clock d
-            WHERE d.campaign=t.campaign AND d.load_id<>'' AND t.dialogue_age<d.elapsed)), event_receipts AS (
+            WHERE d.campaign=t.campaign AND d.load_id<>'' AND t.dialogue_age<d.published_elapsed)), event_receipts AS (
             SELECT * FROM public.daily_events WHERE campaign=@c AND (cue_anchor IS NULL OR cue_anchor IN (SELECT id FROM ancestry))
         ), daily_events AS (SELECT * FROM event_receipts e WHERE kind<>'address' OR description<>'' AND NOT EXISTS(SELECT FROM dialogue_clock d
-            WHERE d.campaign=e.campaign AND d.load_id<>'' AND e.dialogue_age<d.elapsed)), commitments AS (
+            WHERE d.campaign=e.campaign AND d.load_id<>'' AND e.dialogue_age<d.published_elapsed)), commitments AS (
             SELECT p.id,p.campaign,p.actor,p.day,p.due,p.speaker,p.statement,
                 CASE WHEN f.day IS NULL THEN p.status ELSE 'fulfilled' END AS status,p.recorded,coalesce(f.day,p.resolved_day) AS resolved_day,
                 CASE WHEN f.day IS NULL THEN p.resolution_source ELSE 'player_report' END AS resolution_source,

@@ -2,8 +2,7 @@ using System.Threading.Channels;
 
 public sealed class MemoryCompactor(Database db, Providers providers, ILogger<MemoryCompactor> log) : BackgroundService
 {
-    static readonly System.Threading.Channels.Channel<bool> dates=System.Threading.Channels.Channel.CreateBounded<bool>(1);
-    internal static void DayChanged()=>dates.Writer.TryWrite(true);
+    readonly SemaphoreSlim rollover=new(1,1);
 
     readonly Channel<IReadOnlyList<DialogueRecaps.Source>> refinements=Channel.CreateBounded<IReadOnlyList<DialogueRecaps.Source>>(32);
 
@@ -71,22 +70,28 @@ public sealed class MemoryCompactor(Database db, Providers providers, ILogger<Me
         }
     }
 
+    internal async Task CloseDays(CancellationToken ct)
+    {
+        await rollover.WaitAsync(ct);
+        try{
+            var closed=await DialogueRetention.Maintain(db,ct);
+            foreach(var day in closed.GroupBy(r=>(r.Campaign,r.Day,r.Age,r.Mode,r.Branch,Visit:r.Mode=="group"?r.Session:"",
+                Listeners:string.Join("/",r.Audience.Order())))){
+                foreach(var batch in day.Chunk(24))refinements.Writer.TryWrite(batch);
+            }
+        }finally{rollover.Release();}
+    }
+
     async Task MaintenanceLoop(CancellationToken stoppingToken)
     {
         while(!stoppingToken.IsCancellationRequested){
             try{
-                var closed=await DialogueRetention.Maintain(db,stoppingToken);
-                foreach(var day in closed.GroupBy(r=>(r.Campaign,r.Day,r.Age,r.Mode,Visit:r.Mode=="group"?r.Session:"",
-                    Listeners:string.Join("/",r.Audience.Order())))){
-                    foreach(var batch in day.Chunk(24))refinements.Writer.TryWrite(batch);
-                }
+                await CloseDays(stoppingToken);
                 await Compact(null,null,null,(await providers.Options()).DailyDays);
                 await SummarizeResidents(stoppingToken);
             }
             catch(Exception e) when(!stoppingToken.IsCancellationRequested){log.LogWarning(e,"Could not compact character memories.");}
-            using var wait=CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-            wait.CancelAfter(TimeSpan.FromMinutes(2));
-            try{await dates.Reader.ReadAsync(wait.Token);}catch(OperationCanceledException) when(!stoppingToken.IsCancellationRequested){}
+            await Task.Delay(TimeSpan.FromMinutes(2),stoppingToken);
         }
     }
 }

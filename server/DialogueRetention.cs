@@ -30,6 +30,7 @@ internal static class DialogueRetention
         $$;
         CREATE TABLE IF NOT EXISTS dialogue_clock(campaign text PRIMARY KEY REFERENCES campaigns, day int NOT NULL,
           load_id text NOT NULL, elapsed bigint NOT NULL DEFAULT 0);
+        ALTER TABLE dialogue_clock ADD COLUMN IF NOT EXISTS published_elapsed bigint;
         ALTER TABLE dialogue_clock ADD COLUMN IF NOT EXISTS retired_loads text[] NOT NULL DEFAULT '{}';
         ALTER TABLE turns ADD COLUMN IF NOT EXISTS dialogue_age bigint, ADD COLUMN IF NOT EXISTS dialogue_expired boolean NOT NULL DEFAULT false,
           ADD COLUMN IF NOT EXISTS knowledge_reviewed boolean NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS request_digest bytea;
@@ -41,9 +42,9 @@ internal static class DialogueRetention
         CREATE OR REPLACE FUNCTION echoes_dialogue_age() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
           IF TG_TABLE_NAME IN ('turns','daily_events') THEN
-            SELECT elapsed-greatest(0,day-NEW.day) INTO NEW.dialogue_age FROM dialogue_clock WHERE campaign=NEW.campaign;
+            SELECT elapsed+(NEW.day-day) INTO NEW.dialogue_age FROM dialogue_clock WHERE campaign=NEW.campaign;
           ELSE
-            SELECT elapsed-greatest(0,day-(NEW.payload->>'day')::int) INTO NEW.dialogue_age FROM dialogue_clock WHERE campaign=NEW.campaign;
+            SELECT elapsed+((NEW.payload->>'day')::int-day) INTO NEW.dialogue_age FROM dialogue_clock WHERE campaign=NEW.campaign;
           END IF;
           RETURN NEW;
         END $$;
@@ -56,7 +57,8 @@ internal static class DialogueRetention
         """;
 
     internal static Task<JsonNode?> ObserveDay(Database db,string campaign,int day,string session)=>db.One("""
-        WITH advanced AS (INSERT INTO dialogue_clock(campaign,day,load_id) SELECT id,@day,@session FROM campaigns WHERE id=@c
+        WITH prior AS MATERIALIZED (SELECT load_id FROM dialogue_clock WHERE campaign=@c FOR UPDATE),
+        advanced AS (INSERT INTO dialogue_clock(campaign,day,load_id) SELECT id,@day,@session FROM campaigns WHERE id=@c
         ON CONFLICT(campaign) DO UPDATE SET
           elapsed=dialogue_clock.elapsed+CASE WHEN dialogue_clock.load_id=excluded.load_id
             THEN greatest(0,excluded.day-dialogue_clock.day) ELSE 0 END,
@@ -65,10 +67,19 @@ internal static class DialogueRetention
             THEN array_append(dialogue_clock.retired_loads,dialogue_clock.load_id) ELSE dialogue_clock.retired_loads END,
           load_id=excluded.load_id
         WHERE NOT excluded.load_id=ANY(dialogue_clock.retired_loads) AND
-          (dialogue_clock.load_id<>excluded.load_id OR excluded.day>dialogue_clock.day) RETURNING 1)
+          (dialogue_clock.load_id<>excluded.load_id OR excluded.day>dialogue_clock.day) RETURNING elapsed,day,load_id),
+        reloaded AS (SELECT a.* FROM advanced a,prior p WHERE a.load_id<>p.load_id),
+        future_turns AS (UPDATE turns t SET dialogue_age=d.elapsed-greatest(0,d.day-t.day) FROM reloaded d
+          WHERE t.campaign=@c AND t.dialogue_age>d.elapsed),
+        future_cues AS (UPDATE cue_events e SET dialogue_age=d.elapsed-greatest(0,d.day-(e.payload->>'day')::int) FROM reloaded d
+          WHERE e.campaign=@c AND e.dialogue_age>d.elapsed),
+        future_addresses AS (UPDATE daily_events e SET dialogue_age=d.elapsed-greatest(0,d.day-e.day) FROM reloaded d
+          WHERE e.campaign=@c AND e.kind='address' AND e.dialogue_age>d.elapsed)
         SELECT CASE WHEN EXISTS(SELECT FROM advanced) THEN 'true'
           WHEN EXISTS(SELECT FROM dialogue_clock WHERE campaign=@c AND
-            (@session=ANY(retired_loads) OR load_id=@session AND day>@day)) THEN NULL ELSE 'false' END
+            (@session=ANY(retired_loads) OR load_id=@session AND day>@day)) THEN NULL
+          WHEN EXISTS(SELECT FROM dialogue_clock WHERE campaign=@c AND load_id=@session AND published_elapsed IS DISTINCT FROM elapsed)
+            THEN 'true' ELSE 'false' END
         """,("c",campaign),("day",day),("session",session));
 
     internal static async Task<List<DialogueRecaps.Source>> Maintain(Database db,CancellationToken ct)
@@ -78,11 +89,11 @@ internal static class DialogueRetention
               FROM daily_events e WHERE p.source_type='event' AND e.id=p.source_id AND p.evidence IS NULL AND e.description<>'';
             INSERT INTO dialogue_clock(campaign,day,load_id) SELECT c.id,c.day,'' FROM campaigns c JOIN slots s ON c.id=s.campaign
               WHERE c.day>=0 ON CONFLICT DO NOTHING;
-            UPDATE turns t SET dialogue_age=d.elapsed-greatest(0,d.day-t.day) FROM dialogue_clock d
+            UPDATE turns t SET dialogue_age=d.elapsed+(t.day-d.day) FROM dialogue_clock d
               WHERE d.campaign=t.campaign AND t.dialogue_age IS NULL;
-            UPDATE daily_events e SET dialogue_age=d.elapsed-greatest(0,d.day-e.day) FROM dialogue_clock d
+            UPDATE daily_events e SET dialogue_age=d.elapsed+(e.day-d.day) FROM dialogue_clock d
               WHERE d.campaign=e.campaign AND e.dialogue_age IS NULL AND e.kind='address' AND e.description<>'';
-            UPDATE cue_events e SET dialogue_age=d.elapsed-greatest(0,d.day-(e.payload->>'day')::int) FROM dialogue_clock d
+            UPDATE cue_events e SET dialogue_age=d.elapsed+((e.payload->>'day')::int-d.day) FROM dialogue_clock d
               WHERE d.campaign=e.campaign AND e.dialogue_age IS NULL AND e.payload->>'kind' IN ('address','group');
             """);
         await using var conn=await db.Source.OpenConnectionAsync(ct);
@@ -133,6 +144,7 @@ internal static class DialogueRetention
         }
         await using var expire=await conn.BeginTransactionAsync(ct);
         await using var select=Database.Command(conn,"""
+            SELECT campaign FROM dialogue_clock ORDER BY campaign FOR UPDATE;
             UPDATE personality_turning_points p SET evidence=echoes_marked_evidence(t.id,p.reason)
               FROM turns t WHERE p.source_type='turn' AND t.id=p.source_id AND p.evidence IS NULL AND t.knowledge_reviewed;
             CREATE TEMP TABLE old_turns ON COMMIT DROP AS
@@ -206,6 +218,11 @@ internal static class DialogueRetention
               payload=CASE WHEN e.payload->>'kind'='group' THEN jsonb_set(e.payload,'{line}',
                 (e.payload->'line')-'words'-'learned'-'promise'-'proposal'-'priorPromise'-'priorProposal')
                 ELSE jsonb_set(e.payload,'{people}','[]'::jsonb) END FROM old_cues x WHERE (x.campaign,x.id)=(e.campaign,e.id);
+            UPDATE dialogue_clock d SET published_elapsed=elapsed WHERE load_id<>'' AND published_elapsed IS DISTINCT FROM elapsed
+              AND NOT EXISTS(SELECT FROM turns t WHERE t.campaign=d.campaign AND t.state='complete' AND NOT t.knowledge_reviewed
+                AND NOT t.dialogue_expired AND t.dialogue_age<d.elapsed)
+              AND NOT EXISTS(SELECT FROM cue_events e WHERE e.campaign=d.campaign AND e.payload->>'kind'='group' AND NOT e.knowledge_reviewed
+                AND NOT e.dialogue_expired AND e.dialogue_age<d.elapsed);
             """,("days",Days));
         await prune.ExecuteNonQueryAsync(ct);
         await expire.CommitAsync(ct);

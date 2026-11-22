@@ -152,10 +152,30 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     assert api("dialogue/finish",dict(agreement,reaction="neutral"))["state"]=="complete"
     assert sql(f"""SELECT proposal FROM commitments WHERE turn_id='{agreement["id"]}'""")==ribbon["text"]
     fish=say("We landed a speckled trout beneath the alder footbridge.")
-    repair=say("We replaced the broken planks at the alder footbridge.")
-    hive=say("The orchard bees swarmed beside the tumbledown chapel.")
+    say("We replaced the broken planks at the alder footbridge.")
+    say("The orchard bees swarmed beside the tumbledown chapel.")
     craft=say("The glassblower shaped a blue goblet at the bell tower.")
     assert any(r["id"]==fish["id"] for r in view(averil,"conversations"))
+    missing=str(uuid4())
+    api("module/cue",dict(world=dict(world),kind="address",parent=full_head,id=missing,
+        people=[dict(owner="Recap-NPC",nativeId="late-roster",description="The bronze weathercock rattled above the granary.")]))
+    full_head=missing;world["cueHead"]=full_head;beat(20)
+    quest=str(uuid4())
+    base=dict(key="native-whistle",campaign=campaign,actor=averil,session=quest)
+    offer=dict(key="native-whistle",title="An errand",terms="Bring flour to the mill.",objectives=["Collect flour"])
+    root=dict(base,id=quest,offer=offer)
+    assert api("quests/turn",root)["state"]=="ready"
+    assert api("quests/finish",dict(base,id=quest,action="continue"))["state"]=="complete"
+    chosen=dict(base,id=str(uuid4()),parent=quest,text="I like rye bread. I accept.")
+    assert api("quests/turn",chosen)["action"]=="accept"
+    ack=dict(base,id=chosen["id"],action="accept")
+    assert api("quests/finish",ack)["state"]=="complete"
+    # A native cue can arrive before the next day's heartbeat.
+    early=str(uuid4())
+    early_chat=str(uuid4())
+    api("module/cue",dict(id=early,parent=full_head,world=dict(world,day=21),kind="group",people=[],
+        line=dict(session=early_chat,seq=1,speaker="player",to="group",audience=both,words="The clay oven is warm.",
+                  at=datetime.now(timezone.utc).isoformat())))
     expiring=say("Could you bring the copper thimble to the mill?")
     delayed=dict(id=str(uuid4()),campaign=campaign,actor=averil,text="Would you do that for me?")
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -165,7 +185,8 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
             prompt=next(call["messages"][0]["content"] for call in reversed(calls) if call["messages"][1]["content"]==delayed["text"])
             assert expiring["text"] in prompt
             beat(21)
-            until(lambda: sql("SELECT dialogue_expired FROM turns WHERE id='"+expiring["id"]+"'")=="t")
+            assert sql("SELECT dialogue_expired FROM turns WHERE id='"+expiring["id"]+"'")=="t"
+            assert any(r["id"]=="day-20" and r.get("hasOriginal") is False for r in view(averil,"sessions"))
         finally:release.set()
         assert future.result()["state"]=="ready"
     assert api("dialogue/finish",dict(delayed,reaction="neutral"))["state"]=="complete"
@@ -179,6 +200,23 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     def texts(items):return " ".join(r["note"].lower() for r in items)
     def day_recap(actor):
         return next(r for r in view(actor,"sessions") if r["id"]=="day-20")
+    assert sum(r["id"]=="day-20" for r in view(averil,"sessions"))==1
+    assert api("quests/turn",chosen)["state"]=="expired" and api("quests/turn",root)["state"]=="expired"
+    assert api("quests/finish",ack)["state"]=="expired"
+    api("quests/turn",dict(root,offer=dict(offer,terms="Different terms.")),expected=409)
+    api("quests/turn",dict(chosen,text="Changed."),expected=409)
+    api("quests/finish",dict(ack,action="decline"),expected=409)
+    assert "rye bread" in values(averil)
+    assert sql(f"""SELECT cardinality(audience) FROM dialogue_recap_parts WHERE anchor='{missing}'""")=="0"
+    identified=uuid4().hex
+    sql(f"""INSERT INTO actors SELECT campaign,'{identified}','Recap-NPC','late-roster','Wren',kind,job,town,true,raw
+        FROM actors WHERE campaign='{campaign}' AND key='{averil}'""")
+    api("module/cue",dict(world=dict(world),kind="talk",people=[],id=str(uuid4()),parent=full_head))
+    assert "granary" in day_recap(identified)["body"].lower()
+    assert "weathercock" not in day_recap(averil)["body"].lower()
+    world["cueHead"]=early;beat(21)
+    assert api(prefix+averil+"/history/sessions/"+early_chat)[0]["text"]=="The clay oven is warm."
+    world["cueHead"]=full_head;beat(21)
     assert day_recap(averil)["visits"]>=2 and day_recap(averil)["hasOriginal"] is False,day_recap(averil)
     api(prefix+averil+"/history/sessions/day-20",expected=404)
     api(prefix+averil+"/sources/turn/"+fish["id"],expected=404)
@@ -190,7 +228,8 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     assert "chapel" in texts(check_recall(averil,"Is this a good place for an apiary?"))
     until(lambda: sql(f"""SELECT aliases FROM dialogue_recap_parts WHERE source='{craft["id"]}' AND pos=1""")=="glassmaking stemware")
     assert "bell tower" in texts(check_recall(averil,"Who around here knows about stemware?"))
-    assert not check_recall(averil,"Have you seen any emeralds?")
+    unrelated=check_recall(averil,"Have you seen any emeralds?")
+    assert not unrelated,unrelated
     assert not check_recall(drystan,ask)
     assert sql(f"""SELECT player_text='' AND reply IS NULL FROM turns WHERE id='{fish["id"]}'""")=="t"
     assert not any(r["id"]==old["id"] for r in view(averil,"conversations"))
@@ -198,9 +237,29 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     group_entry="day-20-"+session
     def group_body(actor):return next((r["body"] for r in view(actor,"sessions") if r["id"]==group_entry),"")
     assert group_body(drystan) and "magpie" not in group_body(guest).lower()
+    def shared_recall(words,listeners):
+        chat,tip=str(uuid4()),str(uuid4())
+        api("module/cue",dict(world=dict(world),kind="group",people=[],parent=full_head,id=tip,
+            line=dict(session=chat,seq=1,speaker="player",to="group",audience=listeners,words=words,at=datetime.now(timezone.utc).isoformat())))
+        api("dialogue/group",dict(campaign=campaign,actor=averil,head=tip,session=chat,audience=listeners))
+        context=next(json.loads(x["messages"][1]["content"]) for x in reversed(calls) if "heardInOrder" in x["messages"][1]["content"])
+        return context["yourMemory"].get("conversationRecaps",[])
+    assert "buckle" in texts(shared_recall("What became of the magpie?",both))
+    assert not shared_recall("What became of the magpie?",[*both,guest])
+    assert not shared_recall(ask,both)
     world["cueHead"]=packets[0]["id"];beat(21)
     assert group_body(drystan) and not group_body(guest)
     world["cueHead"]=full_head;beat(21)
+    # Two children of the same save must never share a refinement prompt, even with identical listeners.
+    for token in ("spindle whorl","silver brooch"):
+        tip=str(uuid4())
+        api("module/cue",dict(world=dict(world),kind="group",people=[],id=tip,parent=full_head,
+            line=dict(session=early_chat,seq=1,speaker="player",to="group",audience=both,words="I found a "+token+".",
+                      at=datetime.now(timezone.utc).isoformat())))
+    beat(22)
+    def model_batches():return [call["messages"][1]["content"] for call in calls if "Summarize one day of spoken dialogue" in call["messages"][0]["content"]]
+    until(lambda:all(any(token in batch for batch in model_batches()) for token in ("spindle whorl","silver brooch")))
+    assert not any("spindle whorl" in batch and "silver brooch" in batch for batch in model_batches())
     beat(49)
     assert day_recap(averil) and "alder" in texts(check_recall(averil,ask))
     clock=lambda:int(sql("SELECT elapsed FROM dialogue_clock WHERE campaign='"+campaign+"'"))

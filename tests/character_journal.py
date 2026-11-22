@@ -27,7 +27,11 @@ class Writer(BaseHTTPRequestHandler):
         player=packet["messages"][1]["content"]
         marks=[{"speaker":"player","quote":player}] if player=="I promise to deliver flour tomorrow." else []
         text="The miller learned the rhythm of the mill in Brightoak." if packet["model"]=="historian" else json.dumps({"reply":"Welcome back.","commitments":marks})
-        if "Summarize one day of spoken dialogue" in packet["messages"][0]["content"]:
+        if "Mirthwood quest" in packet["messages"][0]["content"]:
+            offer=json.loads(player)
+            text=json.dumps({"intent":"offer","evidence":"","reply":"Have you seen the copper whistle?"} if offer["opening"] else
+                            {"intent":"accept","evidence":"I accept.","reply":"Thank you."})
+        elif "Summarize one day of spoken dialogue" in packet["messages"][0]["content"]:
             rows=json.loads(player)
             text=json.dumps([dict(i=row["i"],quote=row["words"],summary="Mentioned a blue goblet at the bell tower.",
                                   topics=["glassmaking","stemware"]) for row in rows if "blue goblet" in row["words"]])

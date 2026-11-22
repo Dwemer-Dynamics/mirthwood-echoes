@@ -56,29 +56,13 @@ internal static class DialogueRecaps
         i i'm im me we us you your you're it it's they them she he to from with for by so do does did would could should
         have has had i'll i've we've i'd if then there here what when where who which why how often still just also
         like some something anything someone about tell told remember recall mention mentioned much much more most
-        any can may might shall really think know well yes good welcome back again please thanks thank thankyou
+        near beneath above below beside across under toward outside through before after into alongside see seen saw look looking find found hear wondering ever already lately any can may might shall really think know well yes good welcome back again please thanks thank thankyou
         recommend quiet stretch time day yesterday today once said say asking ask asked wanting wanted reckon
         """).Split((char[]?)null,StringSplitOptions.RemoveEmptyEntries));
     static readonly Regex Words=new(@"[\p{L}\p{N}]+(?:['’][\p{L}]+)?",RegexOptions.Compiled);
     static string[] Terms(string value)=>Words.Matches(value.ToLowerInvariant()).Select(m=>m.Value.Replace('’','\''))
         .Where(w=>w.Length>1&&!Stop.Contains(w)).Distinct().Take(48).ToArray();
     static string[] Concepts(string[] terms)=>terms.SelectMany(word=>ConceptsByWord.GetValueOrDefault(word)??Array.Empty<string>()).Distinct().ToArray();
-
-    // Prefer a short indirect statement for the common first-person forms. A topic-only
-    // fallback preserves scope when changing pronouns or trimming a qualifier would change the claim.
-    static string Fallback(string words,string topics)
-    {
-        string line=words.Trim();
-        if(line.Length<=155 && !line.Contains('*') && Regex.IsMatch(line,@"^[^.!?]+[.!]?$")){
-            var subject=Regex.Match(line,@"^(I|We) (?!.*\b(I|me|my|we|our|us|you|your)\b)(.+)$",RegexOptions.IgnoreCase);
-            if(subject.Success){
-                var content=subject.Groups[3].Value.TrimEnd('.','!');
-                if(content.Length>=4)return (subject.Groups[1].Value.Equals("we",StringComparison.OrdinalIgnoreCase)
-                    ?"Said their group ":"Said they ")+Regex.Replace(content,@"^(am|was)\b",m=>m.Value.ToLowerInvariant()=="am"?"are":"were",RegexOptions.IgnoreCase)+".";
-            }
-        }
-        return topics;
-    }
 
     static string? GroundedSummary(string summary,string quote)
     {
@@ -89,18 +73,20 @@ internal static class DialogueRecaps
         var evidence=Words.Matches(quote.ToLowerInvariant()).Select(m=>m.Value.Replace('’','\'')).ToHashSet();
         var content=Terms(summary[frame.Length..]);
         if(!content.Any(evidence.Contains)||content.Any(w=>!evidence.Contains(w)&&w is not ("group" or "whether")))return null;
+        if(content.Length>5 && content.SequenceEqual(Terms(quote)))return null;
         var qualifiers=new[]{"not","no","never","didn't","don't","wasn't","might","maybe","if","heard","perhaps","allegedly"};
         if(qualifiers.Any(q=>evidence.Contains(q)!=Words.Matches(summary.ToLowerInvariant().Replace('’','\'')).Any(m=>m.Value==q)))return null;
         return summary;
     }
 
     internal sealed record Source(string Campaign,Guid Id,int Position,Guid? Anchor,int Day,long Age,string Session,
-        string Mode,DateTime At,int Sequence,string Speaker,string[] Audience,string Words);
+        string Mode,DateTime At,int Sequence,string Speaker,string[] Audience,string Words,Guid? Branch);
     internal static async Task<List<Source>> Capture(NpgsqlConnection conn,CancellationToken ct)
     {
         // These exact words exist only in memory for the background model after the transaction commits.
         var samples=new List<Source>();
         await using var read=Database.Command(conn,"""
+            WITH RECURSIVE speech(campaign,id,pos,anchor,day,age,session,mode,at,seq,speaker,audience,words) AS (
             SELECT t.campaign,t.id,p.pos,t.cue_anchor,t.day,t.dialogue_age,x.session,'private',t.started,0,p.speaker,
                 ARRAY['player',t.actor],p.words FROM old_turns x JOIN turns t ON t.id=x.id
               CROSS JOIN LATERAL (VALUES(0,t.actor,t.quest_offer->'offer'->>'terms'),(1,'player',t.player_text),(2,t.actor,t.reply)) p(pos,speaker,words)
@@ -112,13 +98,29 @@ internal static class DialogueRecaps
             UNION ALL SELECT d.campaign,d.id,0,d.cue_anchor,d.day,x.age,x.session,'private',d.observed,0,d.actor,
                 ARRAY['player',d.actor],d.description FROM old_addresses x JOIN daily_events d ON x.id=d.id
               WHERE x.keep AND d.description<>''
-            ORDER BY 1,5,9,10,2,3
+            UNION ALL SELECT u.campaign,md5(jsonb_build_array(u.event,u.owner,u.native_id)::text)::uuid,0,u.event,u.day,e.dialogue_age,
+                x.session,'private',transaction_timestamp(),0,jsonb_build_array(u.owner,u.native_id)::text,ARRAY[]::text[],u.description
+              FROM old_cues x JOIN cue_events e USING(campaign,id) JOIN cue_unindexed_people u ON (u.campaign,u.event)=(x.campaign,x.id)
+              WHERE x.keep AND u.kind='address' AND u.description<>''
+            ), past(campaign,id,parent) AS (
+              SELECT e.campaign,e.id,e.parent FROM cue_events e JOIN (SELECT DISTINCT campaign,anchor FROM speech) s
+                ON (e.campaign,e.id)=(s.campaign,s.anchor)
+              UNION SELECT e.campaign,e.id,e.parent FROM cue_events e JOIN past p ON (e.campaign,e.id)=(p.campaign,p.parent)
+            ), forks AS (SELECT campaign,parent FROM past GROUP BY campaign,parent HAVING count(*)>1),
+            branches(campaign,id,branch) AS (
+              SELECT campaign,id,id FROM past WHERE parent IS NULL
+              UNION ALL SELECT p.campaign,p.id,CASE WHEN f.parent IS NULL THEN b.branch ELSE p.id END
+              FROM past p JOIN branches b ON (b.campaign,b.id)=(p.campaign,p.parent)
+              LEFT JOIN forks f ON (f.campaign,f.parent)=(p.campaign,p.parent)
+            )
+            SELECT s.*,coalesce(b.branch,s.anchor) FROM speech s LEFT JOIN branches b ON (b.campaign,b.id)=(s.campaign,s.anchor)
+            ORDER BY s.campaign,s.day,s.at,s.seq,s.id,s.pos
             """);
         var rows=new List<Source>();
         await using(var reader=await read.ExecuteReaderAsync(ct)){
             while(await reader.ReadAsync(ct))rows.Add(new(reader.GetString(0),reader.GetGuid(1),reader.GetInt32(2),
                 reader.IsDBNull(3)?null:reader.GetGuid(3),reader.GetInt32(4),reader.GetInt64(5),reader.GetString(6),
-                reader.GetString(7),reader.GetDateTime(8),reader.GetInt32(9),reader.GetString(10),reader.GetFieldValue<string[]>(11),reader.GetString(12)));
+                reader.GetString(7),reader.GetDateTime(8),reader.GetInt32(9),reader.GetString(10),reader.GetFieldValue<string[]>(11),reader.GetString(12),reader.IsDBNull(13)?null:reader.GetGuid(13)));
         }
         foreach(var row in rows){
             var terms=Terms(row.Words);
@@ -127,20 +129,27 @@ internal static class DialogueRecaps
             var phrases=new List<string>();
             var phrase=new List<string>();
             void Flush(){if(phrase.Count>0){phrases.Add(string.Join(" ",phrase));phrase.Clear();}}
+            int lastEnd=0;
             foreach(Match word in Words.Matches(row.Words)){
+                if(row.Words.AsSpan(lastEnd,word.Index-lastEnd).IndexOfAny(".,?!;:*".AsSpan())>=0)Flush();
+                lastEnd=word.Index+word.Length;
                 string key=word.Value.ToLowerInvariant().Replace('’','\'');
                 if(terms.Contains(key)&&phrase.Count<3)phrase.Add(word.Value);else {Flush();if(terms.Contains(key))phrase.Add(word.Value);}
             }
             Flush();
-            string detail=phrases.Count==0?"Exchanged a few words.":"Mentioned "+string.Join(", ",phrases.Distinct(StringComparer.OrdinalIgnoreCase).Take(7))+".";
+            var details=phrases.Distinct(StringComparer.OrdinalIgnoreCase).Select((phrase,index)=>(phrase,index))
+                .OrderByDescending(p=>p.phrase.Contains(' ')).ThenByDescending(p=>p.phrase.Length).Take(4)
+                .OrderBy(p=>p.index).Select(p=>p.phrase).ToArray();
+            string detail=details.Length==0?"Exchanged a few words.":(row.Words.TrimEnd().EndsWith('?')?"Asked about ":"Mentioned ")+
+                (details.Length==1?details[0]:string.Join(", ",details[..^1])+" and "+details[^1])+".";
             await using var insert=Database.Command(conn,"""
                 INSERT INTO dialogue_recap_parts(campaign,source,pos,anchor,day,age,session,mode,said_at,seq,speaker,audience,detail,keywords,concepts,question)
                 VALUES(@c,@id,@p,@anchor,@day,@age,@session,@mode,@at,@seq,@speaker,@audience,@detail,@terms,@concepts,@question)
                 ON CONFLICT DO NOTHING
                 """,("c",row.Campaign),("id",row.Id),("p",row.Position),("anchor",row.Anchor),("day",row.Day),("age",row.Age),
                 ("session",row.Session),("mode",row.Mode),("at",row.At),("seq",row.Sequence),("speaker",row.Speaker),
-                ("audience",row.Audience),("detail",Fields.Clip(Fallback(row.Words,detail),180)),("terms",string.Join(" ",terms.Order())),("concepts",Concepts(terms)),("question",row.Words.TrimEnd().EndsWith('?')));
-            if(await insert.ExecuteNonQueryAsync(ct)>0&&terms.Length>0)samples.Add(row);
+                ("audience",row.Audience),("detail",Fields.Clip(detail,130)),("terms",string.Join(" ",terms.Order())),("concepts",Concepts(terms)),("question",row.Words.TrimEnd().EndsWith('?')));
+            if(await insert.ExecuteNonQueryAsync(ct)>0&&terms.Length>0&&row.Audience.Length>0)samples.Add(row);
         }
         return samples;
     }
@@ -202,8 +211,6 @@ internal static class DialogueRecaps
             var row=rows[i];string quote=item.S("quote").Trim();
             if(quote.Length is <3 or >320 || !DialogueOutput.IsWholeQuote(row.Words,quote))continue;
             string? summary=GroundedSummary(item.S("summary").Trim(),quote);
-            if(summary==null && quote.Length<=105 && quote.Length<row.Words.Trim().Length*.65)
-                summary="Recalled words: “"+quote+"”";
             var tags=(item["topics"] as JsonArray)?.OfType<JsonValue>().Select(v=>v.TryGetValue<string>(out var s)?s:"")
                 .Where(s=>Regex.IsMatch(s,@"^[\p{L} -]{2,35}$")).Take(4)??Enumerable.Empty<string>();
             await db.Run("""

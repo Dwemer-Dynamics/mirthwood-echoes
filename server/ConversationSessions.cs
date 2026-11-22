@@ -11,7 +11,7 @@ public static class ConversationSessions
             FROM ancestry h JOIN cue_events e ON e.campaign=@c AND e.id=h.id
             WHERE e.payload->>'kind'='group' AND e.payload->'line' ? 'words' AND (e.payload->'line'->'audience') ? @a
                 AND (e.payload->>'day')::int<=@day AND NOT EXISTS(SELECT FROM dialogue_clock d
-                    WHERE d.campaign=e.campaign AND d.load_id<>'' AND e.dialogue_age<d.elapsed)
+                    WHERE d.campaign=e.campaign AND d.load_id<>'' AND e.dialogue_age<d.published_elapsed)
         ), lines AS (
             SELECT coalesce(t.cue_binding->>'conversation',t.id::text) AS session,'private' AS mode,
                 t.id AS source,t.day,t.started AS at,0 AS seq,p.n,p.speaker,p.words,'turn' AS source_type,
