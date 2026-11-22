@@ -826,6 +826,27 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     world["day"]=58
     beat()
     fall = dict(season="Fall",seasonIndex=2,dayOfSeason=9,daysInSeason=25,year=0,timeOfDay="Night")
+    dock = dict(owner=facts["owner"], nativeId=facts["nativeId"], world=deepcopy(world), day=58, calendar=fall,
+                place=dict(region="Stormreach Coast", interior=False), sights=[], today=[])
+    ship = dict(title="Trade Ship", status="active", source="firsthand", when="in sight now", seen="a trader",
+                season="Fall", seasonIndex=2, dayOfSeason=9, year=0)
+    landing = "What's going on at this landing? What can you actually see here?"
+    model.samples[landing] = json.dumps(answer)
+    _, distant = prepare(turn(dock, text=landing))
+    assert not distant["worldAwareness"]["today"] and "nextNotice" not in distant["worldAwareness"]
+    accepted = turn(dict(dock, today=[ship]), text=landing)
+    ready, present = prepare(accepted)
+    scene = present["worldAwareness"]
+    assert scene["sights"] == ["a trader"] and scene["today"] == [{
+        k: v for k, v in ship.items() if k not in ("seasonIndex", "year")}]
+    assert without_generation(private, dict(accepted, worldAwareness=dock)) == ready
+    _, shared_deck = prepare(turn(dict(dock, today=[dict(ship, playerInSight=True)]), text=landing))
+    assert shared_deck["worldAwareness"]["today"][0]["playerInSight"] is True
+    _, left_deck = prepare(turn(dict(dock, today=[dict(ship, when="earlier today", playerInSight=True)]), text=landing))
+    earlier = left_deck["worldAwareness"]
+    assert earlier["today"][0]["seen"] == "a trader" and "playerInSight" not in earlier["today"][0]
+    assert "a trader" not in earlier.get("sights", [])
+    checked("Trade Ship on the Stormreach dock keeps no-ship, trader-only, shared and earlier sightings distinct on replay")
     fall_joust = dict(joust,season="Fall",seasonIndex=2,dayOfSeason=12,year=0)
     hallows = dict(fall_joust,title="All Hallows Eve",dayOfSeason=17)
     both_boards = dict(facts,world=world,day=58,observedAt=58.9,calendar=fall,today=[],nextNotice=fall_joust,

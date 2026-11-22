@@ -17,6 +17,7 @@ using _Mirthwood.Scripts.Demo.ScriptableObjects;
 using _Mirthwood.Scripts.Demo.Triggers;
 using _Mirthwood.Scripts.Demo.Weather;
 using _Mirthwood.Scripts.Localization;
+using _Mirthwood.Scripts.Runtime.Demo.Triggers;
 using _Mirthwood.Scripts.Runtime.Demo.Utils;
 using Object = UnityEngine.Object;
 
@@ -48,8 +49,35 @@ namespace Mirthwood.Echoes
             internal readonly List<RoomFloor> Floors = new List<RoomFloor>();
             internal readonly Dictionary<DoorTrigger, Transform> Buildings = new Dictionary<DoorTrigger, Transform>();
 
+            internal readonly List<BoxCollider> HarborAreas = new List<BoxCollider>();
+            internal readonly HashSet<Collider> DeckPlanks = new HashSet<Collider>();
+
+            void IndexHarbor(AreaLoader loader)
+            {
+                var area = loader.GetComponent<BoxCollider>();
+                if (!area || !area.isTrigger) return;
+                HarborAreas.Add(area);
+                // These are the boarding surfaces in the stock Stormreach loader. Other boxes
+                // on the same dock and ramp objects are rails and walls with tall local Z.
+                foreach (var ship in new[] { "Trade Ship (1)", "Trade Ship (2)" })
+                    foreach (var plank in new[] { "shipBase (1)", "platform", "ramp" })
+                        AddPlate(loader.transform.Find(ship + "/Ship Structure/" + plank));
+                AddPlate(loader.transform.Find("Docks/dockSouthShort"));
+                AddPlate(loader.transform.Find("Docks/dockWestLong"));
+
+                void AddPlate(Transform plank)
+                {
+                    if (!plank) return;
+                    foreach (var box in plank.GetComponents<BoxCollider>())
+                        if (!box.isTrigger && box.size.z > 0 && box.size.z <= .25f &&
+                            box.size.x >= 1f && box.size.y >= 1f) DeckPlanks.Add(box);
+                }
+            }
+
             internal Geometry()
             {
+                foreach (var loader in Object.FindObjectsOfType<AreaLoader>(true))
+                    if (loader.name == "Load Stormreach") IndexHarbor(loader);
                 var indexed = new HashSet<Transform>();
                 foreach (var door in Doors) {
                     for (var building = door.transform.parent; building; building = building.parent) {
@@ -89,6 +117,13 @@ namespace Mirthwood.Echoes
                 Building = building;
                 Level = level;
                 floor = renderer;
+            }
+
+            internal bool Between(Vector3 top, float bottom)
+            {
+                if (!floor) return false;
+                float y = floor.transform.position.y;
+                return y >= bottom - .12f && y <= top.y + .12f && Contains(new Vector3(top.x, y, top.z));
             }
 
             internal bool Contains(Vector3 feet)
@@ -137,15 +172,82 @@ namespace Mirthwood.Echoes
         {
             internal readonly bool? Interior;
             internal readonly RoomFloor Room;
-            internal Surroundings(bool? interior, RoomFloor room = null) { Interior = interior; Room = room; }
+            internal readonly float FloorY;
+            internal readonly Collider Deck;
+            internal Surroundings(bool interior, float y, RoomFloor room = null, Collider deck = null)
+            {
+                Interior = interior;
+                FloorY = y;
+                Room = room;
+                Deck = deck;
+            }
         }
 
-        static Surroundings LocateFloor(Vector3 feet, Geometry world)
+        // Mirthwood's residents use ground-agent navigation (agent type 0). Anchor it at
+        // the physical contact. An unrestricted sample from above can return the seabed.
+        static readonly NavMeshQueryFilter GroundAgent = new NavMeshQueryFilter { agentTypeID = 0, areaMask = NavMesh.AllAreas };
+
+        static bool NavAt(Vector3 feet, out NavMeshHit nav)
         {
+            if (!NavMesh.SamplePosition(feet, out nav, .18f, GroundAgent)) return false;
+            var delta = nav.position - feet;
+            return delta.x * delta.x + delta.z * delta.z <= .06f * .06f;
+        }
+
+        // True means an authored deck was encountered. A missing result then expresses
+        // ambiguous or unsupported footing and must not fall through to the seabed.
+        static bool HarborFloor(Vector3 position, Geometry world, Transform owner, bool scenery, Collider observerDeck, out RaycastHit support)
+        {
+            support = default;
+            if (!owner || !world.HarborAreas.Any(a => a && a.enabled && a.gameObject.activeInHierarchy && a.bounds.Contains(position) &&
+                a.gameObject.scene.GetPhysicsScene() == owner.gameObject.scene.GetPhysicsScene())) return false;
+            const float rise = .25f;
+            var ray = new Ray(position + Vector3.up * rise, Vector3.down);
+            float distance = rise + (scenery ? 3f : .35f);
+            if (!world.DeckPlanks.Any(p => p && p.enabled && p.gameObject.activeInHierarchy &&
+                p.bounds.IntersectRay(ray, out var near) && near <= distance)) return false;
+            var hits = Physics.RaycastAll(ray.origin, ray.direction, distance, Physics.AllLayers, QueryTriggerInteraction.Ignore);
+            RaycastHit deck = default;
+            foreach (var hit in hits)
+                if (world.DeckPlanks.Contains(hit.collider) && hit.collider.gameObject.scene.GetPhysicsScene() == owner.gameObject.scene.GetPhysicsScene() &&
+                    (!deck.collider || hit.distance < deck.distance)) deck = hit;
+            if (!deck.collider) return false;
+            if (deck.point.y > position.y + .18f || deck.normal.y < .85f ||
+                Mathf.Abs(Vector3.Dot(deck.normal, deck.transform.forward)) < .97f) return true;
+            foreach (var hit in hits) {
+                if (hit.collider == deck.collider || hit.distance > deck.distance + .025f) continue;
+                // Stock traders have a solid body capsule on their drawn mesh. A roof,
+                // ceiling or furnishing between a scenery pivot and the plank still blocks.
+                if (hit.transform.IsChildOf(owner) && (!scenery || hit.collider is CapsuleCollider)) continue;
+                return true;
+            }
+            if (NavAt(deck.point, out _) || (!scenery && deck.collider == observerDeck &&
+                CurrentPlayerOnDeck(owner, deck.point))) support = deck;
+            return true;
+        }
+
+        // The current player's capsule can stand at the edge of the same convex plank
+        // on which the observing resident has verified navigation. A nearby nav sample
+        // may move when the Talk actors carve the mesh. Check the actual player capsule.
+        static bool CurrentPlayerOnDeck(Transform subject, Vector3 contact)
+        {
+            var player = PlayerCharacterController.Instance;
+            if (!player || player.transform != subject || !player.isActiveAndEnabled ||
+                string.IsNullOrWhiteSpace(player.CharacterInfo?.id) || string.IsNullOrWhiteSpace(player.CharacterInfo.name)) return false;
+            var capsule = player.GetComponent<CharacterController>();
+            if (!capsule || !capsule.enabled || !capsule.detectCollisions) return false;
+            float clearance = capsule.bounds.min.y - contact.y;
+            return clearance >= -.025f && clearance <= Mathf.Min(.12f, capsule.skinWidth + .02f);
+        }
+
+        // Indoor rooms and uncertain doorways resolve before any terrain or open-deck query.
+        static bool ArchitectureAt(Vector3 feet, Geometry world, out Surroundings place)
+        {
+            place = default;
             RoomFloor room = null;
             foreach (var floor in world.Floors) {
                 if (!floor.Contains(feet)) continue;
-                if (room != null && room.Level != floor.Level) return default;
+                if (room != null && room.Level != floor.Level) return true;
                 room = floor;
             }
             foreach (var door in world.Doors) {
@@ -154,15 +256,44 @@ namespace Mirthwood.Echoes
                 if (delta.sqrMagnitude > 144f) continue;
                 float side = Vector3.Dot(delta, door.transform.forward);
                 var portal = door.GetComponent<Collider>();
-                if (Mathf.Abs(side) < .12f && portal && portal.bounds.Contains(feet + Vector3.up * .5f)) return default;
+                if (Mathf.Abs(side) < .12f && portal && portal.bounds.Contains(feet + Vector3.up * .5f)) return true;
                 // A doorway without a matching floor cannot establish where its room ends.
                 if (room == null && side > 0 && (!world.Buildings.TryGetValue(door, out var building) ||
-                    !world.Floors.Any(f => f.Building == building))) return default;
+                    !world.Floors.Any(f => f.Building == building))) return true;
             }
-            if (room != null) return new Surroundings(true, room);
+            if (room != null) place = new Surroundings(true, feet.y, room);
+            return room != null;
+        }
+
+        static Surroundings LocateFloor(Vector3 feet, Geometry world, Transform owner = null, bool scenery = false, Collider observerDeck = null)
+        {
+            if (!scenery && ArchitectureAt(feet, world, out var place)) return place;
+            if (HarborFloor(feet, world, owner, scenery, observerDeck, out var deck)) {
+                if (scenery && ArchitectureAt(feet, world, out place)) return place;
+                if (!deck.collider) return default;
+                if (scenery && Mathf.Abs(feet.y - deck.point.y) > .025f &&
+                    (world.Floors.Any(f => f.Between(feet, deck.point.y)) ||
+                     ArchitectureAt(deck.point, world, out _))) return default;
+                return new Surroundings(false, deck.point.y, deck: deck.collider);
+            }
             float? terrain = TerrainHelper.GetTerrainHitPoint(feet);
-            if (!terrain.HasValue || Mathf.Abs(terrain.Value - feet.y) > .85f) return default;
-            return new Surroundings(false);
+            if (scenery) {
+                // Off a live deck, stock scenery resolves its projected terrain position
+                // before room membership. A tall furnishing can be on the lower floor.
+                if (terrain.HasValue && feet.y >= terrain.Value && feet.y - terrain.Value < 3f) feet.y = terrain.Value;
+                if (ArchitectureAt(feet, world, out place)) return place;
+            }
+            return terrain.HasValue && Mathf.Abs(terrain.Value - feet.y) <= .85f ? new Surroundings(false, feet.y) : default;
+        }
+
+        // At two different heights, test for an actual plank above/below the other end.
+        // Adjacent open decks can see across water without sharing a walkable path.
+        static bool OverlappingLevel(Collider plank, Vector3 other, float plankY, float otherY)
+        {
+            if (!plank || Mathf.Abs(plankY - otherY) <= .12f) return false;
+            other.y = Mathf.Max(plankY, otherY) + .25f;
+            return plank.Raycast(new Ray(other, Vector3.down), out var hit, Mathf.Abs(plankY - otherY) + .5f) &&
+                hit.normal.y >= .85f && Mathf.Abs(hit.point.y - otherY) > .12f;
         }
 
         static bool Living(NPCController speaker) =>
@@ -174,7 +305,7 @@ namespace Mirthwood.Echoes
             if (!Living(speaker)) return result;
             var world = WorldGeometry();
             var feet = speaker.transform.position;
-            var surroundings = LocateFloor(feet, world);
+            var surroundings = LocateFloor(feet, world, speaker.transform);
             // These native triggers normally update the player's HUD. Query their actual
             // colliders at this resident's feet without dispatching discovery or changing saves.
             var volumes = Physics.OverlapSphere(feet, .01f, Physics.AllLayers, QueryTriggerInteraction.Collide)
@@ -307,7 +438,7 @@ namespace Mirthwood.Echoes
         {
             if (!Living(speaker) || !subject) return false;
             var world = WorldGeometry();
-            return Visible(speaker, subject, world, LocateFloor(speaker.transform.position, world));
+            return Visible(speaker, subject, world, LocateFloor(speaker.transform.position, world, speaker.transform));
         }
 
         static bool Visible(NPCController speaker, Transform subject, Geometry world, Surroundings from)
@@ -333,10 +464,8 @@ namespace Mirthwood.Echoes
                 // A roof or sign above a room can project onto its floor. Only credit
                 // an indoor furnishing when the scene actually places it in that room.
                 if (from.Interior == true && !subject.IsChildOf(from.Room.Level)) return false;
-                float? ground = TerrainHelper.GetTerrainHitPoint(feet);
-                if (ground.HasValue && feet.y >= ground.Value && feet.y - ground.Value < 3f) feet.y = ground.Value;
             }
-            var to = LocateFloor(feet, world);
+            var to = LocateFloor(feet, world, actor ? actor.transform : subject, !actor, from.Deck);
             if (!to.Interior.HasValue || from.Interior != to.Interior || from.Room?.Level != to.Room?.Level) return false;
             if (actor) {
                 var first = speaker.GetComponentInChildren<FloorLayerManager>();
@@ -346,7 +475,9 @@ namespace Mirthwood.Echoes
             var eye = speaker.transform.position + Vector3.up * .95f;
             var target = actor ? actor.transform.position + Vector3.up * .95f : renderer.bounds.center;
             var ray = target - eye;
-            if (ray.sqrMagnitude > SightDistance * SightDistance || Mathf.Abs(feet.y - speaker.transform.position.y) > 1.4f) return false;
+            if (ray.sqrMagnitude > SightDistance * SightDistance || Mathf.Abs(to.FloorY - from.FloorY) > 1.4f) return false;
+            if (from.Deck != to.Deck && (OverlappingLevel(from.Deck, feet, from.FloorY, to.FloorY) ||
+                OverlappingLevel(to.Deck, speaker.transform.position, to.FloorY, from.FloorY))) return false;
             var data = speaker.DataContainer?.data;
             if (data == null) return false;
             var facing = data.FacingDirection;
