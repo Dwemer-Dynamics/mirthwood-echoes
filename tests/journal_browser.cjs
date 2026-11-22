@@ -1,8 +1,8 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{spawn}=require('node:child_process');
 const delay=n=>new Promise(r=>setTimeout(r,n)), root=path.resolve(process.argv[2]||path.join(__dirname,'../.work/browser'));fs.mkdirSync(root,{recursive:true});
 const voiceOnly=process.argv.includes('--voices'), playedTurn=process.argv.includes('--played-turn'), averil=process.argv.includes('--averil');
-const group=process.argv.includes('--group');
-const base=playedTurn||averil||group?'http://127.0.0.1:17864':process.env.ECHOES_BROWSER_BASE||'http://127.0.0.1:17841';
+const group=process.argv.includes('--group'),knowledge=process.argv.includes('--knowledge');
+const base=playedTurn||averil||group||knowledge?'http://127.0.0.1:17864':process.env.ECHOES_BROWSER_BASE||'http://127.0.0.1:17841';
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'mirthwood-echoes-edge-'));
 const browser=spawn('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',['--headless=new','--disable-gpu','--disable-extensions','--disable-background-mode','--disable-background-networking','--no-first-run','--no-default-browser-check','--disable-component-update','--disk-cache-size=2097152','--renderer-process-limit=1','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{windowsHide:true,stdio:'ignore'});
 let socket,seq=0,startedBackend=false;const pending=new Map(),errors=[];
@@ -30,6 +30,23 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
   await cmd('Runtime.enable');await cmd('Page.enable');
   await cmd('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false});
   await cmd('Page.navigate',{url:base+(voiceOnly?'/#voices':'/')});
+  if(knowledge){
+    const turn=JSON.parse(fs.readFileSync(path.join(root,'probe.json'),'utf8')).result.turns[0];
+    const roster=await (await fetch(base+'/api/saves/'+turn.campaign+'/characters')).json();
+    const index=roster.findIndex(c=>c.key===turn.actor);
+    await until("document.querySelectorAll('.roster button').length==="+roster.length);
+    await evaluate("document.querySelectorAll('.roster button')["+index+"].click()");
+    await until("document.querySelector('.inspect-header h3')?.textContent==='Averil'");
+    await evaluate("document.querySelector('#char-tab-knowledge').click()");
+    await until("document.querySelector('.journal-scroll')?.textContent.includes('Plum tart is my favorite food.')");
+    await capture('averil-character-knowledge.png');
+    await cmd('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+    if(!await evaluate("document.documentElement.scrollWidth<=innerWidth"))throw Error('Character knowledge overflows the journal');
+    await capture('averil-character-knowledge-narrow.png');
+    if(errors.length)throw Error(errors.join(', '));
+    console.log('PASS Averil’s durable source wording in the desktop and narrow journal.');
+    await cmd('Browser.close');return;
+  }
   if(group){
     const report=JSON.parse(fs.readFileSync(path.join(root,'probe.json'),'utf8')).result;
     const roster=await (await fetch(base+'/api/saves/'+report.campaign+'/characters')).json();
@@ -113,8 +130,8 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
   if(await evaluate("Array.from(document.querySelectorAll('button')).some(b=>/^Talk to /.test(b.textContent)) || !!document.querySelector('form.talk')"))throw Error('Character roster offers dialogue');
   await capture('cedric-desktop.png');
   const tabs=await evaluate("Array.from(document.querySelectorAll('[role=tab]'),b=>b.textContent)");
-  if(tabs.join('|')!=='Profile|Interactions|Conversations|Daily history|Commitments|Dynamic personality') throw Error('Character tabs');
-  for(const tab of ['interactions','sessions','daily','commitments','personality']){
+  if(tabs.join('|')!=='Profile|Interactions|Conversations|Daily history|Character Knowledge|Promises & Commitments|Dynamic personality') throw Error('Character tabs');
+  for(const tab of ['interactions','sessions','daily','knowledge','commitments','personality']){
     await evaluate("document.getElementById('char-tab-"+tab+"').click()");
     await until("document.querySelector('.journal-scroll')?.children.length>0");
     if(await evaluate("getComputedStyle(document.querySelector('.journal-scroll')).overflowY!=='auto'"))throw Error('Journal scroll');
@@ -132,6 +149,7 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
       if(!url.startsWith(fixture))return originApi(url,...args);
       if(url.endsWith('/sessions/session0'))return Promise.resolve(original);
       if(url.endsWith('/sessions/session1'))return Promise.resolve([{speaker:'Averil',text:'I worked at the mill.',to:'Drystan',audience:['Averil','Drystan','Player']}]);
+      if(url.endsWith('/knowledge'))return Promise.resolve({items:[{kind:'knowledge',subject:'Player',speakerLabel:'Player',facet:'favorite food',value:'plum tart',quote:'My favorite food is plum tart.',firsthand:true,mode:'private',day:10}]});
       if(url.endsWith('/daily/10'))return Promise.resolve([{day:10,text:'Collected flour at the mill.',sourceType:'event',source:'observation'}]);
       if(url.endsWith('/daily'))return Promise.resolve({items:[{kind:'daily',id:'10',day:10,entries:1,body:'Collected flour.'}]});
       if(url.includes('/commitments'))return Promise.resolve({items:[{kind:'promise',speaker:'npc',statement:'Yes.',proposal:'Will you bring flour tomorrow?',due:11,day:10,model:'Test model'}]});
@@ -154,7 +172,9 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
       mount.querySelector('.load-older').click();await waitFor(()=>scroll.textContent.includes('Oldest recorded line'));
       if(!scroll.textContent.includes('Resident reply 0'))throw Error('Earlier page replaced the current transcript');
       if(!scroll.textContent.includes('Promise recorded · Test resident · Yes.'))throw Error('Missing promise in its transcript');
-      pick('Commitments');await waitFor(()=>mount.textContent.includes('Identified in conversation by Test model.'));
+      pick('Character Knowledge');await waitFor(()=>mount.textContent.includes('My favorite food is plum tart.'));
+      if(!mount.textContent.includes('Said by Player')||!mount.textContent.includes('Private conversation'))throw Error('Knowledge evidence lost its speaker or audience');
+      pick('Promises & Commitments');await waitFor(()=>mount.textContent.includes('Identified in conversation by Test model.'));
       if(!mount.textContent.includes('Will you bring flour tomorrow?')||mount.querySelector('.journal-entry button'))throw Error('Promise evidence or read-only view failed');
       pick('Daily history');await waitFor(()=>mount.querySelector('.memory-originals summary'));
       mount.querySelector('.memory-originals summary').click();await waitFor(()=>mount.textContent.includes('Collected flour at the mill.'));
@@ -194,7 +214,7 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
   await capture('character-mobile.png');
   await evaluate("document.querySelector('.inspect-header').scrollIntoView({block:'start'})");
   await capture('character-mobile-profile.png');
-  console.log('PASS six character tabs, Cedric native labels, full native details, scrollable histories and narrow layout.');
+  console.log('PASS seven character tabs, Cedric native labels, full native details, scrollable histories and narrow layout.');
   console.log('PASS populated transcript scrolls, a detected promise appears beside its exchange and in read-only Commitments, and compacted memories expand.');
   await evaluate("document.querySelector('[data-tab=options]').click()");
   await until("document.querySelector('#positive-desire-cost')?.labels?.length===1");

@@ -220,7 +220,7 @@ namespace Mirthwood.Echoes
         {
             for(int i=0;i<4;i++){
                 JObject read=null;yield return Request("quests/finish",ack,r=>read=r,5);
-                if((string)read?["state"]=="complete"){done?.Invoke(true);yield break;}
+                if((string)read?["state"]=="complete"||(string)read?["state"]=="expired"){done?.Invoke(true);yield break;}
                 yield return new WaitForSecondsRealtime(i+1);
             }
             done?.Invoke(false);

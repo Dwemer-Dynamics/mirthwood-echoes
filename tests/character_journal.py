@@ -25,7 +25,10 @@ class Writer(BaseHTTPRequestHandler):
         player=packet["messages"][1]["content"]
         marks=[{"speaker":"player","quote":player}] if player=="I promise to deliver flour tomorrow." else []
         text="The miller learned the rhythm of the mill in Brightoak." if packet["model"]=="historian" else json.dumps({"reply":"Welcome back.","commitments":marks})
-        if "heardInOrder" in player:
+        if "Summarize one day of spoken dialogue" in packet["messages"][0]["content"]:
+            rows=json.loads(player)
+            text=json.dumps([{"i":row["i"],"quote":row["words"]} for row in rows[:2]])
+        elif "heardInOrder" in player:
             text=json.dumps({"words":"Who told you about the mill?","to":"player","ownTopic":"Intellectual",
                              "receivedTopic":"Small Talk","farewell":"Tell me about it another day."})
         elif player.startswith("Do you still keep"):
@@ -135,10 +138,12 @@ def main(package,game_assets):
                 assert api(left+"/history/memories")["items"]==mem and not api(right+"/history/memories")["items"]
                 assert not api("saves/"+other+"/characters/"+a+"/history/interactions")["items"]
                 calls=len(Writer.calls);assert api(left+"/history/conversations")["items"][0]["reply"]=="Welcome back." and calls==len(Writer.calls)
-                promise=api(left+"/history/commitments")["items"][0];assert promise["due"]==11
+                def flour_promise():return next(item for item in api(left+"/history/commitments")["items"] if item["kind"]=="promise")
+                assert any(item["kind"]=="marked" for item in api(left+"/history/commitments")["items"])
+                promise=flour_promise();assert promise["due"]==11
                 api("commitments/"+promise["id"]+"/fulfill",{"campaign":campaign,"actor":a},expected=204)
-                assert api(left+"/history/commitments")["items"][0]["status"]=="fulfilled";beat(13)
-                assert api(left+"/history/commitments")["items"][0]["status"]=="open"
+                assert flour_promise()["status"]=="fulfilled";beat(13)
+                assert flour_promise()["status"]=="open"
                 print("PASS timelines, attribution, lasting promises, deterministic compaction, automatic and marked personality development, duplicate delivery, rewind and actor/campaign isolation.",flush=True)
                 work_ids={event(13,"work","Hired-work fixture "+str(i)+".") for i in range(34)}
                 page=api(left+"/history/interactions");assert len(page["items"])==30 and page["next"]
@@ -155,7 +160,7 @@ def main(package,game_assets):
                 assert api(left+"/sources/event/"+sources[0])["description"].startswith("Hired-work fixture")
                 api(right+"/sources/turn/"+turn,expected=404);beat(8);api(left+"/sources/turn/"+turn,expected=404)
                 beat(17);api("dialogue",{"campaign":campaign,"actor":a,"text":"We have a deal.","commitment":True,"id":str(uuid.uuid4())})
-                assert all(x["statement"]!="We have a deal." for x in api(left+"/history/commitments")["items"])
+                assert all(x.get("statement")!="We have a deal." for x in api(left+"/history/commitments")["items"])
                 print("PASS every source on a busy day survives compaction, full source text remains actor/day scoped, and client flags cannot create a promise.")
                 from group_memory import check_memories
                 third_key=next(x["key"] for x in roster if x["owner"]=="South-NPC")
@@ -184,6 +189,8 @@ def main(package,game_assets):
                 assert any(row.get("to")=="Player" for row in api(left+"/history/sessions/"+turn))
                 pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='Test player' WHERE player_name=''")
                 print("PASS two service restarts preserve the exact per-audience recaps and daily sources.",flush=True)
+                from dialogue_memory import check as check_dialogue_memory
+                check_dialogue_memory(api,beat,world,campaign,[a,b,third_key],lambda q:pg("psql","-XAt","-d",db,"-c",q),Writer.calls)
                 # A controller reused by a different native ID must start a separate journal.
                 for r in data["saveData"]:
                     if r["guid"].startswith("East-NPC-NPCController"):

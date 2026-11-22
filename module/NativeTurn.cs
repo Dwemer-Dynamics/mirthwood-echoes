@@ -69,6 +69,9 @@ namespace Mirthwood.Echoes
                     case "pending":
                         if(Time.realtimeSinceStartup>deadline){Retry(message,"Still waiting. Enter to check this exchange.");yield break;}
                         yield return new WaitForSecondsRealtime(.4f);continue;
+                    case "expired":
+                        try{positiveRun=outbox.Acknowledge(id);}catch(Exception){RecoverTalk(message,"Enter to close the saved exchange.");yield break;}
+                        Close();yield break;
                     case "complete":
                         try{positiveRun=outbox.Acknowledge(id);}catch(Exception){RecoverTalk(message,"Your reply was saved. Enter to recover it.");yield break;}
                         busy=false;accepted=null;DisplayTalk(id,(string)answer["reply"],answer["handoff"] as JObject,(bool?)answer["playerLeaves"]==true);yield break;

@@ -37,7 +37,7 @@ public sealed partial class Conversation
         try{
             var head=CueHistory.OptionalId(binding?["head"]);
             var cues=ReadReturnCues(n["returnCues"]);
-            var facts=await Recall(c,a,day,opt,words,binding!=null,head,recentTurns:8,includeVoicedCues:cues!=null,relatedSpeech:true);
+            var facts=await Recall(c,a,day,opt,words,binding!=null,head,recentTurns:8,includeVoicedCues:cues!=null,relatedSpeech:true,topics:cues?.ToJsonString());
             var freshCues=FreshReturnCues(cues,facts["recentSpeech"]!.AsArray());
             if(cue!=null)facts["currentInteraction"]=cue;
             if(binding?["cards"] is JsonArray cards && cards.Count>0)facts["availableExtraCards"]=cards.DeepClone();
@@ -47,7 +47,7 @@ public sealed partial class Conversation
                 disposition["currentDesireForCompany"]=level<-.5?"very low":level<0?"waning":level>.7?"eager for company":"willing to talk";
             var impression=TalkImpressions.ForResident(n["playerImpression"],words);
             string? listener=(impression?["knownPlayer"]??impression?["onlyIfIntroducingThemself"])?["name"]?.GetValue<string>();
-            var prompt=TalkInstructions+"\n"+SpokenStyle+"\n"+ConversationFlow+"\n"+TalkEndings.Instructions+"\n"+TalkTopics.Instructions+"\nGame day "+day+". Character: "+disposition.ToJsonString()+"\nRecall: "+facts.ToJsonString();
+            var prompt=TalkInstructions+"\n"+CharacterKnowledge.Instructions+"\n"+SpokenStyle+"\n"+ConversationFlow+"\n"+TalkEndings.Instructions+"\n"+TalkTopics.Instructions+"\nGame day "+day+". Character: "+disposition.ToJsonString()+"\nRecall: "+facts.ToJsonString();
             if(impression!=null)prompt+="\n"+TalkImpressions.Instructions+"\nPlayer impression: "+impression.ToJsonString();
             if(freshCues!=null)prompt+="\n"+Steering+"\nReturn cards: "+freshCues.ToJsonString();
             if(cue?.S("kind")=="card")prompt+="\nThe resident was about to act on currentInteraction.observedAction. Work it into their words if it still fits what the player said.";
@@ -91,7 +91,7 @@ public sealed partial class Conversation
             var continuations=ReadContinuations(packet,freshCues,topic,actor.S("name"),flow);
             // A short acceptance can refer to a proposal in the preceding two exchanges.
             var recentProposals=facts["recentSpeech"]!.AsArray().TakeLast(2).ToArray();
-            var saved=new {topic,flow,choices,endingChoices,continuations,returnCues=cues,playerImpression=impression,commitments=packet["commitments"],recentSpeech=recentProposals,provider=opt.Provider,model,opt.PositiveDesireCostPercent};
+            var saved=new {topic,flow,choices,endingChoices,continuations,returnCues=cues,playerImpression=impression,learned=CharacterKnowledge.Hints(packet["learned"]),commitments=packet["commitments"],recentSpeech=recentProposals,provider=opt.Provider,model,opt.PositiveDesireCostPercent};
             await db.Run("UPDATE turns SET state='ready',talk=@packet::jsonb,first_ms=@ms WHERE id=@id AND state='pending'",
                 ("packet",JsonSerializer.Serialize(saved,Database.Json)),("ms",(int)timer.ElapsedMilliseconds),("id",id));
         }catch(Exception e){
@@ -102,10 +102,14 @@ public sealed partial class Conversation
         return PublicTalk((await TalkState(id,c,a,words,binding))!);
     }
 
+    const string SameTalkRequest = """
+         FROM turns WHERE id=@id AND campaign=@c AND actor=@a AND talk IS NOT NULL AND
+         (NOT dialogue_expired AND player_text=@w AND cue_binding IS NOT DISTINCT FROM @binding::jsonb OR
+            dialogue_expired AND request_digest=sha256(convert_to(jsonb_build_array(@w::text,@binding::jsonb)::text,'UTF8')))
+        """;
     Task<JsonNode?> TalkState(Guid id,string c,string a,string words,JsonObject? binding)=>db.One("""
-        SELECT jsonb_build_object('state',state,'packet',talk,'reply',reply,'reaction',reaction)::text
-        FROM turns WHERE id=@id AND campaign=@c AND actor=@a AND player_text=@w AND talk IS NOT NULL AND cue_binding IS NOT DISTINCT FROM @binding::jsonb
-        """,("id",id),("c",c),("a",a),("w",words),("binding",binding?.ToJsonString()));
+        SELECT jsonb_build_object( 'state',CASE WHEN dialogue_expired THEN 'expired' ELSE state END,'packet',talk,'reply',reply,'reaction',reaction)::text
+        """+" "+SameTalkRequest,("id",id),("c",c),("a",a),("w",words),("binding",binding?.ToJsonString()));
 
     static JsonNode PublicTalk(JsonNode row)
     {
@@ -142,9 +146,8 @@ public sealed partial class Conversation
         await using var conn=await db.Source.OpenConnectionAsync();
         await using var tx=await conn.BeginTransactionAsync();
         await using var lookup=Database.Command(conn,"""
-            SELECT jsonb_build_object('state',state,'day',day,'packet',talk,'reply',reply,'reaction',reaction)::text
-            FROM turns WHERE id=@id AND campaign=@c AND actor=@a AND player_text=@w AND talk IS NOT NULL AND cue_binding IS NOT DISTINCT FROM @binding::jsonb FOR UPDATE
-            """,("id",id),("c",c),("a",a),("w",words),("binding",CueBinding(n)?.ToJsonString()));
+            SELECT jsonb_build_object('state',CASE WHEN dialogue_expired THEN 'expired' ELSE state END,'day',day,'packet',talk,'reply',reply,'reaction',reaction)::text
+            """+" "+SameTalkRequest+" FOR UPDATE",("id",id),("c",c),("a",a),("w",words),("binding",CueBinding(n)?.ToJsonString()));
         var stored=(string?)await lookup.ExecuteScalarAsync();
         if(stored==null){
             await using var exists=Database.Command(conn,"SELECT EXISTS(SELECT FROM turns WHERE id=@id)",("id",id));
@@ -152,7 +155,7 @@ public sealed partial class Conversation
             throw new UserError("Unknown exchange.",404);
         }
         var row=JsonNode.Parse(stored)!;
-        if(row.S("state")=="complete")return PublicTalk(row);
+        if(row.S("state") is "complete" or "expired")return PublicTalk(row);
         if(row.S("state")!="ready")throw new UserError("The reply is not ready.",409);
         var p=row["packet"]!;var choices=p["choices"]!;
         if(p.S("topic")=="None"&&branch is not ("neutral" or "unknown"))throw new UserError("This topic has no scored reaction.");
@@ -196,11 +199,13 @@ public sealed partial class Conversation
         // Release the unspoken alternatives and recall text once the selected line is durable.
         await using var update=Database.Command(conn,"""
             UPDATE turns SET state='complete',reply=@reply,reaction=@branch,commitment_review=@review,
-                talk=(talk-'choices'-'endingChoices'-'continuations'-'returnCues'-'commitments'-'recentSpeech') || @handoff::jsonb,total_ms=least(2147483647,extract(epoch FROM (clock_timestamp()-started))*1000)::int
+                knowledge_reviewed=true,talk=(talk-'learned'-'choices'-'endingChoices'-'continuations'-'returnCues'-'commitments'-'recentSpeech') || @handoff::jsonb,total_ms=least(2147483647,extract(epoch FROM (clock_timestamp()-started))*1000)::int
             WHERE id=@id
             """,("reply",reply),("branch",branch),("review",review.Status),("id",id),
             ("handoff",new JsonObject{["handoff"]=handoff?.DeepClone(),["spokenReturn"]=p["continuations"] is JsonObject,["deliveredContinuation"]=delivered}.ToJsonString()));
-        await update.ExecuteNonQueryAsync();await tx.CommitAsync();
+        await update.ExecuteNonQueryAsync();
+        await CharacterKnowledge.Private(conn,c,a,id,CharacterKnowledge.Hints(p["learned"]));
+        await tx.CommitAsync();
         if(handoff!=null)p["handoff"]=handoff;
         row["state"]="complete";row["reply"]=reply;row["reaction"]=branch;return PublicTalk(row);
     }

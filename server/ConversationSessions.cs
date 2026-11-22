@@ -9,7 +9,7 @@ public static class ConversationSessions
         WITH heard AS (
             SELECT e.id,e.payload->'line' AS line,(e.payload->>'day')::int AS day
             FROM ancestry h JOIN cue_events e ON e.campaign=@c AND e.id=h.id
-            WHERE e.payload->>'kind'='group' AND (e.payload->'line'->'audience') ? @a
+            WHERE e.payload->>'kind'='group' AND e.payload->'line' ? 'words' AND (e.payload->'line'->'audience') ? @a
                 AND (e.payload->>'day')::int<=@day
         ), lines AS (
             SELECT coalesce(t.cue_binding->>'conversation',t.id::text) AS session,'private' AS mode,
@@ -36,30 +36,33 @@ public static class ConversationSessions
 
     // The summaries quote attributed source lines. A missing source on this branch
     // never contributes to a summary, regardless of when the journal last opened.
-    public const string Sessions = Lines + """
+    const string Bucket = "CASE WHEN day>=@day THEN session WHEN mode='private' THEN 'day-'||day ELSE 'day-'||day||'-'||session END";
+    const string Bucketed = Lines + ", bucketed AS (SELECT named.*,"+Bucket+" AS entry FROM named) ";
+
+    public const string Sessions = Bucketed + """
         , ranked AS (
-            SELECT *,row_number() OVER(PARTITION BY session ORDER BY seq,at,source,n) AS first,
-                row_number() OVER(PARTITION BY session,speaker ORDER BY seq,at,source,n) AS speaker_first,
-                row_number() OVER(PARTITION BY session ORDER BY seq DESC,at DESC,source DESC,n DESC) AS last
-            FROM named
+            SELECT *,row_number() OVER(PARTITION BY entry ORDER BY seq,at,source,n) AS first,
+                row_number() OVER(PARTITION BY entry,speaker ORDER BY seq,at,source,n) AS speaker_first,
+                row_number() OVER(PARTITION BY entry ORDER BY seq DESC,at DESC,source DESC,n DESC) AS last
+            FROM bucketed
         ), highlights AS (
-            SELECT *,row_number() OVER(PARTITION BY session ORDER BY
+            SELECT *,row_number() OVER(PARTITION BY entry ORDER BY
                 CASE WHEN last=1 THEN 0 WHEN first=1 THEN 1
                     WHEN EXISTS(SELECT FROM commitments p WHERE p.actor=@a AND (p.source_line=source OR p.turn_id=source)) THEN 2
                     WHEN speaker_first=1 THEN 3 ELSE 4 END,seq DESC,at DESC,n DESC) AS relevance
             FROM ranked
         )
-        SELECT session AS id,max(day) AS day,max(at) AS at,jsonb_build_object('kind',mode,'entries',count(*),
-            'knownStart',mode='group' OR bool_or(session<>source::text),
-            'fingerprint',md5(string_agg(jsonb_build_array(source,n,name,left(words,180),relevance<=4)::text,',' ORDER BY seq,at,source,n)),
+        SELECT entry AS id,max(day) AS day,max(at) AS at,jsonb_build_object('kind',mode,'entries',count(*),
+            'visits',count(DISTINCT session),'compacted',max(day)<@day,'knownStart',mode='group' OR bool_or(session<>source::text),
+            'fingerprint',md5(string_agg(jsonb_build_array(session,source,n,name,words,relevance<=4)::text,',' ORDER BY seq,at,source,n)),
             'body',string_agg(name||' — '||left(words,180),E'\n' ORDER BY seq,at,source,n)
                 FILTER(WHERE relevance<=4),'participants',
             (SELECT jsonb_agg(label ORDER BY label) FROM (
                 SELECT DISTINCT CASE WHEN k='player' THEN coalesce(nullif(c.player_name,''),'Player') ELSE a.name END AS label
-                FROM lines x CROSS JOIN LATERAL unnest(x.audience) k JOIN campaigns c ON c.id=@c
-                LEFT JOIN actors a ON a.campaign=@c AND a.key=k WHERE x.session=r.session) audience))
+                FROM bucketed x CROSS JOIN LATERAL unnest(x.audience) k JOIN campaigns c ON c.id=@c
+                LEFT JOIN actors a ON a.campaign=@c AND a.key=k WHERE x.entry=r.entry) audience))
             AS doc
-        FROM highlights r GROUP BY session,mode
+        FROM highlights r GROUP BY entry,mode
         """;
 
     public const string Daily = """
@@ -77,16 +80,18 @@ public static class ConversationSessions
     internal static string WithRecaps(bool daily)
     {
         var query=daily?Daily:Sessions;
-        return "SELECT r.id,r.day,r.at,(r.doc-'fingerprint')||jsonb_strip_nulls(jsonb_build_object('body',s.body)) AS doc FROM ("+
-            query+") r LEFT JOIN resident_recaps s ON s.campaign=@c AND s.actor=@a AND s.kind=r.doc->>'kind' AND s.entry=r.id AND s.fingerprint=r.doc->>'fingerprint'";
+        string best=daily?"s.body":"coalesce(d.body,s.body)";
+        return "SELECT r.id,r.day,r.at,(r.doc-'fingerprint')||jsonb_strip_nulls(jsonb_build_object('body',"+best+")) AS doc FROM ("+
+            query+") r LEFT JOIN resident_recaps s ON s.campaign=@c AND s.actor=@a AND s.kind=r.doc->>'kind' AND s.entry=r.id AND s.fingerprint=r.doc->>'fingerprint'"+
+            (daily?"":" LEFT JOIN dialogue_day_recaps d ON d.campaign=@c AND d.actor=@a AND d.entry=r.id AND d.fingerprint=r.doc->>'fingerprint'");
     }
 
     public static string Details(bool daily) => daily ? """
         SELECT coalesce(jsonb_agg(jsonb_build_object('text',description,'source',id,'sourceType','event','day',day)
             ORDER BY observed,id),'[]')::text FROM daily_events
         WHERE actor=@a AND kind<>'address' AND day::text=@entry AND day<=@day
-        """ : Lines + """
-        SELECT coalesce(jsonb_agg(jsonb_strip_nulls(jsonb_build_object('speaker',l.name,'speakerKey',l.speaker,'text',l.words,'source',l.source,'sourceType',l.source_type,
+        """ : Bucketed + """
+        SELECT coalesce(jsonb_agg(jsonb_strip_nulls(jsonb_build_object('speaker',l.name,'speakerKey',l.speaker,'visit',l.session,'text',l.words,'source',l.source,'sourceType',l.source_type,
             'day',l.day,'audience',(SELECT jsonb_agg(CASE WHEN k='player' THEN coalesce(nullif(c.player_name,''),'Player') ELSE a.name END ORDER BY k)
                 FROM unnest(l.audience) k JOIN campaigns c ON c.id=@c LEFT JOIN actors a ON a.campaign=@c AND a.key=k),
             'to',CASE WHEN addressed='group' THEN 'Everyone' WHEN addressed='player' THEN (SELECT coalesce(nullif(player_name,''),'Player') FROM campaigns WHERE id=@c)
@@ -97,8 +102,8 @@ public static class ConversationSessions
             'promises',(SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('speaker',p.speaker,'speakerLabel',p.speaker_label,
                 'quote',p.statement,'proposal',p.proposal)) ORDER BY p.recorded,p.id)
                 FROM commitments p WHERE p.actor=@a AND (p.turn_id=t.id OR p.source_line=l.source))))
-            ORDER BY l.seq,l.at,l.source,l.n),'[]')::text FROM named l
-            LEFT JOIN turns t ON l.source_type='turn' AND l.n=2 AND t.id=l.source WHERE session=@entry
+            ORDER BY l.seq,l.at,l.source,l.n),'[]')::text FROM bucketed l
+            LEFT JOIN turns t ON l.source_type='turn' AND l.n=2 AND t.id=l.source WHERE l.session=@entry OR l.entry=@entry
         """;
 
     public static JsonObject ReadGroup(JsonNode? value)
@@ -115,6 +120,8 @@ public static class ConversationSessions
         if(line.I("seq")<1 || !DateTimeOffset.TryParse(line.S("at"),out var at))throw new UserError("Invalid group line order.");
         var result=new JsonObject{["session"]=session.ToString(),["seq"]=line.I("seq"),["speaker"]=speaker,["to"]=to,
             ["words"]=line.Required("words",1200),["at"]=at.UtcDateTime.ToString("O"),["audience"]=audience.DeepClone()};
+        var learned=CharacterKnowledge.Hints(line["learned"]);
+        if(learned.Count>0)result["learned"]=learned;
         if(line["promise"] is JsonValue quote && quote.TryGetValue<string>(out var statement) && statement.Length is >0 and <=320 &&
             DialogueOutput.IsWholeQuote(result.S("words"),statement))result["promise"]=statement;
         JsonObject? Quote(JsonNode? data)=>data is JsonObject obj && CueHistory.OptionalId(obj["source"]) is Guid id
