@@ -4,6 +4,9 @@
 
 ## In progress
 
+- [ ] Give each speaking resident their current place, calendar, nearby people, weather and landmarks. Include every knowable event today and the next public notice in private Talk, passing remarks, groups and generated quest dialogue. Preserve interrupted activities, the source of local news, privacy, and evidence of what happened after an earlier plan.
+  On 2026-11-22 the native and server implementation entered qualification. The copied-save checks cover posted dates and actual starts and ends, individual witnesses, divergent saves, retries, player-led conversations and the original quest choices.
+
 ## Completed
 
 - [x] Keep 30 in-game days of ordinary dialogue, compact closed days by listener and preserve character knowledge, promises and major moments. On 2026-11-21 the copied slot kept Michael’s words through day 30. On day 31 Averil remembered plum tart after the original exchange expired. The journal and database checks covered who heard a disclosure, corrected preferences, replay and save rewinds.

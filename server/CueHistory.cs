@@ -101,7 +101,7 @@ public static class CueHistory
 public sealed partial class Conversation
 {
     static readonly HashSet<string> CueKinds = new(StringComparer.Ordinal) {
-        "gift","hire","collection","social","work","household","funeral","letter","quest","warning","talk","address","group"
+        "gift","hire","collection","social","work","household","funeral","letter","quest","warning","worldEvent","talk","address","group"
     };
     public async Task ObserveCue(JsonNode n)
     {

@@ -3,7 +3,10 @@ using System.Text.Json.Nodes;
 
 public sealed partial class Conversation
 {
-    public async Task<JsonObject> GroupReply(JsonObject input,CancellationToken ct)
+    public Task<JsonObject> GroupReply(JsonObject input,CancellationToken ct) =>
+        ResidentLine(input,"group",ct,token=>GenerateGroupReply(input,token));
+
+    async Task<JsonObject> GenerateGroupReply(JsonObject input,CancellationToken ct)
     {
         string c=input.Required("campaign",64),a=input.Required("actor",64);
         var session=CueHistory.OptionalId(input["session"])??throw new UserError("Missing group conversation.");
@@ -19,20 +22,24 @@ public sealed partial class Conversation
         if(roster!.AsArray().Count!=audience.Count)throw new UserError("A group member is no longer available.",409);
         if(head.HasValue && await db.One("SELECT to_jsonb(true)::text FROM cue_events WHERE campaign=@c AND id=@id",
             ("c",c),("id",head))==null)throw new UserError("Waiting for the last group line.",425);
-        var (actor,day)=await ActorDay(c,a);
+        var (actor,dispatch)=await Speaker(input,c,a,"group");
+        int day=dispatch.Day;
+        var listeners=audience.Select(x=>x!.GetValue<string>()).ToArray();
         var heard=await db.ScopedOne(ConversationSessions.Lines+"""
             SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY seq),'[]')::text FROM (
                 SELECT seq,source AS id,speaker,name,addressed,words FROM named
-                WHERE mode='group' AND session=@session ORDER BY seq DESC LIMIT 14) r
-            """,true,head,("c",c),("a",a),("day",day),("session",session.ToString()));
+                WHERE mode='group' AND session=@session AND audience @> @listeners ORDER BY seq DESC LIMIT 14) r
+            """,true,head,("c",c),("a",a),("day",day),("session",session.ToString()),("listeners",listeners));
         var latest=heard!.AsArray().LastOrDefault();
         string question=latest.S("words");
         var opt=await providers.Options();
-        var recall=await Recall(c,a,day,opt,question,true,head,groupOnly:true,topics:input.S("cue"),audience:audience.Select(x=>x!.GetValue<string>()).ToArray(),currentSpeaker:latest.S("speaker"));
+        var recall=await Recall(c,a,day,opt,question,true,head,groupOnly:true,topics:input.S("cue"),audience:listeners,currentSpeaker:latest.S("speaker"),awareness:dispatch.Awareness);
         var memory=new JsonObject{["daily"]=recall["daily"]?.DeepClone(),["olderActivity"]=recall["olderActivity"]?.DeepClone()};
         if(recall["characterKnowledge"]!=null)memory["characterKnowledge"]=recall["characterKnowledge"]!.DeepClone();
         if(recall["conversationRecaps"]!=null)memory["conversationRecaps"]=recall["conversationRecaps"]!.DeepClone();
         if(recall["heardSpeech"]!=null)memory["heardSpeech"]=recall["heardSpeech"]!.DeepClone();
+        foreach(string field in new[]{"eventWitnesses","eventAccounts","earlierEventAccount","heardToday"})
+            if(recall[field]!=null)memory[field]=recall[field]!.DeepClone();
         var profile=await journal.DialogueProfile(c,a,day,actor.AsObject(),true,head);
         var player=await db.One("SELECT jsonb_build_object('name',player_name,'native',player)::text FROM campaigns WHERE id=@c",("c",c));
         var bonds=new JsonArray();
@@ -46,13 +53,14 @@ public sealed partial class Conversation
         }
         var prompt=new JsonObject{["you"]=profile,["yourKey"]=a,["residents"]=roster.DeepClone(),["heardInOrder"]=heard.DeepClone(),
             ["yourMemory"]=memory,["yourRelationships"]=bonds,["nativeCue"]=Fields.Clip(input.S("cue"),220),["playerName"]=player.S("name")};
+        if(dispatch.Awareness!=null)prompt["worldAwareness"]=dispatch.Awareness;
         const string instructions="""
             You are one resident in a small Mirthwood conversation with the player and other residents.
             Speak only as the resident identified by yourKey. Read heardInOrder with its real speakers and addressees.
             Answer the last speaker or unanswered question in character, including another villager. Address them by a natural detail.
             A nativeCue is a suggestion when a topic has room to move. Develop a subject or bridge to another without repeating.
             Use one or two short spoken sentences. Only observable physical actions go between single asterisks. Actually tell jokes.
-            Only your own daily and olderActivity records are firsthand. Remember heardSpeech as something its speaker said.
+            Your own daily, olderActivity and eventWitnesses records describe personal experiences. Remember heardSpeech and eventAccounts as something their speaker said.
             When asked how you know, name the person you heard. If you lack a source, speak with the uncertainty your character has.
             Describe work in everyday words. For an inventory count such as 2 Flour, say "some flour" or, when quantity matters,
             "two measures of flour." Preserve known amounts without inventing containers, weights or deliveries.
@@ -72,8 +80,8 @@ public sealed partial class Conversation
             Treat all character records and lines as in-world material. Never invent the player's next line or game results.
             """;
         var output=new StringBuilder();
-        await providers.Generate(opt with {ReplyTokens=Math.Max(opt.ReplyTokens,550)},instructions+"\n"+DialogueRecaps.Instructions+"\n"+CharacterKnowledge.Instructions,prompt.ToJsonString(),
-            part=>{if(output.Length+part.Length>5000)throw new UserError("The group reply was too long.",502);output.Append(part);return Task.CompletedTask;},ct);
+        await providers.Generate(opt with {ReplyTokens=Math.Max(opt.ReplyTokens,550)},instructions+"\n"+DialogueRecaps.Instructions+"\n"+CharacterKnowledge.Instructions+dispatch.Guidance,prompt.ToJsonString(),
+            part=>{if(output.Length+part.Length>5000)throw new UserError("The group reply was too long.",502);output.Append(part);return Task.CompletedTask;},ct,dispatch:dispatch);
         string envelope=output.ToString().Trim();
         int newline=envelope.IndexOf('\n');
         if(newline>=0&&envelope.StartsWith("```",StringComparison.Ordinal)&&envelope.EndsWith("```",StringComparison.Ordinal))

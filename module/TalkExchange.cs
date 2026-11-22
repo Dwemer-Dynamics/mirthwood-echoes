@@ -45,17 +45,23 @@ namespace Mirthwood.Echoes
         JObject Current()
         {
             var data=Read();
-            if(data?["context"] is JObject binding && (string)binding["session"]!=NativeCues.Session && SavedResult((string)data["id"])==null){
+            var load=(string)data?["context"]?["session"]??(string)data?["worldAwareness"]?["world"]?["memorySession"];
+            if(load!=null && load!=NativeCues.Session && SavedResult((string)data["id"])==null){
                 File.Delete(path);return null;
             }
             return data;
         }
         public JObject Pending(){using(Lock())return Current();}
-        public JObject Accept(string text,float previousRun=0,JObject context=null,NPCController resident=null)
+        public JObject Accept(string text,float previousRun=0,JObject context=null,NPCController resident=null,JObject worldAwareness=null)
         {
             using(Lock()){
                 var data=Current();if(data!=null)return data;
                 data=new JObject{["id"]=Guid.NewGuid().ToString(),["text"]=text,["stage"]="new",["previousRun"]=previousRun,["context"]=context};
+                var awareness=worldAwareness??WorldAwareness.Capture(resident);
+                if(awareness!=null){
+                    awareness["acceptedTurn"]=data["id"].DeepClone();
+                    data["worldAwareness"]=awareness;
+                }
                 if(resident)data["returnCues"]=NativeSocialTurn.ReturnCues(resident,(string)data["id"]);
                 if(resident && PlayerImpression.Observe(resident,LastClothing()) is JObject impression)
                     data["playerImpression"]=impression;

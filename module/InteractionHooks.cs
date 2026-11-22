@@ -240,6 +240,7 @@ namespace Mirthwood.Echoes
                 if(origin==barkType&&(barkType=="BanditRaid"||barkType=="VerminPlague")){
                     string id=NativeCues.Fact(npc,"warning","I gave a "+(barkType=="BanditRaid"?"bandit raid":"vermin plague")+" warning: "+text);
                     NativeCues.Recent(npc,id,"warning",text);
+                    WorldCalendar.Announced(npc,barkType);
                 }
             }
         }

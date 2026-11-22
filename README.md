@@ -38,6 +38,12 @@ The cast includes six American men and six American women, plus two men and two 
 
 For live speech, start **Pocket-TTS (GPU / audio.cpp)** in Dwemer Distro. Echoes connects to port **8086** and supplies an original recording for the speaker. The player and resident speak their own words. A separate narrator reads actions enclosed in single asterisks. The complete line stays visible while an underline follows the word being spoken. For names outside the pronunciation dictionary, Echoes estimates the caption timing from the recording. With Dwemer offline, the complete reply appears as text.
 
+## What a resident knows about the world
+
+Ask a resident where you are, what is happening today, or when the next public gathering is due. Brightoak’s joust poster and festival calendar give advertised dates. A resident who sees a gathering can tell you what they saw and when. Someone who heard the news from another villager can name their source. If you mentioned wanting to attend, a resident can ask how it went. A personal sighting provides separate evidence that you were there.
+
+Each new speaker gets their own surroundings, including the native season, day and time of day. A resident can point out a known landmark, recognize someone nearby or mention a task you interrupted when the game supplies that evidence. Private Talk, passing remarks, Group Talk and generated quest dialogue use the same sources. Your subject still leads the conversation. During a quest discussion, the offer in the native portrait sets the terms.
+
 ## Group Talk
 
 Press **T** during normal play near two or three available residents. Each walks to an open spot near you. Press **Enter** to speak, **Tab** to listen, or **Esc** to leave. Type a resident’s name at the start of a question to address them directly. If someone else arrives nearby, press **T** between replies to invite them. Time pauses while you write. You can change the shortcut under `Controls / GroupTalk` in `BepInEx/config/mirthwood.echoes.cfg`.

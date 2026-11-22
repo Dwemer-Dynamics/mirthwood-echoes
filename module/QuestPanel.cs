@@ -102,13 +102,13 @@ namespace Mirthwood.Echoes
         }
         bool Eligible()
         {
-            if(!view||!view.isActiveAndEnabled||!npc||!npc.isActiveAndEnabled||npc.CharacterInfo?.id!=nativeId||
+            if(!view||!view.isActiveAndEnabled||!npc||!npc.isActiveAndEnabled||npc.CharacterInfo?.id!=nativeId||Plugin.Owner(npc)!=owner||
                 !chat||chat.ConditionalDialoguesBlocked||!ReferenceEquals(ShownData.GetValue(view),data)||!ReferenceEquals(data.Character,npc)||
                 !ReferenceEquals(condition.quest,quest)||!MirthwoodPlayer.Instance||MirthwoodPlayer.Instance.QuestList==null||
                 MirthwoodPlayer.Instance.QuestList.Get(quest)!=null)return false;
             var w=Plugin.World();if(w==null)return false;
             var now=JObject.FromObject(w);
-            return new[]{"slot","created","player"}.All(k=>JToken.DeepEquals(world[k],now[k]))&&
+            return new[]{"slot","created","player","memorySession"}.All(k=>JToken.DeepEquals(world[k],now[k]))&&
                 ReferenceEquals(chat.ConditionalDialogues.FirstOrDefault(x=>x!=null&&x.IsAvailable(chat)),condition);
         }
         internal static void Tick()
@@ -159,6 +159,11 @@ namespace Mirthwood.Echoes
             yield return Turn("");
         }
         JObject Envelope(string id)=>new JObject{["id"]=id,["campaign"]=campaign,["actor"]=actor,["key"]=key,["session"]=session};
+        static void AnchorTurn(JObject body)
+        {
+            if((string)body["worldAwareness"]?["world"]?["memorySession"]==NativeCues.Session)
+                NativeCues.Record("talk",new JArray(),(string)body["id"]);
+        }
         internal void Submit(string text)
         {
             if(!Ready||Input.GetKeyDown(KeyCode.Escape)||string.IsNullOrWhiteSpace(text)||text.Trim().Length>1200)return;
@@ -167,8 +172,11 @@ namespace Mirthwood.Echoes
         }
         IEnumerator Turn(string text)
         {
+            if(!Eligible()){Fallback();yield break;}
             bool opening=parent==null;
             var body=Envelope(opening?session:Guid.NewGuid().ToString());
+            var awareness=WorldAwareness.Capture(npc);
+            if(awareness!=null)body["worldAwareness"]=awareness;
             if(opening)body["offer"]=offer.DeepClone();else{body["parent"]=parent;body["text"]=text;}
             if(!opening){
                 speech.Stop(true);
@@ -194,6 +202,7 @@ namespace Mirthwood.Echoes
                 view.choiceButtons[action=="accept"?accept:decline].onClick.Invoke();
                 bool started=MirthwoodPlayer.Instance?.QuestList?.Get(quest)!=null;
                 if(action=="accept"?started:!started&&chat&&!chat.ConditionalDialogues.Contains(condition)){
+                    AnchorTurn(body);
                     QueueConfirmation(ack);
                     if(!Plugin.QuestFarewell(npc,(string)body["id"]+"/farewell",line,speech)){
                         speech.Stop();OverheadSpeech.Board(npc)?.ShowOverheadText(Markup(line),null);
@@ -201,16 +210,25 @@ namespace Mirthwood.Echoes
                 }else speech.Stop();
                 yield break;
             }
+            bool shown=false;
             try{
                 if(!editRow)BuildEditor();
                 string terms=opening?NativeTerms+"\n\n":"";
                 spoken=terms+Markup(line);
                 details=false;portraitWords.text=terms;input.text="";input.readOnly=true;
                 speech.Say((string)body["id"]+"/npc",npc,line,(value,partial)=>{
-                    if(Current==this&&!details&&portraitWords)portraitWords.text=terms+Markup(value,partial);
+                    if(Current==this&&!details&&portraitWords){
+                        portraitWords.text=terms+Markup(value,partial);
+                        if(!partial||!string.IsNullOrWhiteSpace(value)&&value!="…"&&value!="*")shown=true;
+                    }
                 });
                 DetailsButton.GetComponentInChildren<TextMeshProUGUI>(true).text="Quest details";
             }catch(Exception e){Debug.LogWarning("Echoes quest reply editor unavailable. "+e.GetBaseException().Message);Fallback();yield break;}
+            if(awareness!=null){
+                while(Current==this&&!shown)yield return null;
+                if(Current!=this)yield break;
+                AnchorTurn(body);
+            }
             bool confirmed=false;yield return Acknowledge(ack,ok=>confirmed=ok);
             if(Current!=this)yield break;
             if(!confirmed){Fallback();yield break;}

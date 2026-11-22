@@ -74,6 +74,8 @@ namespace Mirthwood.Echoes
         object targetIdentity;
         TalkExchange exchange;
         JObject freshCue;
+        JObject submittedTurn;
+        WorldAwareness.Interruption interruption;
         string fixtureUrl;
         JObject fixtureReport;
         public bool Visible=>root!=null;
@@ -207,7 +209,9 @@ namespace Mirthwood.Echoes
                 if(passing.EventId!=null)NativeCues.Recent(npc,passing.EventId,passing.Kind,passing.Line);
             }
             DismissPassingLine();
+            var beforeChat=WorldAwareness.Interruption.Observe(npc);
             if(!Build(npc))return;
+            interruption=beforeChat;
             if(openedSession!=null)conversationId=openedSession;
             if(opener!=null){npcBubble.Show(opener);Follow();}
             var brain=npc.GetComponent<NPCChatController>();var player=PlayerCharacterController.Instance.GetComponent<PlayerChat>();
@@ -233,7 +237,7 @@ namespace Mirthwood.Echoes
                     var hit=JObject.Parse(r.downloadHandler.text);campaign=(string)hit["campaign"];actor=(string)hit["actor"];
                     exchange=new TalkExchange(campaign,actor);
                     var pending=exchange.Pending();
-                    if(pending!=null)WaitForReply((string)pending["text"],"Recovering your exchange…");
+                    if(pending!=null){submittedTurn=pending;WaitForReply((string)pending["text"],"Recovering your exchange…");}
                     ready=true;
                 }catch(Exception){
                     const string note="Echoes could not open the pending exchange. Esc to leave.";
@@ -252,7 +256,9 @@ namespace Mirthwood.Echoes
             if(GroupActive){SubmitGroup(words);return;}
             if(!Visible||busy||phase!=Phase.Draft||(IsolatedGameRun.Active!=null&&fixtureUrl==null&&IsolatedGameRun.Active.TalkAddress==null))return;
             if(string.IsNullOrWhiteSpace(words)){host.StartCoroutine(Refocus(generation));return;}
-            WaitForReply(words.Trim());
+            var message=words.Trim();
+            if(fixtureUrl==null)CapturePlayerTurn(message);
+            WaitForReply(message);
             if(fixtureReport!=null)fixtureReport["acceptedItalic"]=playerBubble.Styled("lift",true)&&!playerBubble.VisibleText.Contains("*");
             if(ready)host.StartCoroutine(Speak(accepted,generation));
             else if(!resolving)host.StartCoroutine(Resolve(targetIdentity,generation));
@@ -555,6 +561,7 @@ namespace Mirthwood.Echoes
         public void Close()
         {
             ReleaseGroup();
+            submittedTurn=null;interruption=null;
             waitingDots=0;
             DismissPassingLine();
             if(!Visible)return;generation++;if(active!=null){active.Abort();active=null;}

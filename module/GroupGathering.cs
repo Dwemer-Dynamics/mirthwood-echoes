@@ -21,7 +21,9 @@ namespace Mirthwood.Echoes
             internal Vector3 Spot,PreviousDestination,PreviousFacing;
             internal bool HadPath,WasStopped,Arrived,Resolving,Unique;
             internal float StopDistance,Until;
-            internal string Actor;
+            internal string Actor,Owner,NativeId;
+            internal WorldAwareness.Interruption Interruption;
+            internal bool SameResident=>Npc&&Npc.CharacterInfo?.id==NativeId&&Plugin.Owner(Npc)==Owner;
         }
 
         static readonly System.Reflection.FieldInfo EventLock=AccessTools.Field(typeof(NPCController),"_eventLockActive");
@@ -102,7 +104,8 @@ namespace Mirthwood.Echoes
                     trace?.Invoke("Blocked approach.");continue;
                 }
                 if(!FindSpot(center,ground.position,agent,out var spot)){trace?.Invoke("No reachable spot for "+npc.name);continue;}
-                var guest=new Guest{Npc=npc,Chat=chat,Agent=agent,Spot=spot,StopDistance=agent.stoppingDistance,
+                var guest=new Guest{Npc=npc,Chat=chat,Agent=agent,Owner=Plugin.Owner(npc),NativeId=npc.CharacterInfo.id,
+                    Interruption=WorldAwareness.Interruption.Observe(npc),Spot=spot,StopDistance=agent.stoppingDistance,
                     HadPath=agent.hasPath||agent.pathPending,PreviousDestination=agent.destination,PreviousFacing=npc.DataContainer.data.FacingDirection,
                     WasStopped=agent.isStopped,Until=Time.time+7f};
                 Guests.Add(guest);

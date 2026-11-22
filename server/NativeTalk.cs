@@ -24,7 +24,8 @@ public sealed partial class Conversation
         if(stored!=null)return PublicTalk(stored);
         if(await db.One("SELECT to_jsonb(true)::text FROM turns WHERE id=@id",("id",id))!=null)
             return PublicTalk(await TalkState(id,c,a,words,binding)??throw new UserError("This exchange belongs to a different conversation.",409));
-        var (actor,day)=await ActorDay(c,a);
+        var (actor,dispatch)=await Speaker(n.AsObject(),c,a,"private");
+        int day=dispatch.Day;
         var cue=await CurrentCue(c,a,binding);
         var opt=await providers.Options();
         // Only the insert winner may dispatch. A disconnected client can poll the original request.
@@ -37,7 +38,8 @@ public sealed partial class Conversation
         try{
             var head=CueHistory.OptionalId(binding?["head"]);
             var cues=ReadReturnCues(n["returnCues"]);
-            var facts=await Recall(c,a,day,opt,words,binding!=null,head,recentTurns:8,includeVoicedCues:cues!=null,relatedSpeech:true,topics:cues?.ToJsonString());
+            var facts=await Recall(c,a,day,opt,words,binding!=null,head,recentTurns:8,includeVoicedCues:cues!=null,relatedSpeech:true,topics:cues?.ToJsonString(),awareness:dispatch.Awareness);
+            if(dispatch.Awareness!=null)facts["worldAwareness"]=dispatch.Awareness;
             var freshCues=FreshReturnCues(cues,facts["recentSpeech"]!.AsArray());
             if(cue!=null)facts["currentInteraction"]=cue;
             if(binding?["cards"] is JsonArray cards && cards.Count>0)facts["availableExtraCards"]=cards.DeepClone();
@@ -47,7 +49,7 @@ public sealed partial class Conversation
                 disposition["currentDesireForCompany"]=level<-.5?"very low":level<0?"waning":level>.7?"eager for company":"willing to talk";
             var impression=TalkImpressions.ForResident(n["playerImpression"],words);
             string? listener=(impression?["knownPlayer"]??impression?["onlyIfIntroducingThemself"])?["name"]?.GetValue<string>();
-            var prompt=TalkInstructions+"\n"+CharacterKnowledge.Instructions+"\n"+SpokenStyle+"\n"+ConversationFlow+"\n"+TalkEndings.Instructions+"\n"+TalkTopics.Instructions+"\nGame day "+day+". Character: "+disposition.ToJsonString()+"\nRecall: "+facts.ToJsonString();
+            var prompt=TalkInstructions+"\n"+CharacterKnowledge.Instructions+"\n"+SpokenStyle+"\n"+ConversationFlow+"\n"+TalkEndings.Instructions+"\n"+TalkTopics.Instructions+dispatch.Guidance+"\nGame day "+day+". Character: "+disposition.ToJsonString()+"\nRecall: "+facts.ToJsonString();
             if(impression!=null)prompt+="\n"+TalkImpressions.Instructions+"\nPlayer impression: "+impression.ToJsonString();
             if(freshCues!=null)prompt+="\n"+Steering+"\nReturn cards: "+freshCues.ToJsonString();
             if(cue?.S("kind")=="card")prompt+="\nThe resident was about to act on currentInteraction.observedAction. Work it into their words if it still fits what the player said.";
@@ -55,7 +57,7 @@ public sealed partial class Conversation
             var model=await providers.Generate(opt with {ReplyTokens=3*opt.ReplyTokens+DialogueOutput.AnnotationTokens+112+72*(freshCues?.Count??0)},prompt,words,part=>{
                 if(wire.Length+part.Length>12000+320*(cues?.Count??0))throw new UserError("The Talk reply was too long.",502);
                 wire.Append(part);return Task.CompletedTask;
-            },CancellationToken.None);
+            },CancellationToken.None,dispatch:dispatch);
             if(db.HarnessRun is {} run && Environment.GetEnvironmentVariable("MIRTHWOOD_ECHOES_CAPTURE_RECALL")=="1"){
                 var trace = new {run,turn=id,day,provider=opt.Provider,model,recaps=facts["conversationRecaps"] ?? new JsonArray()};
                 Console.WriteLine("Echoes Talk recall " + JsonSerializer.Serialize(trace));

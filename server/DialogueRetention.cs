@@ -88,6 +88,10 @@ internal static class DialogueRetention
     internal static async Task<List<DialogueRecaps.Source>> Maintain(Database db,CancellationToken ct)
     {
         await db.Run("""
+            DELETE FROM resident_reply_cache r WHERE r.reply IS NOT NULL AND (
+                r.load_id IS NULL AND r.created<now()-interval '1 hour' OR
+                EXISTS(SELECT FROM dialogue_clock d WHERE d.campaign=r.campaign AND r.load_id=ANY(d.retired_loads)) OR
+                EXISTS(SELECT FROM cue_events e WHERE e.campaign=r.campaign AND e.id=r.id AND e.dialogue_expired));
             UPDATE personality_turning_points p SET evidence=echoes_marked_observation(e.id,p.reason)
               FROM daily_events e WHERE p.source_type='event' AND e.id=p.source_id AND p.evidence IS NULL AND e.description<>'';
             INSERT INTO dialogue_clock(campaign,day,load_id) SELECT c.id,c.day,'' FROM campaigns c JOIN slots s ON c.id=s.campaign

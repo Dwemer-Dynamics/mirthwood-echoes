@@ -32,6 +32,9 @@ public sealed class Database(NpgsqlDataSource source)
                 state text NOT NULL, started timestamptz NOT NULL DEFAULT now(), first_ms int, total_ms int,
                 FOREIGN KEY(campaign,actor) REFERENCES actors(campaign,key));
             CREATE INDEX IF NOT EXISTS turns_actor ON turns(campaign,actor,day DESC);
+            CREATE TABLE IF NOT EXISTS resident_reply_cache(id uuid PRIMARY KEY,campaign text NOT NULL,load_id text,binding bytea NOT NULL,reply jsonb,
+                created timestamptz NOT NULL DEFAULT now());
+            DELETE FROM resident_reply_cache WHERE reply IS NULL;
             CREATE TABLE IF NOT EXISTS commitments(id uuid PRIMARY KEY, campaign text, actor text, day int NOT NULL, due int, speaker text NOT NULL,
                 statement text NOT NULL, status text NOT NULL DEFAULT 'open', recorded timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(campaign,actor) REFERENCES actors(campaign,key));
             CREATE INDEX IF NOT EXISTS commitments_actor ON commitments(campaign,actor,status);

@@ -74,37 +74,68 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
     }
     async Task<(JsonNode Actor,int Day)> ActorDay(string c,string a)
     {
-        var actor=await journal.Actor(c,a);
+        return DescribeSpeaker(await journal.Actor(c,a),c,null);
+    }
+    (JsonObject Actor,int Day) DescribeSpeaker(JsonObject actor,string campaign,int? acceptedDay)
+    {
         if(actor.S("kind") is not ("NPC" or "Child" or "Replacement"))throw new UserError("Dialogue is available for living NPCs.",409);
-        int d=LiveDay(c)??actor.I("day");
+        int d=acceptedDay??LiveDay(campaign)??actor.I("day");
         if(d<0)throw new UserError("Load the save in Mirthwood to supply its current calendar day.",409);
         return(native.Describe(actor),d);
     }
-    public async Task<JsonNode> Recall(string c,string a,int day,Options opt,string question,bool scoped=false,Guid? head=null,int recentTurns=2,bool includeVoicedCues=false,bool relatedSpeech=false,bool groupOnly=false,string? topics=null,string[]? audience=null,string currentSpeaker="player")
+    public async Task<JsonNode> Recall(string c,string a,int day,Options opt,string question,bool scoped=false,Guid? head=null,int recentTurns=2,bool includeVoicedCues=false,bool relatedSpeech=false,bool groupOnly=false,string? topics=null,string[]? audience=null,string currentSpeaker="player",JsonObject? awareness=null)
     {
         var terms=Regex.Matches(question.ToLowerInvariant(),@"[\p{L}\p{N}]{3,}").Select(m=>m.Value).Where(w=>w is not ("the" or "and" or "you" or "what" or "did" or "that" or "about" or "for")).Distinct().Take(15);
         int? requestedDay=Regex.IsMatch(question,@"\byesterday\b",RegexOptions.IgnoreCase)?day-1:
             Regex.IsMatch(question,@"\btoday\b",RegexOptions.IgnoreCase)?day:null;
+        var titles=(awareness?["today"] as JsonArray??[]).Select(x=>x.S("title"))
+            .Append(awareness?["previousNotice"].S("title")??"").Append(awareness?["nextNotice"].S("title")??"");
+        string eventTerms=string.Join(" | ",Regex.Matches(string.Join(" ",titles),@"[\p{L}\p{N}]{3,}")
+            .Select(m=>m.Value.ToLowerInvariant()).Where(w=>w is not ("the" or "and" or "grand")).Distinct());
+        bool recallSpeech=!groupOnly || audience is {Length:>0};
         var facts=await db.ScopedOne(ConversationSessions.Lines+"""
-            , q AS (SELECT to_tsquery('simple',@terms) AS ts,to_tsquery('english',@terms) AS speech),
+            , q AS (SELECT to_tsquery('simple',@terms) AS ts,to_tsquery('english',@terms) AS speech,
+                to_tsquery('english',nullif(@eventTerms,'')) AS events),
+            eligible_daily AS (
+                SELECT * FROM daily_events WHERE campaign=@c AND actor=@a AND kind<>'address' AND day<=@day
+                  AND (NOT @groupOnly OR kind IN ('funeral','warning','worldEvent') OR kind='work' AND description NOT ILIKE '%hired-work collection%')
+            ),
+            reports AS (
+                SELECT n.source,n.day,n.name AS speaker,n.speaker AS speaker_key,n.at,m[1] AS subject,
+                  CASE WHEN NOT @groupOnly OR @listeners::text[] IS NOT NULL AND n.audience @> @listeners THEN left(spoken.words,360) END AS quote
+                FROM named n CROSS JOIN LATERAL (SELECT regexp_replace(n.words,'\*[^*]+\*','','g') AS words) spoken
+                CROSS JOIN LATERAL regexp_matches(lower(spoken.words),@news,'g') m
+                WHERE @hasWorld AND n.day=@day AND n.speaker<>@a AND (n.mode='group' OR NOT @groupOnly AND n.n>0)
+            ),
             recent AS (
                 SELECT id AS turn,day,left(player_text,300) AS player,left(reply,600) AS npc,started,
                     CASE WHEN @includeCues AND talk->>'deliveredContinuation'='true' THEN talk->'handoff'->>'cue' END AS "voicedCue"
-                FROM turns WHERE campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day AND state='complete' AND NOT dialogue_expired
+                FROM turns WHERE NOT @groupOnly AND campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day AND state='complete' AND NOT dialogue_expired
                 ORDER BY started DESC,id DESC LIMIT @recentTurns
             )
             SELECT jsonb_build_object(
-              'daily', (SELECT coalesce(jsonb_agg(to_jsonb(x)),'[]') FROM (SELECT id AS source,day,kind,description FROM daily_events,q
-                WHERE campaign=@c AND actor=@a AND kind<>'address' AND day BETWEEN @earliest AND @day
+              'daily', (SELECT coalesce(jsonb_agg(to_jsonb(x)),'[]') FROM (SELECT id AS source,day,kind,description FROM eligible_daily,q
+                WHERE day BETWEEN @earliest AND @day
                 ORDER BY (day=@requestedDay::int) DESC,ts_rank(to_tsvector('simple',description),q.ts) DESC,day DESC,observed DESC LIMIT 3)x),
               'commitments',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(x))),'[]') FROM (SELECT coalesce(speaker_label,speaker) AS speaker,addressed_to,day,due,statement,proposal,'open' AS status FROM commitments,q
-                WHERE campaign=@c AND actor=@a AND day<=@day AND (status='open' OR resolved_day>@day)
+                WHERE NOT @groupOnly AND campaign=@c AND actor=@a AND day<=@day AND (status='open' OR resolved_day>@day)
                 ORDER BY ts_rank(to_tsvector('simple',statement||' '||coalesce(proposal,'')),q.ts) DESC,abs(coalesce(due,@day+10000)-@day),recorded DESC LIMIT 3)x),
-              'olderActivity',(SELECT to_jsonb(x) FROM (SELECT id AS source,day,kind,left(description,340) AS experience FROM daily_events,q
-                WHERE actor=@a AND kind<>'address' AND day<@earliest AND (day=@requestedDay::int OR to_tsvector('english',description) @@ q.speech)
+              'olderActivity',(SELECT to_jsonb(x) FROM (SELECT id AS source,day,kind,left(description,340) AS experience FROM eligible_daily,q
+                WHERE day<@earliest AND (day=@requestedDay::int OR to_tsvector('english',description) @@ q.speech)
                 ORDER BY (day=@requestedDay::int) DESC,ts_rank(to_tsvector('english',description),q.speech) DESC,day DESC,observed DESC LIMIT 1)x),
+              'eventWitnesses',(SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT id AS source,day,description FROM eligible_daily,q
+                WHERE @hasWorld AND kind='worldEvent' AND (to_tsvector('english',description) @@ q.speech OR to_tsvector('english',description) @@ q.events)
+                ORDER BY ts_rank(to_tsvector('english',description),q.speech) DESC,day DESC,observed DESC LIMIT 2)x),
+              'eventAccounts',(SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT source,day,name AS speaker,addressed,words AS quote FROM named,q
+                WHERE @recallSpeech AND (@listeners::text[] IS NULL OR mode='group' AND audience @> @listeners::text[])
+                  AND to_tsvector('english',words) @@ q.events
+                ORDER BY at DESC,seq DESC,n DESC LIMIT 2)x),
+              'heardToday',(SELECT jsonb_agg(jsonb_strip_nulls(to_jsonb(x)-'recency'-'at') ORDER BY at) FROM (
+                SELECT fresh.*,row_number() OVER(PARTITION BY subject ORDER BY at DESC,source DESC) AS recency FROM (
+                  SELECT DISTINCT ON(subject,speaker_key) source,day,speaker,subject,quote,at FROM reports
+                  ORDER BY subject,speaker_key,at DESC,source DESC) fresh)x WHERE recency<=2),
               'heardSpeech',(SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT source,session,day,mode,name AS speaker,audience,addressed,left(words,360) AS quote
-                FROM named,q WHERE (@listeners::text[] IS NULL OR audience @> @listeners::text[]) AND (mode='group' OR (NOT @groupOnly AND (day<@earliest OR source_type='event'))) AND
+                FROM named,q WHERE @recallSpeech AND (@listeners::text[] IS NULL OR audience @> @listeners::text[]) AND (mode='group' OR (NOT @groupOnly AND (day<@earliest OR source_type='event'))) AND
                     to_tsvector('english',words||' '||name) @@ q.speech
                 ORDER BY ts_rank(to_tsvector('english',words||' '||name),q.speech) DESC,at DESC,seq DESC,n DESC LIMIT 3)x),
               'recentSpeech',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(r)-'started') ORDER BY r.started,r.turn),'[]') FROM recent r),
@@ -116,11 +147,15 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                   AND NOT EXISTS(SELECT FROM recent r WHERE r.turn=t.id) AND s.words @@ q.speech
                 ORDER BY ts_rank_cd(s.words,q.speech) DESC,t.started DESC,t.id DESC LIMIT 2)x)
             )::text
-            """,scoped,head,("terms",string.Join(" | ",terms)),("requestedDay",requestedDay),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech),("groupOnly",groupOnly),("listeners",audience));
-        if(facts is JsonObject obj)foreach(var key in new[]{"earlierSpeech","heardSpeech","olderActivity"})
+            """,scoped,head,("terms",string.Join(" | ",terms)),("requestedDay",requestedDay),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech&&!groupOnly),("groupOnly",groupOnly),("listeners",audience),("eventTerms",eventTerms),("hasWorld",awareness!=null),("recallSpeech",recallSpeech),("news",SpeakerWorld.NewsSubjects));
+        if(facts is JsonObject obj)foreach(var key in new[]{"earlierSpeech","heardSpeech","olderActivity","eventWitnesses","eventAccounts","heardToday"})
             if(obj[key]==null)obj.Remove(key);
+        if(!recallSpeech)return facts!;
         var recaps=await DialogueRecaps.Recall(db,c,a,day,scoped,head,question,audience,currentSpeaker);
         if(recaps is JsonArray {Count:>0})facts!["conversationRecaps"]=recaps;
+        if(awareness?["previousNotice"] is JsonObject previous &&
+           await DialogueRecaps.Recall(db,c,a,day,scoped,head,previous.S("title"),audience,currentSpeaker) is JsonArray {Count:>0} accounts)
+            facts!["earlierEventAccount"]=accounts[0]!.DeepClone();
         var knowledge=await CharacterKnowledge.Recall(db,c,a,day,scoped,head,question,topics,audience,currentSpeaker);
         if(knowledge is JsonArray {Count:>0} remembered)facts!["characterKnowledge"]=remembered;
         return facts!;

@@ -34,7 +34,7 @@ namespace Mirthwood.Echoes
         private readonly string session = Guid.NewGuid().ToString();
         private int dropped;
         private int hookCount;
-        private float nextBeat;
+        private float nextBeat,nextWorldObservation;
         private NativeConversation dialogue;
         BepInEx.Configuration.ConfigEntry<BepInEx.Configuration.KeyboardShortcut> groupKey;
         private ReactionVoices reactionVoices;
@@ -73,6 +73,7 @@ namespace Mirthwood.Echoes
             NativeCues.Start(this);
             InteractionHooks.Install(hooks,Logger);
             if(InteractionHooks.Compatible){
+                WorldCalendar.Install(hooks);
                 hooks.CreateClassProcessor(typeof(GroupGathering.Routine)).Patch();
                 hooks.CreateClassProcessor(typeof(GroupGathering.Movement)).Patch();
             }
@@ -115,6 +116,12 @@ namespace Mirthwood.Echoes
             QuestPanel.Tick();
             dialogue?.GroupKeys(groupKey.Value);
             if(dialogue?.GroupActive!=true)dialogue?.TickPassingLine();
+            if(InteractionHooks.Compatible&&(isolated==null||isolated.TalkAddress!=null)&&Time.unscaledTime>=nextWorldObservation){
+                nextWorldObservation=Time.unscaledTime+2f;
+                if(SaveMaster.IsSlotLoaded()&&PlayerCharacterController.Instance&&!_Mirthwood.Scripts.Demo.GameState.IsPaused&&
+                   _Mirthwood.Scripts.Demo.GameState.GetCurrentState(1)==_Mirthwood.Scripts.Demo.GameState.State.Gameplay)
+                    WorldCalendar.ObserveNearby();
+            }
             if (Time.realtimeSinceStartup >= nextBeat)
             {
                 nextBeat = Time.realtimeSinceStartup + (isolated==null?12:3);
