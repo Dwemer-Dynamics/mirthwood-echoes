@@ -27,6 +27,11 @@ def write(path, value):
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def opener_journal_id(opener):
+    source = hashlib.md5((opener["id"]+"/"+opener["actor"]).encode(), usedforsecurity=False)
+    return str(uuid.UUID(bytes=source.digest()))
+
+
 def api(path, data=None, method=None):
     body = None if data is None else json.dumps(data).encode()
     req = Request("http://127.0.0.1:17864/api/"+path, data=body, method=method,
@@ -313,8 +318,7 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False, awa
         expected={r["id"]:r["reply"] for r in (result["turns"][-1:] if knowledge else result["turns"])}
         for r in result["openers"]:
             if knowledge and r["id"]!=result["turns"][-1]["id"]:continue
-            source=hashlib.md5((r["id"]+"/"+r["actor"]).encode(),usedforsecurity=False).hexdigest()
-            expected[str(uuid.UUID(hex=source))]=r["line"]
+            expected[opener_journal_id(r)]=r["line"]
         end=time.monotonic()+15
         while True:
             entries=[r for r in api(path)["items"] if r["id"] in expected]

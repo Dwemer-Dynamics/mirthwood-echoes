@@ -59,6 +59,7 @@ namespace Mirthwood.Echoes
             public string QuestQuestion => (string)plan["questQuestion"];
             public bool DeclineQuest => (bool?)plan["declineQuest"] == true;
             public bool RetryAddress => (bool?)plan["retryAddress"] == true;
+            public string HearingQuestion => (string)plan["hearingQuestion"];
 
             public string Words(int index) => (string)plan["turns"][index]["words"];
 

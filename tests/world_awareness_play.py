@@ -184,6 +184,11 @@ class AwarenessPlay:
                 interrupted, = [o for o in observations if o["stage"] == "address-disconnect"]
                 if interrupted["extra"]["id"] != addressed[0]["opener"]["id"]:
                     raise AssertionError("The recovered native opener has a different identity.")
+            expected = {game.opener_journal_id(row["opener"]): row["opener"]["line"] for row in addressed}
+            written = [row for row in game.api(history)["items"] if row["id"] in expected]
+            game.write(work / "journal-openers.json", written)
+            if {row["id"]: row["reply"] for row in written} != expected or len(written) != len(expected):
+                raise AssertionError("The passing remark recovery disagrees with the private journal.")
 
     def verify_fall_posters(self, records, observations):
         visits = {row["source"]["extra"]["intent"]["context"]["conversation"] for row in records}
@@ -254,6 +259,24 @@ class AwarenessPlay:
                         raise AssertionError("A group prompt reveals a line outside the shared audience.")
                 if t["campaign"] != result["campaign"] or t["nativeId"] != row["before"]["resident"]["nativeId"]:
                     raise AssertionError("Group context belongs to another resident or campaign.")
+        if self.plan.get("hearingQuestion"):
+            heard = [o for o in observations if o["stage"] == "hearing-followup-bubble"]
+            if [o["resident"]["name"] for o in heard] != ["Drystan", "Anastasia"]:
+                raise AssertionError("Missing the original listener or the resident outside the group.")
+            for observation in heard:
+                data = observation["extra"]
+                row = data["row"]
+                present = any(row["actor"] in entry["line"]["audience"] for entry in lines)
+                if present != (observation["resident"]["name"] == "Drystan") or not data["matched"]:
+                    raise AssertionError("The later private question lost its original hearing boundary.")
+                history = f"saves/{row['campaign']}/characters/{row['actor']}/history/conversations"
+                saved, = [item for item in game.api(history)["items"] if item["id"] == row["id"]]
+                if saved["reply"] != data["reply"]:
+                    raise AssertionError("The private follow-up differs from the delivered and journaled answer.")
+                if not self.baseline:
+                    call, = [t for t in trace if t["mode"] == "private" and t["turn"] == row["id"]]
+                    if call["actor"] != row["actor"] or (not present and "copper streamer" in (call["system"] + data["reply"]).casefold()):
+                        raise AssertionError("A private listener received the wrong actor's group account.")
 
     def verify_quest(self, work, observations, trace):
         before, = [o for o in observations if o["stage"] == "quest-before"]

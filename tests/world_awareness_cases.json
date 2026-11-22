@@ -142,6 +142,7 @@
     "resident": "Group",
     "startingDesire": "eager",
     "privateTerms": ["thimble", "2 flour"],
+    "hearingQuestion": "Did you hear Averil talk about the Grand Joust earlier? What did she say, if you were there?",
     "turns": [
       {
         "words": "Please keep this between us, Averil. I'm worried I lost my sister's silver thimble.",
@@ -149,7 +150,7 @@
         "check": "Confirm the private exchange and keep it out of every group prompt."
       },
       {
-        "words": "Averil, collecting jousting pennants is my favorite pastime. I saw a copper streamer by the field. Could you tell Drystan what I saw?",
+        "words": "Averil, collecting Grand Joust pennants is my favorite pastime. I saw a copper streamer by the field. Could you tell Drystan what I saw?",
         "check": "Averil heard the player's report. Graham has not joined."
       },
       {
