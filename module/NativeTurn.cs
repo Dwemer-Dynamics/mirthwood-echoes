@@ -21,7 +21,7 @@ namespace Mirthwood.Echoes
         {
             if((string)submittedTurn?["text"]==words)return;
             submittedTurn=new JObject{["text"]=words,["context"]=NativeCues.Binding(freshCue,resident,conversationId),
-                ["worldAwareness"]=WorldAwareness.Capture(resident,interruption?.Recent)};
+                ["worldAwareness"]=WorldAwareness.Capture(resident,interruption?.AtStart)};
         }
         void Retry(string message,string note){busy=false;accepted=null;Edit(message,note);}
         void RecoverTalk(string original,string note)
@@ -50,7 +50,7 @@ namespace Mirthwood.Echoes
             try{
                 CapturePlayerTurn(message);
                 turn=outbox.Accept(message,positiveRun,submittedTurn["context"] as JObject,resident,submittedTurn["worldAwareness"] as JObject);
-                submittedTurn=turn;interruption=null;freshCue=null;
+                submittedTurn=turn;freshCue=null;
             }catch(Exception){Retry(message,"Could not save this exchange. Enter to retry.");}
             if(turn==null)yield break;
             string id=(string)turn["id"],original=(string)turn["text"];

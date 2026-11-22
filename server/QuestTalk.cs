@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using Mirthwood.Echoes;
 
 public sealed partial class Conversation
@@ -21,20 +20,7 @@ public sealed partial class Conversation
         return speech.ToString().Trim();
     }
 
-    static bool RefersOnlyToEvent(JsonObject scene,JsonObject offer,string evidence)
-    {
-        static HashSet<string> Words(string text)=>Regex.Matches(text.ToLowerInvariant(),@"[\p{L}\p{N}]+")
-            .Select(m=>m.Value).Where(w=>w.Length>2 && w is not ("the" or "and" or "this" or "that" or "you" or "your" or "will" or "with" or "for" or "can"))
-            .ToHashSet(StringComparer.Ordinal);
-        var words=Words(evidence);
-        var events=(scene["today"] as JsonArray??[]).Select(e=>e.S("title"))
-            .Append(scene["nextNotice"].S("title")).Append(scene["previousNotice"].S("title"))
-            .Concat((scene["nextByKind"] as JsonObject??[]).Select(pair=>pair.Value.S("title")));
-        if(!events.Any(title=>Words(title).Overlaps(words)))return false;
-        var job=Words(offer.S("title")+" "+offer.S("terms")+" "+string.Join(" ",offer["objectives"]!.AsArray()));
-        job.UnionWith(["job","task","terms","offer","work"]);
-        return !job.Overlaps(words);
-    }
+    const string AskForQuestDecision="Would you take the work on the terms I offered?";
 
     static string RefuseNewTerms(string manner,bool repeated)=>(manner,repeated) switch{
         ("gentle",false)=>"I wish I could meet you halfway, but the terms have to stand. Would you still help?",
@@ -94,7 +80,8 @@ public sealed partial class Conversation
         var (actor,dispatch)=await Speaker(n,c,a,"quest");
         int day=dispatch.Day;
         var packet=new JsonObject{["key"]=key,["session"]=session.ToString()};
-        string previous="";bool warned=false;
+        string previous="";bool warned=false,answeringOffer=false;
+        bool aware=n["worldAwareness"] is JsonObject;
         if(opening)packet["offer"]=terms;
         else{
             var root=await QuestRow(session,c,a);
@@ -104,6 +91,8 @@ public sealed partial class Conversation
                 priorPacket.S("session")!=session.ToString()||priorPacket.S("action")!="continue")
                 throw new UserError("This quest discussion is no longer awaiting that answer.",409);
             terms=original;previous=priorPacket.S("line");warned=priorPacket?["warned"]?.GetValue<bool>()==true;
+            answeringOffer=priorPacket.S("intent") is "offer" or "counter" || previous==AskForQuestDecision ||
+                priorPacket?["asksForDecision"]?.GetValue<bool>()==true;
             packet["parent"]=parent.ToString();
         }
         int won=await db.Run("""
@@ -120,9 +109,16 @@ public sealed partial class Conversation
             var context=new JsonObject{["resident"]=profile,["nativeOffer"]=terms!.DeepClone(),["opening"]=opening,
                 ["alreadyRefusedToChangeTerms"]=warned,["previousNpcLine"]=previous,["latestPlayerSpeech"]=speech};
             string guidance=QuestInstructions+"\n"+CharacterKnowledge.Instructions;
+            if(aware){
+                context["answeringOffer"]=answeringOffer;
+                guidance+="""
+
+                    Return subject as job or world. Identify the subject of the player's decisive clause, even if a different sentence asks about something else. For accept, decline or counter, copy the whole clause that makes that choice, including its object and any condition, into evidence. When the player names an item or place in the native terms, copy that shared detail into offerDetail. For a counter, identify the proposed termChange as reward, amount, destination, deadline or work. A reference to this job in another clause cannot supply the missing object. A short yes/no or equivalent can answer the resident's immediately pending invitation when answeringOffer is true. An agreement to attend a gathering concerns the gathering. If replying with a question asking whether the player will accept this job, put that exact final question in offerQuestion. Leave offerQuestion empty for every other reply.
+                    """;
+            }
             if(dispatch.Awareness!=null){
                 context["worldAwareness"]=dispatch.Awareness;
-                guidance+=dispatch.Guidance+"\nAnswer an incidental question about the surroundings from worldAwareness. Set subject to world for a statement, question or agreement about a local event alone, or job for the work. Only nativeOffer defines this job, its location, time, reward, objectives and terms. Only a choice about that job grants consent or refusal.";
+                guidance+=dispatch.Guidance+"\nAnswer an incidental question about the surroundings from worldAwareness. Only nativeOffer defines this job, its location, time, reward, objectives and terms. Only a choice about that job grants consent or refusal.";
                 if(!opening){
                     var recall=await Recall(c,a,day,options,speech,true,head,
                         groupOnly:dispatch.Awareness["bystandersPresent"]!=null,awareness:dispatch.Awareness);
@@ -146,17 +142,13 @@ public sealed partial class Conversation
                 line=result.Required("reply",500);
             }
             bool decisive=intent is "accept" or "decline" or "counter";
-            // The classifier must ground any consequential choice in the player's actual speech.
-            // Quoted examples, directives and conditional assent never authorize a native decision.
-            if(decisive&&(evidence.Length==0||!speech.Replace('’','\'').Contains(evidence.Replace('’','\''),StringComparison.OrdinalIgnoreCase)||
-                dispatch.Awareness!=null && (result.S("subject")=="world" || RefersOnlyToEvent(dispatch.Awareness,terms,speech) ||
-                    evidence!=speech && RefersOnlyToEvent(dispatch.Awareness,terms,evidence)) ||
-                Regex.IsMatch(speech,"[“”\u0022]|(?:^|\\s)['‘].+['’](?=[\\s.,?!)]|$)|\\b(classif(y|ication)|return json|ignore (the |your )?instructions)\\b",RegexOptions.IgnoreCase)||
-                intent is "accept" or "decline"&&Regex.IsMatch(speech,@"\b(if|unless|provided|suppose|assuming|hypothetically)\b",RegexOptions.IgnoreCase))){
-                intent="unclear";line="Would you take the work on the terms I offered?";
+            if(decisive && !QuestDecision.Allows(terms,dispatch.Awareness,speech,evidence,result,answeringOffer,aware)){
+                intent="unclear";line=AskForQuestDecision;
             }
             string action=intent switch{"accept"=>"accept","decline"=>"decline","counter" when warned=>"decline",_=>"continue"};
             packet["intent"]=intent;packet["action"]=action;packet["line"]=line;packet["warned"]=warned||intent=="counter";
+            var invitation=result.S("offerQuestion").Trim();
+            if(aware && action=="continue" && QuestDecision.AsksForJob(line,invitation,terms))packet["asksForDecision"]=true;
             packet["learned"]=CharacterKnowledge.Hints(result["learned"]);
             packet["provider"]=options.Provider;packet["model"]=model;
             await db.Run("UPDATE turns SET quest_offer=@q::jsonb,state='ready',first_ms=@ms WHERE id=@id AND state='pending'",

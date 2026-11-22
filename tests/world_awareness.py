@@ -11,6 +11,30 @@ from uuid import uuid4
 from urllib.parse import urlsplit
 
 
+# Classifier fixtures deliberately include truncated quotes and incorrect subject assignments.
+QUEST_CHOICES = [
+    ("Yes, I accept. By the way, when is the Grand Joust?", "Yes, I accept.", "job", "accept", "accept"),
+    ("When is the Grand Joust? Yes, I accept.", "Yes, I accept.", "job", "accept", "accept"),
+    ("No, I decline. When is the joust?", "No, I decline.", "job", "decline", "decline"),
+    ("When is the joust? No, I decline.", "I decline", "job", "decline", "decline"),
+    ("I'll attend the Grand Joust. How much flour do you need?", "I'll attend", None, "accept", "continue"),
+    ("How much flour do you need? I'll attend the Grand Joust.", "I'll attend", "job", "accept", "continue"),
+    ("How much flour do you need? I'll attend the Grand Joust.", "I'll attend the Grand Joust.", "job", "accept", "continue"),
+    ("I won't attend. How much flour do you need?", "I won't attend", "unsure", "decline", "continue"),
+    ("After the joust, I'll bring you the flour.", "I'll bring you the flour", None, "accept", "continue"),
+    ("Yes, I'll attend the joust.", "Yes", "job", "accept", "continue"),
+    ("Will I be at the joust? Yes.", "Yes", "job", "accept", "continue"),
+    ("I accept the invitation to joust. I accept.", "I accept", "job", "accept", "continue"),
+    ("I'll bring the flour. Do you know if the Grand Joust starts today?", "I'll bring the flour", "job", "accept", "accept"),
+    ("I'll bring the flour if the joust is cancelled.", "I'll bring the flour", "job", "accept", "continue"),
+    ("I'll bring the flour if you double the pay.", "I'll bring the flour if you double the pay", "job", "counter", "continue"),
+    ('Did you say “I accept the flour job”? I will attend the joust.', "I accept the flour job", "job", "accept", "continue"),
+    ('I will attend the joust. Did he ask “Will you bring the flour?”', "Will you bring the flour", "job", "accept", "continue"),
+    ('She asked “When is the joust?” I will bring the flour.', "I will bring the flour", "job", "accept", "accept"),
+    ("Yes.", "Yes", None, "accept", "accept"),
+]
+
+
 def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     def uid():
         return str(uuid4())
@@ -201,7 +225,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     assert context()["nativeOffer"]==offer and context()["latestPlayerSpeech"]==event_reply
     api("/api/quests/finish",dict(question,action="continue"))
     assent = "After the joust, I'll bring you the flour."
-    model.samples["quest/"+assent] = json.dumps(dict(intent="accept",evidence="I'll bring you the flour",reply="Thank you."))
+    model.samples["quest/"+assent] = json.dumps(dict(intent="accept",subject="job",evidence="I'll bring you the flour",reply="Thank you."))
     assert api("/api/quests/turn",dict(question,id=uid(),parent=question["id"],text=assent))["action"]=="accept"
     other_session = uid()
     second_offer = dict(quest,id=other_session,session=other_session)
@@ -213,9 +237,37 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     assert api("/api/quests/turn",event_choice)["action"]=="continue"
     api("/api/quests/finish",dict(event_choice,action="continue"))
     refuse_job = "I'm going to the joust, so I won't take the flour job."
-    model.samples["quest/"+refuse_job] = json.dumps(dict(intent="decline",evidence="I won't take the flour job",reply="Take care."))
+    model.samples["quest/"+refuse_job] = json.dumps(dict(intent="decline",subject="job",evidence="I won't take the flour job",reply="Take care."))
     assert api("/api/quests/turn",dict(event_choice,id=uid(),parent=event_choice["id"],text=refuse_job))["action"]=="decline"
     checked("quest offer and action remain native with a separately bound world context and replay")
+
+    def fresh_offer():
+        root_id=uid()
+        root=dict(quest,id=root_id,session=root_id)
+        assert api("/api/quests/turn",root)["action"]=="continue"
+        api("/api/quests/finish",dict(root,action="continue"))
+        return dict(question,id=uid(),session=root_id,parent=root_id)
+
+    for speech,evidence,subject,intent,expected in QUEST_CHOICES:
+        body=dict(fresh_offer(),text=speech)
+        model.samples["quest/"+speech]=json.dumps(dict(intent=intent,evidence=evidence,subject=subject,reply="I hear you."))
+        calls=len(model.calls)
+        actual=api("/api/quests/turn",body)
+        assert actual["state"]=="ready" and actual["action"]==expected and len(model.calls)==calls+1, (speech,actual)
+        if intent=="counter":
+            assert actual["warned"] and actual["intent"]=="counter"
+        assert api("/api/quests/turn",body)==actual and len(model.calls)==calls+1
+
+    # A bare answer to the resident's subsequent question about attendance belongs to that question.
+    body=dict(fresh_offer(),text="Are you going to the joust?")
+    previous="I might. Will you be going?"
+    model.samples["quest/"+body["text"]]=json.dumps(dict(intent="question",subject="world",evidence="",reply=previous))
+    assert api("/api/quests/turn",body)["reply"]==previous
+    api("/api/quests/finish",dict(body,action="continue"))
+    model.samples["quest/Yes."]=json.dumps(dict(intent="accept",subject="job",evidence="Yes",reply="Thank you."))
+    actual=api("/api/quests/turn",dict(body,id=uid(),parent=body["id"],text="Yes."))
+    assert not context()["answeringOffer"] and actual["action"]=="continue"
+    checked("complete quest consent clauses in both orders, native invitation, reported questions, conditions and one call across replay")
 
     # Wrong save, owner, day, history head, or retired load cannot contribute facts.
     for bad in [dict(facts,owner="West-NPC"),dict(facts,day=13),

@@ -8,20 +8,18 @@ namespace Mirthwood.Echoes
 {
     internal static class WorldAwareness
     {
-        // The activity belongs to the moment the resident was called away. An editor pause
-        // does not age it, and later turns must not treat it as their present occupation.
+        // The active Talk or group guest owns this observation until the visit ends.
+        // It always describes what the resident was doing at the start of that visit.
         internal sealed class Interruption
         {
             readonly string activity, load;
             readonly int day;
-            readonly float until;
 
             Interruption(string activity, int day)
             {
                 this.activity = activity;
                 this.day = day;
                 load = NativeCues.Session;
-                until = Time.time + 30f;
             }
 
             internal static Interruption Observe(NPCController speaker)
@@ -40,12 +38,12 @@ namespace Mirthwood.Echoes
                 }
             }
 
-            internal string Recent
+            internal string AtStart
             {
                 get
                 {
                     var clock = DayNightCycle.Instance;
-                    return load == NativeCues.Session && Time.time <= until && clock != null && Mathf.FloorToInt(clock.Now) == day ? activity : null;
+                    return load == NativeCues.Session && clock != null && Mathf.FloorToInt(clock.Now) == day ? activity : null;
                 }
             }
         }

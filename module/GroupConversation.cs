@@ -231,7 +231,7 @@ namespace Mirthwood.Echoes
             if(pendingGroupTurn!=null&&(string)pendingGroupTurn["actor"]==guest.Actor&&JToken.DeepEquals(pendingGroupTurn["audience"],audience))
                 return pendingGroupTurn;
             groupCues.TryGetValue(guest.Actor,out var cue);
-            var awareness=WorldAwareness.Capture(guest.Npc,guest.Interruption?.Recent);
+            var awareness=WorldAwareness.Capture(guest.Npc,guest.Interruption?.AtStart);
             string head=awareness==null?NativeCues.Head:(string)awareness["world"]["cueHead"];
             return pendingGroupTurn=new JObject{["id"]=Guid.NewGuid().ToString(),["campaign"]=groupCampaign,["actor"]=guest.Actor,
                 ["audience"]=audience,["session"]=group.Session,["head"]=string.IsNullOrEmpty(head)?null:head,["cue"]=cue,
@@ -294,7 +294,6 @@ namespace Mirthwood.Echoes
             if(prior!=null&&answer["previousProposal"]!=null)prior["proposal"]=answer["previousProposal"];
             string id=RecordGroupLine(guest.Actor,addressed,words,leaves?null:(string)answer["promise"],prior,leaves?null:answer["proposal"],answer["learned"],(string)payload["id"]);
             if(id==null){GroupRetry("The conversation could not be saved.");yield break;}
-            guest.Interruption=null;
             groupParting=playerParting||leaves&&seated.Length==2;
             groupCues.Remove(guest.Actor);
             if(native?.Handoff!=null)groupCues[guest.Actor]=(string)native.Handoff["cue"];

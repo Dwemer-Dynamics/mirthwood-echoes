@@ -170,6 +170,7 @@ namespace Mirthwood.Echoes
         internal void Release(Guest g)
         {
             Guests.Remove(g);
+            g.Interruption=null;
             if(!g.Agent||!g.Agent.isActiveAndEnabled||!g.Agent.isOnNavMesh)return;
             g.Agent.stoppingDistance=g.StopDistance;
             if(!Available(g.Npc))return;
