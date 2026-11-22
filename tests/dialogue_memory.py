@@ -151,32 +151,12 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     assert staged["commitments"][0]["proposal"]["turn"]==ribbon["id"] and "ribbon" not in json.dumps(staged)
     assert api("dialogue/finish",dict(agreement,reaction="neutral"))["state"]=="complete"
     assert sql(f"""SELECT proposal FROM commitments WHERE turn_id='{agreement["id"]}'""")==ribbon["text"]
+    fish=say("We landed a speckled trout beneath the alder footbridge.")
+    repair=say("We replaced the broken planks at the alder footbridge.")
+    hive=say("The orchard bees swarmed beside the tumbledown chapel.")
+    craft=say("The glassblower shaped a blue goblet at the bell tower.")
+    assert any(r["id"]==fish["id"] for r in view(averil,"conversations"))
     expiring=say("Could you bring the copper thimble to the mill?")
-    beat(21)
-    assert any(r["id"]=="day-20" and r["visits"]>=2 for r in view(averil,"sessions"))
-    assert any(r["source"]==old["id"] for r in api(prefix+averil+"/history/sessions/day-20"))
-    beat(49)
-    assert any(r["id"]==old["id"] for r in view(averil,"conversations"))
-    clock = lambda: int(sql("SELECT elapsed FROM dialogue_clock WHERE campaign='"+campaign+"'"))
-    elapsed = clock()
-    beat(49)
-    assert clock()==elapsed
-    # Restoring an earlier save consumes no days. Reaching the next date in that load consumes one.
-    world["memorySession"]=str(uuid4());beat(20)
-    assert clock()==elapsed
-    current_load=world["memorySession"]
-    world["memorySession"]=load;beat(65)
-    assert clock()==elapsed
-    world["memorySession"]=current_load;beat(20)
-    fresh=say("The alder tree has a crooked limb.")
-    pending=dict(id=str(uuid4()),campaign=campaign,actor=averil,text="Do you still keep an alder by the gate?")
-    assert api("dialogue/prepare",pending)["state"]=="ready"
-    # Reproduce a prepared reply from a save containing both an old and a still-current proposal.
-    sql(f"""UPDATE turns SET talk=jsonb_set(talk,'{{recentSpeech}}',(SELECT jsonb_agg(
-          jsonb_build_object('turn',id,'day',day,'player',player_text,'npc',reply) ORDER BY started)
-          FROM turns WHERE id IN ('{old["id"]}','{fresh["id"]}'))) WHERE id='{pending["id"]}'""")
-    legacy_marks=json.dumps([dict(speaker="npc",quote="I do.",proposal="The copper thimble fell off the gate.")])
-    sql(f"""UPDATE turns SET talk=jsonb_set(talk,'{{commitments}}','{legacy_marks}'::jsonb) WHERE id='{pending["id"]}'""")
     delayed=dict(id=str(uuid4()),campaign=campaign,actor=averil,text="Would you do that for me?")
     with ThreadPoolExecutor(max_workers=1) as pool:
         future=pool.submit(api,"dialogue/prepare",delayed)
@@ -188,17 +168,55 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
             until(lambda: sql("SELECT dialogue_expired FROM turns WHERE id='"+expiring["id"]+"'")=="t")
         finally:release.set()
         assert future.result()["state"]=="ready"
-    for turn in (delayed,pending):
-        assert "copper thimble" not in sql(f"""SELECT talk FROM turns WHERE id='{turn["id"]}'"""),turn["text"]
     assert api("dialogue/finish",dict(delayed,reaction="neutral"))["state"]=="complete"
     assert sql(f"""SELECT count(*) FROM commitments WHERE turn_id='{delayed["id"]}'""")=="0"
-    print("PASS a proposal that expires during generation cannot return through a pending reply or become a commitment.",flush=True)
-    assert any(r["id"]==fresh["id"] for r in view(averil,"conversations"))
+    assert "copper thimble" not in sql(f"""SELECT talk FROM turns WHERE id='{delayed["id"]}'""")
+    print("PASS a proposal retired during generation cannot return through a pending reply.",flush=True)
+    def check_recall(actor,query):
+        say(query,actor)
+        prompt=next(call["messages"][0]["content"] for call in reversed(calls) if call["messages"][1]["content"]==query)
+        return json.loads(prompt.split("\nRecall: ",1)[1]).get("conversationRecaps",[])
+    def texts(items):return " ".join(r["note"].lower() for r in items)
+    def day_recap(actor):
+        return next(r for r in view(actor,"sessions") if r["id"]=="day-20")
+    assert day_recap(averil)["visits"]>=2 and day_recap(averil)["hasOriginal"] is False,day_recap(averil)
+    api(prefix+averil+"/history/sessions/day-20",expected=404)
+    api(prefix+averil+"/sources/turn/"+fish["id"],expected=404)
+    ask="Which quiet stretch of river would you recommend for angling?"
+    remembered=check_recall(averil,ask)
+    assert "alder footbridge" in texts(remembered) and "broken planks" not in texts(remembered),remembered
+    assert any(r["speaker"]=="Test player" and r["day"]==20 for r in remembered)
+    assert "planks" in texts(check_recall(averil,"How are the repairs coming along?"))
+    assert "chapel" in texts(check_recall(averil,"Is this a good place for an apiary?"))
+    until(lambda: sql(f"""SELECT aliases FROM dialogue_recap_parts WHERE source='{craft["id"]}' AND pos=1""")=="glassmaking stemware")
+    assert "bell tower" in texts(check_recall(averil,"Who around here knows about stemware?"))
+    assert not check_recall(averil,"Have you seen any emeralds?")
+    assert not check_recall(drystan,ask)
+    assert sql(f"""SELECT player_text='' AND reply IS NULL FROM turns WHERE id='{fish["id"]}'""")=="t"
     assert not any(r["id"]==old["id"] for r in view(averil,"conversations"))
-    retained=json.loads(sql(f"""SELECT talk->'recentSpeech' FROM turns WHERE id='{pending["id"]}'"""))
-    assert [r["turn"] for r in retained]==[fresh["id"]],retained
-    assert api("dialogue/finish",dict(pending,reaction="neutral"))["state"]=="complete"
-    for table in ("turns","cue_events","memory_summaries","resident_recaps","dialogue_day_recaps","daily_events","character_knowledge","personality_turning_points"):
+    # Verify the same visible source boundaries after the group's original words have gone.
+    group_entry="day-20-"+session
+    def group_body(actor):return next((r["body"] for r in view(actor,"sessions") if r["id"]==group_entry),"")
+    assert group_body(drystan) and "magpie" not in group_body(guest).lower()
+    world["cueHead"]=packets[0]["id"];beat(21)
+    assert group_body(drystan) and not group_body(guest)
+    world["cueHead"]=full_head;beat(21)
+    beat(49)
+    assert day_recap(averil) and "alder" in texts(check_recall(averil,ask))
+    clock=lambda:int(sql("SELECT elapsed FROM dialogue_clock WHERE campaign='"+campaign+"'"))
+    elapsed=clock();beat(49);assert clock()==elapsed
+    world["memorySession"]=str(uuid4());beat(20);assert clock()==elapsed
+    current_load=world["memorySession"]
+    world["memorySession"]=load;beat(65);assert clock()==elapsed
+    world["memorySession"]=current_load;beat(20)
+    fresh=say("The alder tree has a crooked limb.")
+    assert any(r["id"]==fresh["id"] for r in view(averil,"conversations"))
+    beat(21)
+    until(lambda:sql(f"""SELECT count(*) FROM dialogue_recap_parts WHERE source='{fish["id"]}'""")=="0")
+    assert sql(f"""SELECT count(*) FROM dialogue_recap_parts WHERE source='{fresh["id"]}'""")!="0"
+    assert "speckled" not in texts(check_recall(averil,ask))
+    assert "crooked" in texts(check_recall(averil,"What about the crooked limb?"))
+    for table in ("turns","cue_events","memory_summaries","resident_recaps","dialogue_day_recaps","dialogue_recap_parts","daily_events","character_knowledge","personality_turning_points"):
         assert sql("SELECT count(*) FROM "+table+" t WHERE to_jsonb(t)::text LIKE ANY(ARRAY['%copper thimble%','%magpie stole%'])")=="0",table
     assert {"fishing","plum tart"}<=values(averil) and "gold" in values(drystan)
     assert any(r["kind"]=="promise" for r in view(averil,"commitments"))

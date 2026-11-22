@@ -119,6 +119,8 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
             """,scoped,head,("terms",string.Join(" | ",terms)),("requestedDay",requestedDay),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech),("groupOnly",groupOnly),("listeners",audience));
         if(facts is JsonObject obj)foreach(var key in new[]{"earlierSpeech","heardSpeech","olderActivity"})
             if(obj[key]==null)obj.Remove(key);
+        var recaps=await DialogueRecaps.Recall(db,c,a,day,scoped,head,question,audience,currentSpeaker);
+        if(recaps is JsonArray {Count:>0})facts!["conversationRecaps"]=recaps;
         var knowledge=await CharacterKnowledge.Recall(db,c,a,day,scoped,head,question,topics,audience,currentSpeaker);
         if(knowledge is JsonArray {Count:>0} remembered)facts!["characterKnowledge"]=remembered;
         return facts!;

@@ -65,7 +65,7 @@ public sealed class Database(NpgsqlDataSource source)
                 PRIMARY KEY(campaign,actor,source_type,source_id), FOREIGN KEY(campaign,actor) REFERENCES actors(campaign,key));
             UPDATE turns SET state='interrupted' WHERE state='pending';
             """);
-        cmd.CommandText += CueHistory.Schema + CharacterKnowledge.Schema + DialogueRetention.Schema;
+        cmd.CommandText += CueHistory.Schema + CharacterKnowledge.Schema + DialogueRetention.Schema + DialogueRecaps.Schema;
         cmd.CommandText += """
             CREATE TABLE IF NOT EXISTS resident_recaps(
                 campaign text,actor text,kind text,entry text,fingerprint text,body text NOT NULL,

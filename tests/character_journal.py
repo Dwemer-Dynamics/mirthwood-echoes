@@ -29,7 +29,8 @@ class Writer(BaseHTTPRequestHandler):
         text="The miller learned the rhythm of the mill in Brightoak." if packet["model"]=="historian" else json.dumps({"reply":"Welcome back.","commitments":marks})
         if "Summarize one day of spoken dialogue" in packet["messages"][0]["content"]:
             rows=json.loads(player)
-            text=json.dumps([{"i":row["i"],"quote":row["words"]} for row in rows[:2]])
+            text=json.dumps([dict(i=row["i"],quote=row["words"],summary="Mentioned a blue goblet at the bell tower.",
+                                  topics=["glassmaking","stemware"]) for row in rows if "blue goblet" in row["words"]])
         elif "heardInOrder" in player:
             text=json.dumps({"words":"Who told you about the mill?","to":"player","ownTopic":"Intellectual",
                              "receivedTopic":"Small Talk","farewell":"Tell me about it another day."})

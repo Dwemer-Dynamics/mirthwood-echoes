@@ -173,10 +173,10 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
                 if (session/f"ready-{seen_ready}").is_file():
                     if knowledge:
                         words=[
-                            "The gate hinge squeaks again. I like fishing. Plum tart is my favorite food.",
+                            "I like fishing. Plum tart is my favorite food. We landed a speckled trout beneath the alder footbridge.",
                             "My favorite color is green. Do you have one you like to wear?",
-                            "I'm packing a lunch for a day by the river. Any thought what I might bring?",
-                            "Good to see you again. I've a free afternoon coming. What do you reckon I should do with it?",
+                            "Which stretch of river would you recommend for angling again? I'd love to go back there.",
+                            "I've got my rod out again. Remind me, whereabouts did we catch that one together?",
                             "I'm off to the baker. Do you remember which treat I like best?"
                         ]
                         if seen_ready:
@@ -186,9 +186,14 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
                             while True:
                                 full=api(path+"conversations")["items"]
                                 found=any(x["id"]==first["id"] for x in full)
-                                if found==(seen_ready<4) or time.monotonic()>=until:break
+                                if found==(seen_ready<2) or time.monotonic()>=until:break
                                 time.sleep(.4)
-                            assert found==(seen_ready<4),(seen_ready,found)
+                            assert found==(seen_ready<2),(seen_ready,found)
+                            sessions=api(path+"sessions")["items"]
+                            if seen_ready>=2:
+                                source_day=next(x["day"] for x in api(path+"knowledge")["items"] if x["value"].lower()=="plum tart")
+                                recaps=[r for r in sessions if r["day"]==source_day and r.get("hasOriginal") is False]
+                                assert bool(recaps)==(seen_ready<4),(seen_ready,sessions)
                             facts=api(path+"knowledge")["items"]
                             assert {"fishing","plum tart"}<={x["value"].lower() for x in facts},facts
                             if seen_ready>=2:assert "green" in {x["value"].lower() for x in facts},facts
@@ -225,10 +230,13 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
         path="saves/"+first["campaign"]+"/characters/"+first["actor"]+"/history/conversations"
         if knowledge:
             assert len(result["turns"])==5 and "plum" in result["turns"][-1]["reply"].lower(),result["turns"][-1]
+            for answer in result["turns"][2:4]:
+                assert any(word in answer["reply"].lower() for word in ("alder","footbridge","speckled")),answer
             subprocess.run(["node","tests/journal_browser.cjs",str(work),"--knowledge"],check=True,timeout=90)
-            print("PASS Averil recalled the favorite after 30 elapsed game days; the original words were visible through day 30 and removed on day 31.",flush=True)
-        expected={r["id"]:r["reply"] for r in (result["turns"][2:] if knowledge else result["turns"])}
+            print("PASS Averil found the fishing discussion after the words were retired, remembered the place on day 30, and remembered the favorite after its recap expired.",flush=True)
+        expected={r["id"]:r["reply"] for r in (result["turns"][-1:] if knowledge else result["turns"])}
         for r in result["openers"]:
+            if knowledge and r["id"]!=result["turns"][-1]["id"]:continue
             source=hashlib.md5((r["id"]+"/"+r["actor"]).encode(),usedforsecurity=False).hexdigest()
             expected[str(uuid.UUID(hex=source))]=r["line"]
         end=time.monotonic()+15

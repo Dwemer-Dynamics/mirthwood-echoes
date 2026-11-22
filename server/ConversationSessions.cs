@@ -10,7 +10,8 @@ public static class ConversationSessions
             SELECT e.id,e.payload->'line' AS line,(e.payload->>'day')::int AS day
             FROM ancestry h JOIN cue_events e ON e.campaign=@c AND e.id=h.id
             WHERE e.payload->>'kind'='group' AND e.payload->'line' ? 'words' AND (e.payload->'line'->'audience') ? @a
-                AND (e.payload->>'day')::int<=@day
+                AND (e.payload->>'day')::int<=@day AND NOT EXISTS(SELECT FROM dialogue_clock d
+                    WHERE d.campaign=e.campaign AND d.load_id<>'' AND e.dialogue_age<d.elapsed)
         ), lines AS (
             SELECT coalesce(t.cue_binding->>'conversation',t.id::text) AS session,'private' AS mode,
                 t.id AS source,t.day,t.started AS at,0 AS seq,p.n,p.speaker,p.words,'turn' AS source_type,
@@ -83,7 +84,8 @@ public static class ConversationSessions
         string best=daily?"s.body":"coalesce(d.body,s.body)";
         return "SELECT r.id,r.day,r.at,(r.doc-'fingerprint')||jsonb_strip_nulls(jsonb_build_object('body',"+best+")) AS doc FROM ("+
             query+") r LEFT JOIN resident_recaps s ON s.campaign=@c AND s.actor=@a AND s.kind=r.doc->>'kind' AND s.entry=r.id AND s.fingerprint=r.doc->>'fingerprint'"+
-            (daily?"":" LEFT JOIN dialogue_day_recaps d ON d.campaign=@c AND d.actor=@a AND d.entry=r.id AND d.fingerprint=r.doc->>'fingerprint'");
+            (daily?"":" LEFT JOIN dialogue_day_recaps d ON d.campaign=@c AND d.actor=@a AND d.entry=r.id AND d.fingerprint=r.doc->>'fingerprint'"+
+                " UNION ALL SELECT id,day,at,doc FROM ("+DialogueRecaps.Journal+") closed");
     }
 
     public static string Details(bool daily) => daily ? """

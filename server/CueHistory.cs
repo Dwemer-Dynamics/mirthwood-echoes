@@ -52,9 +52,11 @@ public static class CueHistory
             UNION ALL SELECT e.id,e.parent FROM cue_events e JOIN ancestry t ON e.id=t.parent WHERE e.campaign=@c
         ), turn_receipts AS (
             SELECT * FROM public.turns WHERE campaign=@c AND (cue_anchor IS NULL OR cue_anchor IN (SELECT id FROM ancestry))
-        ), turns AS (SELECT * FROM turn_receipts WHERE NOT dialogue_expired), event_receipts AS (
+        ), turns AS (SELECT * FROM turn_receipts t WHERE NOT dialogue_expired AND NOT EXISTS(SELECT FROM dialogue_clock d
+            WHERE d.campaign=t.campaign AND d.load_id<>'' AND t.dialogue_age<d.elapsed)), event_receipts AS (
             SELECT * FROM public.daily_events WHERE campaign=@c AND (cue_anchor IS NULL OR cue_anchor IN (SELECT id FROM ancestry))
-        ), daily_events AS (SELECT * FROM event_receipts WHERE kind<>'address' OR description<>''), commitments AS (
+        ), daily_events AS (SELECT * FROM event_receipts e WHERE kind<>'address' OR description<>'' AND NOT EXISTS(SELECT FROM dialogue_clock d
+            WHERE d.campaign=e.campaign AND d.load_id<>'' AND e.dialogue_age<d.elapsed)), commitments AS (
             SELECT p.id,p.campaign,p.actor,p.day,p.due,p.speaker,p.statement,
                 CASE WHEN f.day IS NULL THEN p.status ELSE 'fulfilled' END AS status,p.recorded,coalesce(f.day,p.resolved_day) AS resolved_day,
                 CASE WHEN f.day IS NULL THEN p.resolution_source ELSE 'player_report' END AS resolution_source,
