@@ -73,16 +73,24 @@ internal static class CharacterKnowledge
         return hints;
     }
 
-    static IEnumerable<Detail> Details(Line line,Line? prior,JsonArray hints)
+    static IEnumerable<string> SpokenSentences(string words)
     {
         int start=0;
         var speech=new List<string>();
-        foreach(var action in ActionNotation.Find(line.Words)){
-            speech.Add(line.Words[start..action.Open]);start=action.End+1;
+        foreach(var action in ActionNotation.Find(words)){
+            speech.Add(words[start..action.Open]);start=action.End+1;
         }
-        speech.Add(line.Words[start..]);
-        foreach(string part in speech.SelectMany(span=>Regex.Split(span,@"(?<=[.!?…])\s+"))){
-            string quote=part.Trim();
+        speech.Add(words[start..]);
+        return speech.SelectMany(span=>Regex.Split(span,@"(?<=[.!?…])\s+")).Select(s=>s.Trim()).Where(s=>s.Length>0);
+    }
+
+    static bool SpecificDetail(string value)=>PlainValue(value)&&!Regex.IsMatch(value,
+        @"^(?:you|it|here|there|them|him|her|us|this|that|these|those|when|how|what|who|the way|to (?:be|think|say))\b",RegexOptions.IgnoreCase);
+
+    static IEnumerable<Detail> Details(Line line,Line? prior,JsonArray hints)
+    {
+        string? lastQuestion=prior==null?null:SpokenSentences(prior.Words).LastOrDefault();
+        foreach(string quote in SpokenSentences(line.Words)){
             if(quote.Length is <2 or >260||!DialogueOutput.IsWholeQuote(line.Words,quote)||Uncertain.IsMatch(quote))continue;
             var hint=hints.OfType<JsonObject>().FirstOrDefault(h=>h.S("quote")==quote);
             string claim=Regex.Replace(quote,@"^(?:actually|honestly|these days|well|in fact)[, ]+","",RegexOptions.IgnoreCase);
@@ -106,7 +114,7 @@ internal static class CharacterKnowledge
             match=Interest.Match(claim);
             if(match.Success){
                 var verb=match.Groups["verb"].Value.ToLowerInvariant();string value=Clean(match.Groups["value"].Value);
-                if(!PlainValue(value))continue;
+                if(!SpecificDetail(value))continue;
                 bool dislikes=Regex.IsMatch(verb,@"^(?:don|do not|dislike|hate)");
                 bool food=hint?.S("facet")=="food preference"||Regex.IsMatch(value,@"\b(?:tart|pie|bread|soup|stew|cake|cheese|apples?|berries|custard|porridge|baked fish)\b",RegexOptions.IgnoreCase);
                 yield return new(Named(match.Groups["who"].Value),dislikes?"dislike":food?"food preference":"interest",value,
@@ -114,13 +122,13 @@ internal static class CharacterKnowledge
                 continue;
             }
             // A short answer can only identify a preference for people who heard its question.
-            if(prior!=null&&prior.Speaker!=line.Speaker&&(prior.To is "" or "group"||prior.To==line.Speaker)&&(line.Speaker=="player"||prior.Audience.Contains(line.Speaker))&&prior.Words.TrimEnd().EndsWith('?')&&
-                Regex.Match(prior.Words,@"\byour favou?rite (food|dish|meal|colou?r)\b",RegexOptions.IgnoreCase) is {Success:true} question){
+            if(prior!=null&&prior.Speaker!=line.Speaker&&(prior.To is "" or "group"||prior.To==line.Speaker)&&(line.Speaker=="player"||prior.Audience.Contains(line.Speaker))&&lastQuestion is {Length:<=240}&&lastQuestion.EndsWith('?')&&
+                Regex.Match(lastQuestion,@"\byour favou?rite (food|dish|meal|colou?r)\b",RegexOptions.IgnoreCase) is {Success:true} question){
                 string value=Clean(quote);
                 if(PlainValue(value)&&value.Split(' ').Length<=4&&
                     (Facet(question.Groups[1].Value)=="favorite color"?Color.IsMatch(value):
                       hint?.S("facet")=="favorite food"||Regex.IsMatch(value,@"\b(?:tart|pie|bread|fish|soup|stew|cake|cheese|apples?|berries|custard|porridge|venison)\b",RegexOptions.IgnoreCase)))
-                    yield return new("self",Facet(question.Groups[1].Value),value,"current",quote,prior.Words);
+                    yield return new("self",Facet(question.Groups[1].Value),value,"current",quote,lastQuestion);
             }
             if(Major.IsMatch(quote)){yield return new("self","major moment",quote,"reported",quote);continue;}
             if(hint==null||!quote.Contains(hint.S("value"),StringComparison.OrdinalIgnoreCase))continue;
@@ -128,7 +136,7 @@ internal static class CharacterKnowledge
             if(subject!="self"&&!Regex.IsMatch(quote,@"(?<!\p{L})"+Regex.Escape(subject)+@"(?!\p{L})",RegexOptions.IgnoreCase))continue;
             if(category=="background"&&subject=="self"&&Regex.IsMatch(claim,@"^I (?:grew up|was born|was raised|trained|worked|lived)\b",RegexOptions.IgnoreCase))
                 yield return new(subject,category,hint.S("value"),"reported",quote);
-            else if(category is "favorite food" or "favorite color" or "interest" or "dislike" &&
+            else if(category is "favorite food" or "favorite color" or "interest" or "dislike" && SpecificDetail(hint.S("value")) &&
                 Regex.IsMatch(quote,@"\b(?:favou?rite|fond of|partial to|enjoy|keen on|care for|love|dislike|can't stand|hates?|likes?)\b",RegexOptions.IgnoreCase)
                 && !Regex.IsMatch(quote,@"\b(?:but|never|not|no longer|used to|brother|sister|mother|father|wife|husband)\b|n['’]t\b",RegexOptions.IgnoreCase)
                 && (subject=="self"?Regex.IsMatch(claim,@"^(?:I(?:'m|’m| am) (?:fond of|partial to|keen on)|I (?:enjoy|love|like|dislike|prefer)|my favou?rite)\b",RegexOptions.IgnoreCase):
@@ -176,9 +184,9 @@ internal static class CharacterKnowledge
         Line? prior=null;
         if(session!=null&&head!=null){
             await using var last=Database.Command(conn,CueHistory.Query(ConversationSessions.Lines+"""
-                SELECT words,source FROM named WHERE session=@session AND mode='private' AND speaker=@a
-                ORDER BY at DESC,n DESC LIMIT 1
-                """),("explicit",true),("head",head),("c",c),("a",a),("day",player.Day),("session",session));
+                SELECT words,source FROM named WHERE session=@session AND mode='private' AND speaker=@a AND source<>@id AND at<@before
+                ORDER BY at DESC,n DESC,source DESC LIMIT 1
+                """),("explicit",true),("head",head),("c",c),("a",a),("day",player.Day),("session",session),("id",id),("before",player.At.UtcDateTime));
             await using var reader=await last.ExecuteReaderAsync();
             if(await reader.ReadAsync())prior=npc with {Words=reader.GetString(0),Source=reader.GetGuid(1)};
         }

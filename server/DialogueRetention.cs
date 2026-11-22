@@ -6,6 +6,20 @@ internal static class DialogueRetention
     internal const int Days=30;
     internal const string Schema = """
         ALTER TABLE personality_turning_points ADD COLUMN IF NOT EXISTS evidence jsonb;
+        CREATE OR REPLACE FUNCTION echoes_marked_evidence(marked uuid,reason text) RETURNS jsonb LANGUAGE sql STABLE AS $$
+          SELECT coalesce(jsonb_object_agg(label,quote),'{}'::jsonb) FROM (
+            SELECT DISTINCT ON(label) label,quote FROM (
+              SELECT CASE WHEN k.speaker='player' THEN 'player' ELSE 'reply' END AS label,k.quote,1 AS priority
+                FROM character_knowledge k JOIN turns t ON t.id=marked AND k.holder=t.actor AND k.campaign=t.campaign
+                WHERE k.source=marked AND k.facet='major moment'
+              UNION ALL SELECT CASE WHEN p.speaker='player' THEN 'player' ELSE 'reply' END,p.statement,2
+                FROM commitments p WHERE p.turn_id=marked
+              UNION ALL SELECT line.label,trim(sentence),0 FROM turns t CROSS JOIN LATERAL
+                (VALUES ('player',t.player_text),('reply',t.reply)) line(label,words)
+                CROSS JOIN LATERAL regexp_split_to_table(line.words,'(?<=[.!?…])\s+') sentence
+                WHERE t.id=marked AND length(trim(sentence)) BETWEEN 3 AND 260 AND strpos(lower(reason),lower(trim(sentence)))>0
+            ) evidence ORDER BY label,priority,quote) selected
+        $$;
         CREATE TABLE IF NOT EXISTS dialogue_clock(campaign text PRIMARY KEY REFERENCES campaigns, day int NOT NULL,
           load_id text NOT NULL, elapsed bigint NOT NULL DEFAULT 0);
         ALTER TABLE dialogue_clock ADD COLUMN IF NOT EXISTS retired_loads text[] NOT NULL DEFAULT '{}';
@@ -50,8 +64,6 @@ internal static class DialogueRetention
     internal static async Task Maintain(Database db,CancellationToken ct)
     {
         await db.Run("""
-            UPDATE personality_turning_points p SET evidence=jsonb_build_object('player',t.player_text,'reply',t.reply)
-              FROM turns t WHERE p.source_type='turn' AND t.id=p.source_id AND p.evidence IS NULL AND NOT t.dialogue_expired;
             UPDATE personality_turning_points p SET evidence=jsonb_build_object('observation',e.description)
               FROM daily_events e WHERE p.source_type='event' AND e.id=p.source_id AND p.evidence IS NULL AND e.description<>'';
             INSERT INTO dialogue_clock(campaign,day,load_id) SELECT c.id,c.day,'' FROM campaigns c JOIN slots s ON c.id=s.campaign
@@ -109,8 +121,10 @@ internal static class DialogueRetention
         }
         await using var expire=await conn.BeginTransactionAsync(ct);
         await using var prune=Database.Command(conn,"""
+            UPDATE personality_turning_points p SET evidence=echoes_marked_evidence(t.id,p.reason)
+              FROM turns t WHERE p.source_type='turn' AND t.id=p.source_id AND p.evidence IS NULL AND t.knowledge_reviewed;
             CREATE TEMP TABLE old_turns ON COMMIT DROP AS
-              SELECT t.id,t.campaign,t.day,coalesce(t.cue_binding->>'conversation',t.id::text) AS session FROM turns t JOIN dialogue_clock d ON d.campaign=t.campaign
+              SELECT t.id,t.campaign,t.actor,t.day,coalesce(t.cue_binding->>'conversation',t.id::text) AS session FROM turns t JOIN dialogue_clock d ON d.campaign=t.campaign
               WHERE NOT t.dialogue_expired AND t.dialogue_age<=d.elapsed-@days AND
                  (t.state IN ('failed','interrupted','ready') OR t.state='pending' AND t.started<now()-interval '3 minutes' OR t.state='complete' AND t.knowledge_reviewed);
             CREATE TEMP TABLE old_cues ON COMMIT DROP AS
@@ -122,16 +136,21 @@ internal static class DialogueRetention
                 EXISTS(SELECT FROM old_turns t WHERE t.campaign=m.campaign AND m.sources ? t.id::text) OR
                 EXISTS(SELECT FROM old_cues e WHERE e.campaign=m.campaign AND m.sources ? e.id::text));
             CREATE TEMP TABLE old_entries ON COMMIT DROP AS
-              SELECT campaign,day,session FROM old_turns UNION SELECT campaign,day,session FROM old_cues;
+              SELECT campaign,actor,day,session FROM old_turns
+              UNION SELECT x.campaign,member,x.day,x.session FROM old_cues x JOIN cue_events e USING(campaign,id)
+                CROSS JOIN LATERAL jsonb_array_elements_text(e.payload->'line'->'audience') member
+              UNION SELECT x.campaign,d.actor,x.day,coalesce(e.payload->'people'->0->'details'->>'conversation',d.id::text)
+                FROM old_cues x JOIN cue_events e USING(campaign,id) JOIN daily_events d ON d.campaign=x.campaign AND d.cue_anchor=x.id AND d.kind='address';
             -- A later turn can carry an earlier passing line in its native request. Retain the original request identity.
             UPDATE turns t SET request_digest=coalesce(t.request_digest,sha256(convert_to(jsonb_build_array(t.player_text,t.cue_binding)::text,'UTF8'))),
               cue_binding=t.cue_binding-'remark' FROM old_cues x WHERE t.campaign=x.campaign AND
               t.cue_binding->'remark'->>'kind'='address' AND t.cue_binding->>'event'=x.id::text;
             UPDATE turns t SET talk=t.talk-'recentSpeech' WHERE t.state='complete' AND t.talk ? 'recentSpeech'
               AND EXISTS(SELECT FROM old_turns x WHERE x.campaign=t.campaign);
-            DELETE FROM resident_recaps r USING old_entries x WHERE r.kind<>'daily' AND r.campaign=x.campaign AND
+            DELETE FROM resident_recaps r USING old_entries x WHERE r.kind<>'daily' AND r.campaign=x.campaign AND r.actor=x.actor AND
               r.entry IN (x.session,'day-'||x.day,'day-'||x.day||'-'||x.session);
-            DELETE FROM dialogue_day_recaps r USING old_entries x WHERE r.campaign=x.campaign AND r.day=x.day;
+            DELETE FROM dialogue_day_recaps r USING old_entries x WHERE r.campaign=x.campaign AND r.actor=x.actor AND r.day=x.day
+              AND r.entry IN ('day-'||x.day,'day-'||x.day||'-'||x.session);
             UPDATE turns t SET dialogue_expired=true,state=CASE WHEN t.state IN ('ready','pending') THEN 'interrupted' ELSE t.state END,
               request_digest=coalesce(request_digest,sha256(convert_to(jsonb_build_array(t.player_text,t.cue_binding)::text,'UTF8'))),
               player_text='',reply=NULL,cue_binding=t.cue_binding-'remark',

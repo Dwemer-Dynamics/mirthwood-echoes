@@ -31,6 +31,12 @@ class Writer(BaseHTTPRequestHandler):
         elif "heardInOrder" in player:
             text=json.dumps({"words":"Who told you about the mill?","to":"player","ownTopic":"Intellectual",
                              "receivedTopic":"Small Talk","farewell":"Tell me about it another day."})
+        elif player in ("Could I ask about the allotment?","Rye bread.","Green.","I promise to mend the green banner tomorrow."):
+            response={"Could I ask about the allotment?":"The copper thimble fell off the gate. What is your favorite food?",
+                      "Rye bread.":"Sounds good. What is your favorite color?","Green.":"Good to know.",
+                      "I promise to mend the green banner tomorrow.":"Thank you."}[player]
+            marks=[{"speaker":"player","quote":player}] if "promise" in player else []
+            text=json.dumps(dict(topic="Small Talk",warm=response,neutral=response,cool=response,commitments=marks))
         elif player=="Do you still keep a stone from the river?":
             text=json.dumps({"topic":"Small Talk","warm":"My favorite color is ruby.","neutral":"I do.","cool":"Sometimes.","commitments":[],
                              "learned":[{"speaker":"npc","subject":"self","facet":"favorite color","value":"ruby","quote":"My favorite color is ruby."}]})

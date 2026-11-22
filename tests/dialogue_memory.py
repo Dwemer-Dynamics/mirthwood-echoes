@@ -38,15 +38,36 @@ def check(api, beat, world, campaign, residents, sql, calls):
     say("I used to like chess.")
     say("My brother likes red. My coat is purple. I like green apples.")
     say("If I liked crab pie, I would order it.")
-    say("My father passed away.")
+    marked=say("The copper thimble fell off the gate. My father passed away.")
+    api(prefix+averil+"/personality",dict(id=marked["id"],sourceType="turn",axis=1,direction=1,reason="Michael spoke about losing his father."),expected=204)
+    turning=next(r for r in view(averil,"commitments") if r["kind"]=="marked" and r["source"]==marked["id"])
+    assert turning["evidence"]=={"player":"My father passed away."},turning
+    say("I love you. I like it here. I hate when it rains.")
     assert {"plum tart", "fishing", "green", "blue", "chess", "green apples"} <= values(averil)
-    assert not {"crab pie", "red", "purple"} & values(averil)
+    assert not {"crab pie", "red", "purple", "you", "it here", "when it rains"} & values(averil)
     beliefs = view(averil, "knowledge")
     assert all(r["earlier"] for r in beliefs if r["value"]=="green")
     assert any(r["stance"]=="retracted" for r in beliefs if r["value"]=="Green")
     assert next(r for r in beliefs if r["value"] == "chess")["stance"] == "former"
     assert any(r["kind"] == "moment" for r in view(averil, "commitments"))
     assert "plum tart" not in values(drystan)
+    play,visit=str(uuid4()),str(uuid4())
+    def private(actor,words):
+        packet=dict(id=str(uuid4()),campaign=campaign,actor=actor,text=words,
+                    context=dict(session=play,conversation=visit,head=world["cueHead"]))
+        assert api("dialogue/prepare",packet)["state"]=="ready"
+        api("module/cue",dict(world=dict(world),kind="talk",people=[],parent=world["cueHead"],id=packet["id"]))
+        assert api("dialogue/finish",dict(packet,reaction="neutral"))["state"]=="complete"
+        world["cueHead"]=packet["id"];beat(world["day"])
+        return packet["id"]
+    private(drystan,"Could I ask about the allotment?")
+    loaf=private(drystan,"Rye bread.")
+    green=private(drystan,"Green.")
+    details=view(drystan,"knowledge")
+    assert next(r for r in details if r["source"]==loaf)["question"]=="What is your favorite food?"
+    assert next(r for r in details if r["source"]==green)["question"]=="What is your favorite color?"
+    private_promise=private(averil,"I promise to mend the green banner tomorrow.")
+    pledge=next(r["id"] for r in view(averil,"commitments") if r.get("sourceTurn")==private_promise)
     session = str(uuid4())
     packets = []
 
@@ -61,7 +82,7 @@ def check(api, beat, world, campaign, residents, sql, calls):
         return packet["id"]
 
     both = [averil, drystan]
-    group(averil, "What is your favorite color?", both)
+    group(averil, "The copper thimble fell off the gate. What is your favorite color?", both)
     answer = group("player", "Green.", [*both, guest])
     assert "green" in values(drystan) and "green" not in values(guest)
     evidence = next(r for r in view(drystan, "knowledge") if r["source"] == answer)
@@ -129,13 +150,27 @@ def check(api, beat, world, campaign, residents, sql, calls):
     until(lambda: sql("SELECT dialogue_expired FROM turns WHERE id='"+old["id"]+"'")=="t")
     assert any(r["id"]==fresh["id"] for r in view(averil,"conversations"))
     assert not any(r["id"]==old["id"] for r in view(averil,"conversations"))
-    for table in ("turns","cue_events","memory_summaries","resident_recaps","dialogue_day_recaps","daily_events"):
+    for table in ("turns","cue_events","memory_summaries","resident_recaps","dialogue_day_recaps","daily_events","character_knowledge","personality_turning_points"):
         assert sql("SELECT count(*) FROM "+table+" t WHERE to_jsonb(t)::text LIKE ANY(ARRAY['%copper thimble%','%magpie stole%'])")=="0",table
     assert {"fishing","plum tart"}<=values(averil) and "gold" in values(drystan)
     assert any(r["kind"]=="promise" for r in view(averil,"commitments"))
     assert any(r["kind"]=="marked" for r in view(averil,"commitments"))
     assert any(r["kind"]=="moment" for r in view(averil,"commitments"))
     assert view(averil,"daily")
+    parent=world["cueHead"]
+    def fork():
+        tip=str(uuid4())
+        api("module/cue",dict(world=dict(world),parent=parent,id=tip,kind="talk",people=[]))
+        world["cueHead"]=tip;beat(world["day"])
+        return tip
+    completed=fork()
+    api("commitments/"+pledge+"/fulfill",dict(campaign=campaign,actor=averil),expected=204)
+    def pledge_status():return next(r["status"] for r in view(averil,"commitments") if r["id"]==pledge)
+    assert pledge_status()=="fulfilled"
+    fork()
+    assert pledge_status()=="open"
+    world["cueHead"]=completed;beat(world["day"])
+    assert pledge_status()=="fulfilled"
     assert api("dialogue",old)[-1]["expired"]
     api("dialogue",dict(old,text="Different words."),expected=409)
     assert api("dialogue/prepare",native)["state"]=="expired"

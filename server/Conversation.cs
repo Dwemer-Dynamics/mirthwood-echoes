@@ -140,7 +140,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
         var (_,day)=await ActorDay(c,a);
         var updated=await db.ScopedOne("""
             WITH candidate AS (
-                SELECT p.id,coalesce(p.group_anchor,t.cue_anchor) AS cue_anchor FROM commitments p LEFT JOIN turns t ON t.id=p.turn_id
+                SELECT p.id,coalesce(p.group_anchor,t.cue_anchor) AS cue_anchor FROM commitments p LEFT JOIN turn_receipts t ON t.id=p.turn_id
                 WHERE p.id=@id AND p.campaign=@c AND p.actor=@a AND p.day<=@day AND (p.status='open' OR p.resolved_day>=@day)
             ), legacy AS (
                 UPDATE public.commitments p SET status='fulfilled',resolved_day=@day,resolution_source='player_report'

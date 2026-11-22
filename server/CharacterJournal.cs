@@ -147,9 +147,9 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
         int axis=form.I("axis"),direction=form.I("direction");
         if(axis is <0 or >4 || direction is not (-1 or 1))throw new UserError("Choose a temperament direction.");
         var reason=form.Required("reason",320);var source=form.Required("sourceType",10);var id=form.Id();
-        string table=source switch{"turn"=>"SELECT day,jsonb_build_object('player',player_text,'reply',reply) AS evidence FROM turns WHERE state='complete' AND",
+        string table=source switch{"turn"=>"SELECT day,echoes_marked_evidence(id,@reason) AS evidence FROM turns WHERE state='complete' AND",
             "event"=>"SELECT day,jsonb_build_object('observation',description) AS evidence FROM daily_events WHERE",_=>throw new UserError("Choose a recorded interaction.")};
-        var valid=await db.ScopedOne("SELECT to_jsonb(s)::text FROM ("+table+" campaign=@c AND actor=@a AND id=@id AND day<=@day) s",false,null,("c",c),("a",a),("id",id),("day",day));
+        var valid=await db.ScopedOne("SELECT to_jsonb(s)::text FROM ("+table+" campaign=@c AND actor=@a AND id=@id AND day<=@day) s",false,null,("c",c),("a",a),("id",id),("day",day),("reason",reason));
         if(valid==null)throw new UserError("This interaction is unavailable for this character and date.",404);
         int inserted=await db.Run("""
           INSERT INTO personality_turning_points(campaign,actor,source_type,source_id,day,axis,direction,reason,evidence)
