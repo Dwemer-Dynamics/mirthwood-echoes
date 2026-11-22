@@ -96,6 +96,8 @@ namespace Mirthwood.Echoes
                 var jobs = running?.Cast<object>().Select(t => new {
                     name = AccessTools.Property(t.GetType(),"Name")?.GetValue(t) as string,
                     status = AccessTools.Property(t.GetType(),"LastStatus")?.GetValue(t)?.ToString(),
+                    enabled = AccessTools.Property(t.GetType(),"Enabled")?.GetValue(t),
+                    sameOwner = ReferenceEquals(AccessTools.Property(t.GetType(),"Owner")?.GetValue(t),npc.gameObject),
                     type = t.GetType().FullName
                 }).ToArray();
                 var regions = Object.FindObjectsOfType<Region>().Select(r => new { region = r, volume = r.GetComponent<Collider>() })
@@ -123,6 +125,7 @@ namespace Mirthwood.Echoes
                     chatEnabled = brain && brain.chatEnabled, scriptedSpeak = brain && brain.GetDialogueData() != null,
                     taskType = task?.GetType().FullName, lastTaskLabel = AccessTools.Field(typeof(NPCController), "_lastTask").GetValue(npc) as string,
                     velocity = agent && agent.isActiveAndEnabled && agent.isOnNavMesh ? At(agent.velocity) : null,
+                    stopped = agent && agent.isActiveAndEnabled && agent.isOnNavMesh ? (bool?)agent.isStopped : null,
                     destination = agent && agent.isActiveAndEnabled && agent.isOnNavMesh && agent.hasPath ? At(agent.destination) : null,
                     places, weatherVolumes = regions, company, signs, ground, routineTree = tree != null && ReferenceEquals(routine,tree), jobs };
             }
@@ -309,6 +312,19 @@ namespace Mirthwood.Echoes
 
             public IEnumerator ApproachSpeaker(int index, NPCController npc)
             {
+                if ((bool?)plan["turns"][index]["watchResidentWalk"] == true) {
+                    // Stream the resident into the active simulation before trying to interrupt them.
+                    // Never start an NPC task or supply its destination for this observation.
+                    yield return Approach(npc.transform.position+Vector3.right*6);
+                    GameState.UnPause();
+                    var start=npc.transform.position;
+                    var agent=npc.GetComponent<NavMeshAgent>();
+                    Record("waiting-for-routine",index,npc);
+                    yield return Await(()=>agent && agent.isActiveAndEnabled && agent.isOnNavMesh &&
+                        agent.hasPath && !agent.isStopped && agent.velocity.sqrMagnitude>.04f &&
+                        (npc.transform.position-start).sqrMagnitude>.16f,"The resident did not walk under their own routine.",28);
+                    Record("walking-before-talk",index,npc,new {start=At(start),moved=Vector3.Distance(start,npc.transform.position)});
+                }
                 if (plan["turns"][index]["doorway"] == null && plan["turns"][index]["venue"] == null)
                     yield return Approach(npc.transform.position);
             }

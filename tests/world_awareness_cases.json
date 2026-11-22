@@ -45,7 +45,7 @@
   "interrupted-work": {
     "resident": "Baldwin",
     "turns": [
-      { "words": "Did I catch you on your way to something? I can walk with you.", "check": "Compare the last running native routine and navigation at approach with the accepted and spoken activity.", "capture": true },
+      { "words": "Did I catch you on your way to something? I can walk with you.", "watchResidentWalk": true, "check": "Compare independently observed movement and the running native task before Talk with the accepted and spoken activity.", "capture": true },
       { "words": "No need to stop on my account. I'll let you get on.", "check": "Do not invent completion of the interrupted job." }
     ]
   },
