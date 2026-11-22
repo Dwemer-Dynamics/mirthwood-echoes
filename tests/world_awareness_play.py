@@ -248,7 +248,10 @@ class AwarenessPlay:
                 self.verify_call(t,row["before"])
                 if t["turn"] != row["entry"]["id"]:
                     raise AssertionError("The provider request belongs to a different native group line.")
-                prompt = (t["system"] + "\n" + t["user"]).casefold()
+                # The fixed writing example already contains "2 Flour". Only this exact
+                # occurrence is independent of the private collection made in this visit.
+                example = 'For an inventory count such as 2 Flour, say "some flour"'
+                prompt = (t["system"].replace(example, "", 1) + "\n" + t["user"]).casefold()
                 spoken = row["entry"]["line"]["words"].casefold()
                 if any(term.casefold() in prompt or term.casefold() in spoken for term in self.plan["privateTerms"]):
                     raise AssertionError("Private information reached a group speaker or the circle.")
