@@ -489,7 +489,7 @@ namespace Mirthwood.Echoes
                 var field = AccessTools.Field(story.story.GetType(), "_spawnedObject");
                 var root = field?.GetValue(story.story) as GameObject;
                 if (!root || !root.activeInHierarchy) throw new InvalidOperationException("The native event has no active venue.");
-                if (title=="Grand Joust") yield return VisitJoustHerald(index,npc,root);
+                if (title=="Grand Joust") yield return VisitJoustHerald(index,npc,root,(bool?)spec["speakToHerald"]==true);
                 string target = (string)spec["landmark"];
                 var marks=root.GetComponentsInChildren<Renderer>(true)
                     .Where(r=>r.name.StartsWith(target,StringComparison.OrdinalIgnoreCase))
@@ -551,18 +551,22 @@ namespace Mirthwood.Echoes
                 }
             }
 
-            IEnumerator VisitJoustHerald(int index, NPCController witness, GameObject root)
+            IEnumerator VisitJoustHerald(int index, NPCController witness, GameObject root, bool speakToHerald)
             {
                 var joust=root.GetComponentInChildren<JoustingMiniGame>(true);
                 var herald=joust ? AccessTools.Field(typeof(JoustingMiniGame),"npcEventStarter")?.GetValue(joust) as NPCChatController : null;
                 if(!herald || !herald.transform.IsChildOf(root.transform)) throw new InvalidOperationException("The active joust has no public starter.");
                 yield return Approach(herald.transform.position);
                 yield return DismissGroupTestCards();
-                var offer=herald.isActiveAndEnabled ? herald.GetDialogueData() : null;
+                var offer=herald.GetDialogueData();
+                var renderers=herald.GetComponentsInChildren<Renderer>(true).Select(r=>new {
+                    path=PathOf(r.transform),r.enabled,active=r.gameObject.activeInHierarchy,visible=r.isVisible
+                }).ToArray();
                 Record("joust-public-frontage",index,witness,new {path=PathOf(herald.transform),position=At(herald.transform.position),
-                    active=herald.isActiveAndEnabled,hasDialogue=offer!=null,spawnedInstance=root.GetInstanceID()});
-                // A spectator can see this event's active performers even if the herald has no conversation to open.
-                if(offer==null)yield break;
+                    characterActive=herald.gameObject.activeInHierarchy,dialogueBehaviourEnabled=herald.enabled,herald.chatEnabled,
+                    hasDialogue=offer!=null,nativeDialogue=offer?.Dialogue,renderers,speakToHerald,spawnedInstance=root.GetInstanceID()});
+                // Spectators normally walk past the starter to the active performers without opening Speak.
+                if(!speakToHerald || !herald.gameObject.activeInHierarchy || offer==null)yield break;
                 var player=PlayerCharacterController.Instance.GetComponent<PlayerChat>();
                 var selected=Plugin.Selected.GetValue(player);
                 var target=player.chatTarget;
