@@ -689,5 +689,36 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release, m
     assert cooper["correction"]["source"]==corrected and "Nia" in cooper["note"], cooper
     assert "correction" not in concordance((visit,[shutters]),"Who painted the shutters?",420)[0]
     print("PASS incidental scenery preserves uncertainty, and a repeated action selects its source across visits and inline grants.",flush=True)
+
+    beat(455)
+    cart = exchange([("player",averil,"I painted the red handcart for the wheelwright.")])
+    visit, (shutters,marker) = exchange([("player",averil,"I painted the shutters beside the red handcart."),
+                                        ("player",averil,"I was mistaken about who painted the red handcart. It was Nia.")])
+    hinge = exchange([("player",averil,"I mended the latch beside the copper hinge. I was wrong regarding who mended the copper hinge. It was Nell.")])
+    apron = exchange([("player",averil,"I stitched the green apron. I stitched cuffs beside the green apron. I meant that Mara stitched the green apron.")])
+    loan = exchange([("player",averil,"You may borrow my sledge. I take that back. I need it for the harvest.")])
+    later, (barrow,reason) = exchange([("player",averil,"You may borrow my barrow."),
+                                      ("player",averil,"I take that back. Jo needs my barrow for the orchard.")])
+    ordinary = exchange([("player",averil,"I meant every word of the greeting.")])
+    beat(456)
+    amended = concordance(cart,"What did I paint for the wheelwright?",455)[0]
+    assert amended["correction"]["source"]==marker and "It was Nia" in amended["note"], amended
+    assert "correction" not in concordance((visit,[shutters]),"What did I tell you about the shutters?",455)[0]
+    latch = concordance(hinge,"Who mended the latch?",455)[0]
+    assert latch["sentence"]==0 and "correction" not in latch, latch
+    orphan = next(n for n in concordance(hinge,"Who mended the copper hinge?",455) if n["sentence"]==1)
+    assert "Unclear target." in orphan["note"] and "It was Nell" in orphan["note"], orphan
+    seam = concordance(apron,"Who actually stitched the green apron?",455)[0]
+    assert seam["sentence"]==0 and "Mara stitched the green apron" in seam["correction"]["note"], seam
+    cuffs = concordance(apron,"Who stitched cuffs beside the green apron?",455)[0]
+    assert cuffs["sentence"]==1 and "correction" not in cuffs, cuffs
+    for scene, noun in [(loan,"sledge"),((later,[barrow]),"barrow")]:
+        grant = concordance(scene,f"Did I lend you my {noun}?",455)[0]
+        assert grant["correction"]["note"]=="Withdrew their earlier account.", grant
+    why = concordance((later,[reason]),"What does Jo need for the orchard?",455)[0]
+    assert why["sentence"]==1 and "Jo needs" in why["note"] and "correction" not in why, why
+    greeting = concordance(ordinary,"What did I mean by the greeting?",455)[0]
+    assert greeting["note"]=="Said they meant every word of the greeting.", greeting
+    print("PASS named actions distinguish objects from landmarks, and a withdrawal and its reason keep their separate sources.",flush=True)
     memory_model("historian")
     print("PASS Talk and journal agree on sourced roles, recipients, corrections and unresolved claims after an unavailable overnight model.", flush=True)

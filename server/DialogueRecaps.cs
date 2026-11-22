@@ -89,6 +89,10 @@ internal static partial class DialogueRecaps
         ["catch","caught","landed","netted","hooked"], ["leave","left"], ["bring","brought"],
         ["give","gave","given"], ["build","built"], ["break","broke","broken"], ["take","took","taken"]
     ];
+    // Either side of a loan can ask about it. Expand retrieval without equating
+    // the grammatical roles of lending and borrowing in a sourced correction.
+    static readonly string[] LoanWords =
+        ["lend","lends","lent","lending","borrow","borrows","borrowed","borrowing","loan","loans","loaned","loaning"];
     static string Query(string[] words)
     {
         var expanded = words.Concat(EventWords.Where(forms => forms.Intersect(words).Any()).SelectMany(forms => forms)).Distinct();
@@ -354,13 +358,15 @@ internal static partial class DialogueRecaps
         // event before the wording of the speech act (e.g. which supper was offered).
         string eventQuery = Words.Matches(inquiry.ToLowerInvariant()).Any(m=>SpeechActs.Contains(m.Value))
             ? Query(focus.Where(w=>!SpeechActs.Contains(w)).ToArray()) : "";
+        var related = focus.Any(LoanWords.Contains) ? LoanWords : [];
         string names = " " + string.Join(" ",Words.Matches(question.ToLowerInvariant())) + " ";
         var sql = $"""
             WITH eligible AS NOT MATERIALIZED ({Eligible}
                 AND (@listeners::text[] IS NULL OR p.mode='group' AND p.audience @> @listeners)
             ), matches AS (
               SELECT p.*,(p.speaker=@who) AS addressed,coalesce(strpos(@names,' '||lower(p.to_name)||' ')>0,false) AS named_target,length(p.keywords) AS specificity,
-                ts_rank(p.search,to_tsquery('english',@focus)) AS words,coalesce(ts_rank(p.search,to_tsquery('english',nullif(@event,''))),0) AS event_words,
+                ts_rank(p.search,to_tsquery('english',@focus)) + coalesce(ts_rank(p.search,to_tsquery('english',nullif(@related,''))),0) AS words,
+                coalesce(ts_rank(p.search,to_tsquery('english',nullif(@event,''))),0) AS event_words,
                 cardinality(ARRAY(SELECT unnest(p.concepts) INTERSECT SELECT unnest(@subjects::text[]))) AS subject,
                 cardinality(ARRAY(SELECT unnest(p.concepts) INTERSECT SELECT unnest(@concepts::text[]))) AS meaning
               FROM eligible p WHERE p.search @@ to_tsquery('english',@terms) OR p.concepts && @concepts
@@ -381,7 +387,8 @@ internal static partial class DialogueRecaps
               SELECT DISTINCT ON(detail,speaker,to_key) * FROM accounts
               ORDER BY detail,speaker,to_key,question,words DESC,said_at DESC,source,pos,sentence
             ), selected AS (
-              SELECT * FROM relevant ORDER BY question,words DESC,addressed DESC,specificity DESC,said_at DESC,source,pos,sentence LIMIT 2
+              SELECT *,CASE WHEN @phrase<>'' THEN to_tsvector('english',detail) @@ phraseto_tsquery('english',@phrase) ELSE false END AS event_phrase
+              FROM relevant ORDER BY question,event_phrase DESC,words DESC,addressed DESC,specificity DESC,said_at DESC,source,pos,sentence LIMIT 2
             )
             SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('source',p.source,'position',p.pos,'sentence',p.sentence,'day',p.day,
               'speaker',p.name,'speakerKey',p.speaker,'to',p.to_name,'toKey',p.to_key,'kind',p.mode,
@@ -390,12 +397,12 @@ internal static partial class DialogueRecaps
                 CASE WHEN rev.possible_targets IS NULL THEN 'correction' ELSE 'uncertainty' END,jsonb_build_object('source',rev.source,'position',rev.pos,'sentence',rev.sentence,
                   'day',rev.day,'speakerKey',rev.speaker,'to',rev.to_name,'toKey',rev.to_key,'note',rev.detail,
                   'targetUnclear',CASE WHEN rev.corrects_sentence=-1 OR rev.possible_targets IS NOT NULL THEN true END)) END)
-              ORDER BY p.question,p.words DESC,p.addressed DESC,p.specificity DESC,p.said_at DESC,p.source,p.pos,p.sentence)::text
+              ORDER BY p.question,p.event_phrase DESC,p.words DESC,p.addressed DESC,p.specificity DESC,p.said_at DESC,p.source,p.pos,p.sentence)::text
             FROM selected p {Revision}
             """;
         return await db.ScopedOne(sql,scoped,head,("c",campaign),("a",actor),("day",day),("who",currentSpeaker),
-            ("terms",Query(terms)),("focus",Query(focus)),("subjects",Concepts(focus)),("concepts",Concepts(terms)),("listeners",audience),
-            ("names",names),("requests",seeksRequest),("event",eventQuery));
+            ("terms",Query([..terms,..related])),("focus",Query(focus)),("related",Query(related)),("subjects",Concepts(focus)),("concepts",Concepts(terms)),("listeners",audience),
+            ("names",names),("requests",seeksRequest),("event",eventQuery),("phrase",AskedEventPhrase(inquiry)));
     }
 
     internal static async Task Refine(Database db,Providers providers,IReadOnlyList<Source> rows,CancellationToken ct)
