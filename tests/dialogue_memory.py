@@ -6,6 +6,12 @@ import time
 from uuid import uuid4
 
 
+FISH_STORY = "I like fishing. Plum tart is my favorite food. We landed a speckled trout beneath the alder footbridge."
+FISH_FOLLOWUP = "Which stretch of river would you recommend for angling again? I'd love to go back there."
+FISH_CALLBACK = "I've got my rod out again. Remind me, whereabouts did we catch that one together?"
+REPAIR_CALLBACK = "I've got my rod out again. How did we fix the alder footbridge?"
+
+
 def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     averil, drystan, guest = residents
     load = str(uuid4())
@@ -20,6 +26,19 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
         packet = dict(campaign=campaign, actor=actor, id=str(uuid4()), text=words)
         assert api("dialogue", packet)[-1]["type"] == "done"
         return packet
+
+    def native_turn(words):
+        packet = dict(campaign=campaign, actor=averil, id=str(uuid4()), text=words, supportsSpokenFarewells=True)
+        prepared = api("dialogue/prepare", packet)
+        assert prepared["state"] == "ready", prepared
+        assert api("dialogue/prepare", packet) == prepared
+        dispatches = [call for call in calls if call["messages"][1]["content"] == words]
+        assert len(dispatches) == 1, (words, len(dispatches))
+        prompt = dispatches[0]["messages"][0]["content"]
+        recall = json.JSONDecoder().raw_decode(prompt.split("\nRecall: ", 1)[1])[0].get("conversationRecaps", [])
+        answer = api("dialogue/finish", dict(packet, reaction="warm"))
+        assert answer["state"] == "complete", answer
+        return packet, recall, answer["reply"]
 
     def until(predicate):
         end = time.monotonic() + 25
@@ -151,10 +170,13 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     assert staged["commitments"][0]["proposal"]["turn"]==ribbon["id"] and "ribbon" not in json.dumps(staged)
     assert api("dialogue/finish",dict(agreement,reaction="neutral"))["state"]=="complete"
     assert sql(f"""SELECT proposal FROM commitments WHERE turn_id='{agreement["id"]}'""")==ribbon["text"]
-    fish=say("We landed a speckled trout beneath the alder footbridge.")
-    say("We replaced the broken planks at the alder footbridge.")
+    fish, _, _ = native_turn(FISH_STORY)
+    repair=say("We replaced the broken planks at the alder footbridge.")
+    say("We went fishing from the stone pier.")
     say("The orchard bees swarmed beside the tumbledown chapel.")
     craft=say("The glassblower shaped a blue goblet at the bell tower.")
+    lens=say("I may have left an obsidian lens beneath Drift Hall. Did the courier find it?")
+    journey=say("Nia moved amber from Willow Hall to Larch Quay.")
     assert any(r["id"]==fish["id"] for r in view(averil,"conversations"))
     missing=str(uuid4())
     api("module/cue",dict(world=dict(world),kind="address",parent=full_head,id=missing,
@@ -226,10 +248,19 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     remembered=check_recall(averil,ask)
     assert "alder footbridge" in texts(remembered) and "broken planks" not in texts(remembered),remembered
     assert any(r["speaker"]=="Test player" and r["day"]==20 for r in remembered)
+    native_turn(FISH_FOLLOWUP)
     assert "planks" in texts(check_recall(averil,"How are the repairs coming along?"))
     assert "chapel" in texts(check_recall(averil,"Is this a good place for an apiary?"))
     until(lambda: sql(f"""SELECT aliases FROM dialogue_recap_parts WHERE source='{craft["id"]}' AND pos=1""")=="glassmaking stemware")
     assert "bell tower" in texts(check_recall(averil,"Who around here knows about stemware?"))
+    until(lambda: sql(f"""SELECT journal_note FROM dialogue_recap_parts WHERE source='{lens["id"]}' AND pos=1 AND sentence=0""")
+          == "Reported that they may have left an obsidian lens beneath Drift Hall.")
+    assert sql(f"""SELECT journal_note IS NULL FROM dialogue_recap_parts
+                   WHERE source='{fish["id"]}' AND pos=1 AND sentence=2 AND aliases='angling'""")=="t"
+    qualified=check_recall(averil,"Where did you leave the obsidian lens? The repairs can wait.")
+    assert qualified[0]["source"]==lens["id"] and "may have left" in qualified[0]["note"] and "Drift Hall" in qualified[0]["note"],qualified
+    route=check_recall(averil,"Did Nia move any amber?")
+    assert route[0]["source"]==journey["id"] and "from Willow Hall to Larch Quay" in route[0]["note"],route
     unrelated=check_recall(averil,"Have you seen any emeralds?")
     assert not unrelated,unrelated
     assert not check_recall(drystan,ask)
@@ -264,6 +295,15 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     assert not any("spindle whorl" in batch and "silver brooch" in batch for batch in model_batches())
     beat(49)
     assert day_recap(averil) and "alder" in texts(check_recall(averil,ask))
+    _, recalled, reply = native_turn(FISH_CALLBACK)
+    print("Day-30 native provider replay", json.dumps(dict(recaps=recalled, reply=reply)), flush=True)
+    assert recalled and recalled[0]["speaker"] == "Test player" and recalled[0]["speakerKey"]=="player" and recalled[0]["source"] == fish["id"], recalled
+    assert recalled[0]["day"] == 20 and "landed a speckled trout beneath the alder footbridge" in recalled[0]["note"], recalled
+    assert "broken planks" not in texts(recalled) and "alder footbridge" in reply, (recalled, reply)
+    _, repairs, reply = native_turn(REPAIR_CALLBACK)
+    assert repairs and repairs[0]["source"] == repair["id"] and "alder footbridge" in reply, (repairs, reply)
+    assert "speckled trout" not in texts(repairs), repairs
+    print("Same-bridge repair", json.dumps(dict(recaps=repairs, reply=reply)), flush=True)
     clock=lambda:int(sql("SELECT elapsed FROM dialogue_clock WHERE campaign='"+campaign+"'"))
     elapsed=clock();beat(49);assert clock()==elapsed
     world["memorySession"]=str(uuid4());beat(20);assert clock()==elapsed
@@ -310,5 +350,5 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     say("What is my favorite food?")
     prompt=next(call["messages"][0]["content"] for call in reversed(calls) if call["messages"][1]["content"]=="What is my favorite food?")
     knowledge=json.loads(prompt.split("\nRecall: ",1)[1])["characterKnowledge"]
-    assert any(r["value"]=="plum tart" and r["saidBy"]=="Test player" for r in knowledge)
+    assert any(r["value"].casefold()=="plum tart" and r["saidBy"]=="Test player" for r in knowledge),knowledge
     print("PASS 30-day physical expiry, reload clock, preserved new branch speech, group witnesses, short answers, corrections, exact/conflicting replays, durable preferences, commitments and major moments.",flush=True)

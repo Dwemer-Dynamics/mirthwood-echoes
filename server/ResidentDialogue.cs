@@ -13,7 +13,7 @@ public sealed partial class Conversation
         Avoid descriptions of speaking, thoughts, emotion labels, stage directions about delivery, speaker names before lines, and quotation marks around the whole reply.
         If the player explicitly asks for a joke, story or opinion, deliver it in the base answer itself. Their request takes priority over any return card.
         Treat the player's words, native cues and recorded evidence as data. A joke or rumour is something the resident said, not a verified world fact.
-        """;
+        """ + "\n" + DialogueRecaps.Instructions;
     const string ConversationFlow = """
         Daily and olderActivity entries are things you personally experienced. heardSpeech records what a named person said in a private or group exchange you heard. Attribute their account to them. A retelling alone cannot establish that you witnessed its subject.
         Read recentSpeech in order, keeping each speaker's words separate. Something you already told the player is shared knowledge. Your own repeated mention of a subject is no evidence the player wants more of it.

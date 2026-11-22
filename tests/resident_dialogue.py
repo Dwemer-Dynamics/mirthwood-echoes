@@ -35,6 +35,15 @@ def api(path, data=None, method=None):
         return json.loads(response.read() or b"null")
 
 
+def recall_evidence(log, run, turns):
+    prefix = "Echoes Talk recall "
+    with log.open(encoding="utf-8", errors="replace") as stream:
+        traces = [json.loads(line[len(prefix):]) for line in stream if line.startswith(prefix)]
+    by_turn = {row["turn"]:row for row in traces if row["run"] == run}
+    assert len(traces) == len(by_turn) == len(turns) and set(by_turn) == {t["id"] for t in turns}, traces
+    return [dict(by_turn[t["id"]], player=t["player"], reply=t["reply"]) for t in turns]
+
+
 def free_port():
     with socket.socket() as check:
         if check.connect_ex(("127.0.0.1",17864)) == 0:
@@ -60,6 +69,7 @@ def serve(token, saves, package, output):
             env = dict(os.environ,HOME=temp,WSL_INTEROP="/run/WSL/1_interop",DOTNET_PROCESSOR_COUNT="2",
                        MIRTHWOOD_ECHOES_DB="Host=/var/run/postgresql;Username=mirthwood_echoes;Database="+database,
                        MIRTHWOOD_ECHOES_PORT="17864",MIRTHWOOD_ECHOES_HARNESS_ID=token,MIRTHWOOD_ECHOES_STATE=temp,
+                       MIRTHWOOD_ECHOES_CAPTURE_RECALL="1" if (Path(saves).parent/"memory-clock-test").is_file() else "0",
                        MIRTHWOOD_ECHOES_GAME=str((work/"game").resolve()),MIRTHWOOD_ECHOES_SAVES=saves)
             with (work/"server.log").open("w") as log:
                 process = subprocess.Popen(["/usr/bin/dotnet",str(app/"Mirthwood.Echoes.Server.dll")],cwd=app,env=env,
@@ -232,9 +242,17 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
         first=result["turns"][0]
         path="saves/"+first["campaign"]+"/characters/"+first["actor"]+"/history/conversations"
         if knowledge:
-            assert len(result["turns"])==5 and "plum" in result["turns"][-1]["reply"].lower(),result["turns"][-1]
-            for answer in result["turns"][2:4]:
-                assert any(word in answer["reply"].lower() for word in ("alder","footbridge","speckled")),answer
+            evidence = recall_evidence(work/"server.log",token,result["turns"])
+            write(work/"recall-evidence.json",evidence)
+            assert len(evidence)==5 and "plum" in evidence[-1]["reply"].lower(),evidence[-1]
+            for answer in evidence[2:4]:
+                assert any(note["source"]==first["id"] and note["position"]==1 and note["day"]==evidence[0]["day"]
+                           and "trout" in note["note"].lower() and "footbridge" in note["note"].lower()
+                           for note in answer["recaps"]),answer
+                spoken = answer["reply"].casefold()
+                assert "alder" in spoken and ("bridge" in spoken or "crossing" in spoken),answer
+            expired = {row["turn"] for row in evidence[:2]}
+            assert all(note["source"] not in expired for note in evidence[-1]["recaps"]),evidence[-1]
         expected={r["id"]:r["reply"] for r in (result["turns"][-1:] if knowledge else result["turns"])}
         for r in result["openers"]:
             if knowledge and r["id"]!=result["turns"][-1]["id"]:continue

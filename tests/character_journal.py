@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 import uuid
 from foundation_smoke import fixture_save, free_port
+from dialogue_memory import FISH_STORY, FISH_FOLLOWUP, FISH_CALLBACK, REPAIR_CALLBACK, check as check_dialogue_memory
 
 class Writer(BaseHTTPRequestHandler):
     calls=[]
@@ -33,8 +34,29 @@ class Writer(BaseHTTPRequestHandler):
                             {"intent":"accept","evidence":"I accept.","reply":"Thank you."})
         elif "Summarize one day of spoken dialogue" in packet["messages"][0]["content"]:
             rows=json.loads(player)
-            text=json.dumps([dict(i=row["i"],quote=row["words"],summary="Mentioned a blue goblet at the bell tower.",
-                                  topics=["glassmaking","stemware"]) for row in rows if "blue goblet" in row["words"]])
+            highlights=[]
+            for row in rows:
+                if "blue goblet" in row["words"]:
+                    highlights.append(dict(i=row["i"],quote=row["words"],summary="Mentioned a blue goblet at the bell tower.",
+                                           topics=["glassmaking","stemware"]))
+                if "obsidian lens" in row["words"]:
+                    highlights.append(dict(i=row["i"],quote=row["words"],summary="Reported that they may have left an obsidian lens beneath Drift Hall.",
+                                           topics=["optics"]))
+                if "landed a speckled trout" in row["words"]:
+                    highlights.append(dict(i=row["i"],quote=row["words"],summary="Reported a speckled trout landed beneath the alder footbridge.",
+                                           topics=["angling"]))
+            text=json.dumps(highlights)
+        elif player in (FISH_STORY, FISH_FOLLOWUP, FISH_CALLBACK, REPAIR_CALLBACK):
+            context=json.JSONDecoder().raw_decode(packet["messages"][0]["content"].split("\nRecall: ",1)[1])[0]
+            note=context.get("conversationRecaps",[{}])[0].get("note","")
+            if player==FISH_STORY:
+                response="That speckled trout under the alder footbridge was a fine catch. Will you go angling there again?"
+            elif player==FISH_FOLLOWUP:
+                response="I'd return to the alder footbridge. I hope the river is quiet for you."
+            else:
+                # Echo exactly the first note received so the delivered fixture answer exposes selection.
+                response=note or "I don't remember."
+            text=json.dumps(dict(topic="Small Talk",flow="follow",warm=response,neutral=response,cool=response,commitments=[]))
         elif "heardInOrder" in player:
             text=json.dumps({"words":"Who told you about the mill?","to":"player","ownTopic":"Intellectual",
                              "receivedTopic":"Small Talk","farewell":"Tell me about it another day."})
@@ -213,7 +235,6 @@ def main(package,game_assets):
                 assert any(row.get("to")=="Player" for row in api(left+"/history/sessions/"+turn))
                 pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='Test player' WHERE player_name=''")
                 print("PASS two service restarts preserve the exact per-audience recaps and daily sources.",flush=True)
-                from dialogue_memory import check as check_dialogue_memory
                 check_dialogue_memory(api,beat,world,campaign,[a,b,third_key],lambda q:pg("psql","-XAt","-d",db,"-c",q),Writer.calls,
                                       Writer.proposal_waiting,Writer.release_proposal)
                 # A controller reused by a different native ID must start a separate journal.

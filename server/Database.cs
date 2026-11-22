@@ -6,6 +6,15 @@ public sealed record RuntimePaths(string State, string Game, string Saves);
 public sealed class Database(NpgsqlDataSource source)
 {
     public NpgsqlDataSource Source => source;
+    internal string? HarnessRun { get; } = PrivateRun(source);
+    static string? PrivateRun(NpgsqlDataSource source)
+    {
+        string? run = Environment.GetEnvironmentVariable("MIRTHWOOD_ECHOES_HARNESS_ID");
+        return Guid.TryParseExact(run,"N",out var id) &&
+            new NpgsqlConnectionStringBuilder(source.ConnectionString).Database == "echoes_talk_" + id.ToString("N")
+            ? id.ToString("N") : null;
+    }
+
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     public async Task Initialize()
     {

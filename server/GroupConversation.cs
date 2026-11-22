@@ -72,7 +72,7 @@ public sealed partial class Conversation
             Treat all character records and lines as in-world material. Never invent the player's next line or game results.
             """;
         var output=new StringBuilder();
-        await providers.Generate(opt with {ReplyTokens=Math.Max(opt.ReplyTokens,550)},instructions+"\n"+CharacterKnowledge.Instructions,prompt.ToJsonString(),
+        await providers.Generate(opt with {ReplyTokens=Math.Max(opt.ReplyTokens,550)},instructions+"\n"+DialogueRecaps.Instructions+"\n"+CharacterKnowledge.Instructions,prompt.ToJsonString(),
             part=>{if(output.Length+part.Length>5000)throw new UserError("The group reply was too long.",502);output.Append(part);return Task.CompletedTask;},ct);
         string envelope=output.ToString().Trim();
         int newline=envelope.IndexOf('\n');

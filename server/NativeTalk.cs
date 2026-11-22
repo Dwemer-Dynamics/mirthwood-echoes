@@ -56,6 +56,10 @@ public sealed partial class Conversation
                 if(wire.Length+part.Length>12000+320*(cues?.Count??0))throw new UserError("The Talk reply was too long.",502);
                 wire.Append(part);return Task.CompletedTask;
             },CancellationToken.None);
+            if(db.HarnessRun is {} run && Environment.GetEnvironmentVariable("MIRTHWOOD_ECHOES_CAPTURE_RECALL")=="1"){
+                var trace = new {run,turn=id,day,provider=opt.Provider,model,recaps=facts["conversationRecaps"] ?? new JsonArray()};
+                Console.WriteLine("Echoes Talk recall " + JsonSerializer.Serialize(trace));
+            }
             var packet=JsonNode.Parse(wire.ToString()) as JsonObject??throw new UserError("The model returned an unreadable Talk reply.",502);
             string flow=packet.S("flow").Trim().ToLowerInvariant();
             if(flow is not ("follow" or "invite" or "open" or "leave"))flow="";
