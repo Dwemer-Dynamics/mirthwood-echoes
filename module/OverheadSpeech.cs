@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using HarmonyLib;
 using TMPro;
 using UnityEngine;
@@ -24,17 +25,13 @@ namespace Mirthwood.Echoes
         readonly RectOffset padding;
         readonly Camera camera;
         readonly bool temporaryAnchor;
-        readonly float singleLineHeight;
+        readonly float singleLineHeight,dialogueFontSize,tailInset,capWidth;
         bool wasPaperEnabled,wasTextEnabled,masked;
         BubbleText layout=new BubbleText("",false);
-        float previousWidth,draftWidth,draftOverflow;
+        float previousWidth,previousHeight;
         Vector2 noteSize;
-        string lastDraft="",lastSpeech="";
-        int page=1;
         static readonly System.Reflection.FieldInfo MenuRows=AccessTools.Field(typeof(ContextMenuUI),"optionGameObjects");
         readonly Vector3[] corners=new Vector3[4];
-        public int Pages=>Mathf.Max(1,text.textInfo.pageCount);
-        public int Page=>page;
         public string FontName=>text.font.name;
         public string SpriteName=>paper.sprite.name;
         public bool Visible=>frame.gameObject.activeSelf;
@@ -43,6 +40,19 @@ namespace Mirthwood.Echoes
         {
             text.ForceMeshUpdate(false,true);
             return text.GetParsedText().TrimEnd('\u200b','\0').Trim();
+        }
+        internal string ReadVisibleInk()
+        {
+            text.ForceMeshUpdate(false,true);
+            var ink=new System.Text.StringBuilder();
+            var info=text.textInfo;
+            for(int i=0;i<info.characterCount;i++){
+                var letter=info.characterInfo[i];
+                if(!letter.isVisible||char.IsWhiteSpace(letter.character))continue;
+                var vertices=info.meshInfo[letter.materialReferenceIndex].vertices;
+                if(vertices[letter.vertexIndex]!=vertices[letter.vertexIndex+2])ink.Append(letter.character);
+            }
+            return ink.ToString();
         }
         public bool UsesNativeStyle=>paper.sprite==nativePaper.sprite&&text.font==source.font&&text.fontSharedMaterial==source.fontSharedMaterial;
         public TMP_InputField Input { get; private set; }
@@ -56,15 +66,39 @@ namespace Mirthwood.Echoes
             var mid=(glyph.bottomLeft+glyph.topRight)*.5f;
             return view.rect.Contains(view.InverseTransformPoint(label.rectTransform.TransformPoint(mid)));
         }
-        public bool EntireDraftInView()
+        public bool EntireDraftInView()=>InkFits(Input.textComponent,Input.textViewport)&&InkFits(Input.textComponent,frame);
+        internal bool EntireSpeechInView()=>InkFits(text,frame);
+        internal bool WholeWordsOnLines(string expected)
         {
-            var label=Input.textComponent;var view=Input.textViewport;
-            for(int i=0;i<label.textInfo.characterCount;i++){
-                var glyph=label.textInfo.characterInfo[i];if(!glyph.isVisible)continue;
-                var mid=(glyph.bottomLeft+glyph.topRight)*.5f;
-                if(!view.rect.Contains(view.InverseTransformPoint(label.rectTransform.TransformPoint(mid))))return false;
+            var label=Editing?Input.textComponent:text;
+            label.ForceMeshUpdate(false,true);
+            if(label.GetParsedText().TrimEnd('\u200b','\0')!=expected)return false;
+            var glyphs=label.textInfo.characterInfo;
+            for(int i=1;i<expected.Length;i++){
+                if(!char.IsWhiteSpace(expected[i-1])&&!char.IsWhiteSpace(expected[i])&&glyphs[i-1].lineNumber!=glyphs[i].lineNumber)return false;
             }
             return true;
+        }
+        internal bool ShowsCompleteMessage(string raw)=>EntireSpeechInView()&&
+            ReadVisibleInk()==string.Concat(new BubbleText(raw,false).Plain.Where(c=>!char.IsWhiteSpace(c)));
+        internal float RelativeTypeSize=>text.fontSize/source.fontSize;
+        internal string InkDetail(bool draft)=>draft?InkError(Input.textComponent,Input.textViewport):InkError(text,body);
+        static bool InkFits(TMP_Text label,RectTransform view)
+            =>InkError(label,view)==null;
+        static string InkError(TMP_Text label,RectTransform view)
+        {
+            label.ForceMeshUpdate(false,true);
+            var bounds=view.rect;
+            for(int i=0;i<label.textInfo.characterCount;i++){
+                var glyph=label.textInfo.characterInfo[i];if(!glyph.isVisible)continue;
+                var vertices=label.textInfo.meshInfo[glyph.materialReferenceIndex].vertices;
+                if(vertices[glyph.vertexIndex]==vertices[glyph.vertexIndex+2])return "Empty glyph "+i;
+                for(int corner=0;corner<4;corner++){
+                    var v=view.InverseTransformPoint(label.rectTransform.TransformPoint(vertices[glyph.vertexIndex+corner]));
+                    if(v.x<bounds.xMin-.5f||v.x>bounds.xMax+.5f||v.y<bounds.yMin-.5f||v.y>bounds.yMax+.5f)return "Glyph "+i+" at "+v+" outside "+bounds;
+                }
+            }
+            return null;
         }
         public bool CaretAligned=>caret!=null&&(caret.anchoredPosition-Input.textComponent.rectTransform.anchoredPosition).sqrMagnitude<.01f;
 
@@ -92,7 +126,7 @@ namespace Mirthwood.Echoes
         }
         TextMeshProUGUI Words(RectTransform r)
         {
-            var t=r.gameObject.AddComponent<TextMeshProUGUI>();t.font=source.font;t.fontSharedMaterial=source.fontSharedMaterial;t.fontSize=source.fontSize;
+            var t=r.gameObject.AddComponent<TextMeshProUGUI>();t.font=source.font;t.fontSharedMaterial=source.fontSharedMaterial;t.enableAutoSizing=false;t.fontSize=dialogueFontSize;
             t.fontStyle=source.fontStyle;t.color=source.color;t.margin=source.margin;t.lineSpacing=source.lineSpacing;
             t.characterSpacing=source.characterSpacing;t.wordSpacing=source.wordSpacing;t.alignment=source.alignment;
             t.richText=true;t.parseCtrlCharacters=false;t.raycastTarget=false;t.enableWordWrapping=true;
@@ -103,13 +137,21 @@ namespace Mirthwood.Echoes
         OverheadSpeech(RectTransform surface,Image native,TextMeshProUGUI source,Transform speaker,Transform anchor,Image own,TextMeshProUGUI ownWords,Camera camera)
         {
             this.surface=surface;this.source=source;this.camera=camera;this.speaker=speaker;this.anchor=anchor;nativePaper=native;ownPaper=own;this.ownWords=ownWords;temporaryAnchor=own==null;
-            padding=native.GetComponent<HorizontalLayoutGroup>()?.padding??new RectOffset(15,18,5,27);
-            singleLineHeight=source.textInfo.lineCount==1?source.rectTransform.rect.height:source.fontSize;
-            frame=Rect("Overhead speech",surface);frame.anchorMin=frame.anchorMax=surface.pivot;frame.pivot=native.rectTransform.pivot;
+            int tailRoom=native.GetComponent<HorizontalLayoutGroup>()?.padding.bottom??27;
+            padding=new RectOffset(8,8,5,Mathf.Clamp(tailRoom,18,30)+5);
+            dialogueFontSize=source.fontSize*.85f;
+            singleLineHeight=dialogueFontSize;
+            frame=Rect("Overhead speech",surface);frame.anchorMin=frame.anchorMax=surface.pivot;
+            frame.pivot=new Vector2(0,native.rectTransform.pivot.y);
             paper=frame.gameObject.AddComponent<Image>();paper.sprite=native.sprite;paper.type=native.type;paper.material=native.material;
             paper.color=native.color;paper.pixelsPerUnitMultiplier=native.pixelsPerUnitMultiplier;paper.raycastTarget=false;
-            body=Rect("Ink",frame);body.offsetMin=new Vector2(padding.left,padding.bottom);body.offsetMax=new Vector2(-padding.right,-padding.top);
-            text=Words(Rect("Words",body));text.overflowMode=TextOverflowModes.Page;
+            // The native sliced paper keeps the tail in its left cap as the right edge grows.
+            float spriteUnits=native.pixelsPerUnit*native.pixelsPerUnitMultiplier;
+            tailInset=native.sprite.border.x/spriteUnits*.5f;
+            capWidth=(native.sprite.border.x+native.sprite.border.z)/spriteUnits;
+            body=Rect("Ink",frame);body.anchorMin=body.anchorMax=body.pivot=new Vector2(0,1);
+            text=Words(Rect("Words",body));text.alignment=TextAlignmentOptions.TopLeft;text.overflowMode=TextOverflowModes.Overflow;
+            text.margin=new Vector4(5,0,5,0);
             var top=Rect("Keys and messages",frame);top.anchorMin=top.anchorMax=new Vector2(0,1);top.pivot=new Vector2(0,0);
             top.anchoredPosition=new Vector2(2,1);top.sizeDelta=new Vector2(495,65);
             note=Words(top);note.richText=false;note.fontSize=25;note.alignment=TextAlignmentOptions.BottomLeft;note.color=new Color32(255,247,216,255);
@@ -121,9 +163,9 @@ namespace Mirthwood.Echoes
             var edit=Rect("Player input",body);
             var viewport=Rect("Viewport",edit);viewport.gameObject.AddComponent<RectMask2D>();
             var target=edit.gameObject.AddComponent<Image>();target.color=Color.clear;
-            var typed=Words(Rect("Draft",viewport));typed.alignment=TextAlignmentOptions.TopLeft;typed.overflowMode=TextOverflowModes.Overflow;
-            var hint=Words(Rect("Hint",viewport));hint.text="Speak…";hint.alignment=TextAlignmentOptions.TopLeft;hint.color=new Color(source.color.r,source.color.g,source.color.b,.72f);
-            Input=edit.gameObject.AddComponent<TMP_InputField>();Input.targetGraphic=target;Input.textViewport=viewport;Input.textComponent=typed;Input.placeholder=hint;
+            var typed=Words(Rect("Draft",viewport));typed.margin=text.margin;typed.alignment=TextAlignmentOptions.TopLeft;typed.overflowMode=TextOverflowModes.Overflow;
+            var hint=Words(Rect("Hint",viewport));hint.margin=text.margin;hint.text="Speak…";hint.alignment=TextAlignmentOptions.TopLeft;hint.color=new Color(source.color.r,source.color.g,source.color.b,.72f);
+            Input=edit.gameObject.AddComponent<DialogueInputField>();Input.targetGraphic=target;Input.textViewport=viewport;Input.textComponent=typed;Input.placeholder=hint;
             Input.richText=true;Input.isRichTextEditingAllowed=true;Input.characterLimit=1200;Input.lineType=TMP_InputField.LineType.MultiLineSubmit;
             Input.onFocusSelectAll=false;Input.customCaretColor=true;Input.caretColor=source.color;Input.caretWidth=2;
             var projection=new DraftProjection();typed.textPreprocessor=projection;typed.OnPreRenderText+=projection.MapCaret;
@@ -132,25 +174,30 @@ namespace Mirthwood.Echoes
         }
         public void Edit(string draft)
         {
-            draftWidth=0;lastDraft="";
             SetVisible(true);text.gameObject.SetActive(false);Input.gameObject.SetActive(true);Input.SetTextWithoutNotify(draft);
             if(caret==null)caret=Input.GetComponentInChildren<TMP_SelectionCaret>(true)?.rectTransform;
-            ResizeDraft(draft);
+            ResizeDraft(draft);Follow();
             EventSystem.current?.SetSelectedGameObject(Input.gameObject);Input.ActivateInputField();Input.stringPosition=draft.Length;
         }
         void ResizeDraft(string value)
         {
-            if(!value.StartsWith(lastDraft,StringComparison.Ordinal))draftWidth=0;
-            lastDraft=value;
-            layout=new BubbleText(value.Length==0?"Speak…":value,true);previousWidth=0;Follow();
+            layout=new BubbleText(value.Length==0?"Speak…":value,true);
+            // TMP finishes positioning the caret after its value-changed event.
+            previousWidth=0;
         }
-        public void Show(string value,bool partial=false)
+        public void Show(string value,bool partial=false,int spokenStart=-1,int spokenEnd=-1)
         {
-            if(!Visible||Editing||!value.StartsWith(lastSpeech,StringComparison.Ordinal))page=1;
-            lastSpeech=value;
             if(Input!=null&&Input.gameObject.activeSelf){Input.DeactivateInputField();Input.gameObject.SetActive(false);}
             SetVisible(true);text.gameObject.SetActive(true);
-            layout=new BubbleText(value,false,partial);previousWidth=0;Follow();
+            layout=new BubbleText(value,false,partial,spokenStart,spokenEnd);previousWidth=0;Follow();
+        }
+        internal void ShowSpoken(string line,string heard,bool partial)
+        {
+            int end=partial&&line.StartsWith(heard,StringComparison.Ordinal)?heard.Length:0;
+            while(end>0&&char.IsWhiteSpace(line[end-1]))end--;
+            int start=end;
+            while(start>0&&!char.IsWhiteSpace(line[start-1]))start--;
+            Show(line,false,start,end);
         }
         public void SetVisible(bool visible)
         {
@@ -165,10 +212,65 @@ namespace Mirthwood.Echoes
         public void Note(string message)
         {
             if(note.text==message)return;
-            note.text=message;
+            note.text=message;previousHeight=0;
             noteSize=string.IsNullOrEmpty(message)?Vector2.zero:note.GetPreferredValues(message,note.rectTransform.rect.width,Mathf.Infinity);
         }
-        public void TurnPage(int direction){page=Mathf.Clamp(page+direction,1,Pages);text.pageToDisplay=page;}
+        void FitMessage(float width,float height)
+        {
+            float size=dialogueFontSize;
+            float sides=text.margin.x+text.margin.z;
+            TMP_Text label=Editing?(Input.text.Length==0?(TMP_Text)Input.placeholder:Input.textComponent):text;
+            BoundsRect ink;
+            for(;;){
+                text.fontSize=size;
+                var natural=text.GetPreferredValues(layout.Rich,Mathf.Infinity,Mathf.Infinity);
+                float w=Mathf.Min(width,Mathf.Ceil(natural.x)+sides+2);
+                var wrapped=text.GetPreferredValues(layout.Rich,Mathf.Max(1,w-sides),Mathf.Infinity);
+                body.sizeDelta=new Vector2(w,Mathf.Max(size,Mathf.Ceil(wrapped.y))+6);
+                if(Editing){
+                    Input.textComponent.fontSize=size;((TMP_Text)Input.placeholder).fontSize=size;
+                    Input.ForceLabelUpdate();Input.textComponent.rectTransform.anchoredPosition=Vector2.zero;
+                }else text.text=layout.Rich;
+                label.ForceMeshUpdate(true,true);
+                ink=LetterBounds(label,Editing);
+                if(ink.height<=height&&ink.width<=width||size<=.1f)break;
+                float ratio=Mathf.Min(height/Mathf.Max(1,ink.height),width/Mathf.Max(1,ink.width));
+                size=Mathf.Max(.1f,size*Mathf.Clamp(ratio*.98f,.03f,.93f));
+            }
+            // Keep the measured wrap width. Trimming the parchment must not reflow its last word.
+            body.anchoredPosition=new Vector2(padding.left-ink.xMin,-padding.top-ink.yMax);
+            frame.sizeDelta=new Vector2(Mathf.Ceil(ink.width)+padding.horizontal,Mathf.Ceil(ink.height)+padding.vertical);
+        }
+        BoundsRect LetterBounds(TMP_Text label,bool includeCaret)
+        {
+            Vector2 lo=Vector2.positiveInfinity,hi=Vector2.negativeInfinity;
+            var toBody=body.worldToLocalMatrix*label.rectTransform.localToWorldMatrix;
+            void Include(Vector3 local){
+                Vector2 point=toBody.MultiplyPoint3x4(local);
+                lo=Vector2.Min(lo,point);hi=Vector2.Max(hi,point);
+            }
+            var info=label.textInfo;
+            for(int i=0;i<info.characterCount;i++){
+                var c=info.characterInfo[i];
+                if(c.isVisible){
+                    var v=info.meshInfo[c.materialReferenceIndex].vertices;
+                    for(int k=0;k<4;k++)Include(v[c.vertexIndex+k]);
+                }
+                if(includeCaret){
+                    Include(new Vector3(c.origin,c.descender));Include(new Vector3(c.xAdvance+Input.caretWidth,c.ascender));
+                }
+            }
+            return lo.x<=hi.x?BoundsRect.MinMaxRect(lo.x,lo.y,hi.x,hi.y):new BoundsRect(0,-label.fontSize,1,label.fontSize);
+        }
+        internal Vector4 PaperMargins()
+        {
+            text.ForceMeshUpdate(false,true);
+            var ink=LetterBounds(text,false);
+            Vector2 origin=(Vector2)frame.InverseTransformPoint(body.TransformPoint(Vector3.zero));
+            var box=frame.rect;
+            return new Vector4(origin.x+ink.xMin-box.xMin,box.yMax-origin.y-ink.yMax,
+                box.xMax-origin.x-ink.xMax,origin.y+ink.yMin-box.yMin-(padding.bottom-5));
+        }
         public bool Follow()
         {
             if(anchor==null||speaker==null||nativePaper==null||source==null||camera==null||
@@ -180,26 +282,20 @@ namespace Mirthwood.Echoes
             var unit=camera.WorldToScreenPoint(anchor.position+nativePaper.transform.TransformVector(Vector3.up*100));
             var scale=Mathf.Clamp(Vector2.Distance(pixel,unit)/(100*surface.GetComponent<Canvas>().scaleFactor),.38f,1.2f);
             frame.localScale=new Vector3(scale,scale,1);
-            float width=Mathf.Clamp((surface.rect.width-24)/scale-padding.horizontal,70,660);
-            if(Mathf.Abs(previousWidth-width)>.1f){
-                var natural=text.GetPreferredValues(layout.Rich,Mathf.Infinity,Mathf.Infinity);
-                float w=Mathf.Clamp(Mathf.Ceil(natural.x)+4,Editing?112:56,width);
-                if(Editing){w=Mathf.Min(width,Mathf.Max(w,draftWidth));draftWidth=w;}
-                var wrapped=text.GetPreferredValues(layout.Rich,w,Mathf.Infinity);
-                float maxH=Mathf.Min(text.GetPreferredValues("Ag\nAg\nAg\nAg",w,Mathf.Infinity).y+2,surface.rect.height/scale-padding.vertical-24);
-                float h=Mathf.Min(Mathf.Ceil(wrapped.y)+2,maxH);
-                frame.sizeDelta=new Vector2(w+padding.horizontal,Mathf.Max(singleLineHeight,h)+padding.vertical);
-                draftOverflow=Mathf.Max(0,wrapped.y+2-(frame.sizeDelta.y-padding.vertical));
-                if(!Editing){text.text=layout.Rich;text.pageToDisplay=page;text.ForceMeshUpdate(false,true);page=Mathf.Clamp(page,1,Pages);text.pageToDisplay=page;}
-                previousWidth=width;
+            float width=Mathf.Clamp((surface.rect.width-24)/scale-padding.horizontal,112,1050);
+            float height=Mathf.Max(singleLineHeight+10,(surface.rect.height-24)/scale-padding.vertical-noteSize.y-2);
+            if(Mathf.Abs(previousWidth-width)>.1f||Mathf.Abs(previousHeight-height)>.5f){
+                FitMessage(width,height);
+                previousWidth=width;previousHeight=height;
             }
             if(Editing){
                 var r=Input.textComponent.rectTransform;var pos=r.anchoredPosition;
-                // TMP keeps the caret visible, but a shrinking draft can leave a stale scroll offset.
-                var clamped=new Vector2(0,Mathf.Clamp(pos.y,0,draftOverflow));
-                if((clamped-pos).sqrMagnitude>.001f)r.anchoredPosition=clamped;
-                if(caret!=null&&(caret.anchoredPosition-clamped).sqrMagnitude>.001f)caret.anchoredPosition=clamped;
+                if(pos.sqrMagnitude>.001f)r.anchoredPosition=Vector2.zero;
+                if(caret!=null&&caret.anchoredPosition.sqrMagnitude>.001f)caret.anchoredPosition=Vector2.zero;
             }
+            // Unity also compresses both sliced borders when a short message is narrower than their sum.
+            float capScale=Editing||capWidth<=0?1:Mathf.Min(1,frame.sizeDelta.x/capWidth);
+            target.x-=tailInset*scale*capScale;
             frame.anchoredPosition=Constrain(target,scale);return true;
         }
         BoundsRect InkRect()
@@ -291,6 +387,8 @@ namespace Mirthwood.Echoes
                 if(((label.textInfo.characterInfo[i].style&FontStyles.Italic)!=0)!=italic)return false;
             return true;
         }
+        internal bool SpokenWordMarked()=>text.textInfo.characterInfo.Take(text.textInfo.characterCount)
+            .Any(c=>c.isVisible&&(c.style&FontStyles.Underline)!=0);
         public void Dispose(){SetVisible(false);if(temporaryAnchor&&anchor!=null)UnityEngine.Object.Destroy(anchor.gameObject);}
     }
 }

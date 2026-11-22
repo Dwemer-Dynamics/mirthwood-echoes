@@ -67,11 +67,10 @@ namespace Mirthwood.Echoes
                 using (var req = Post(Address + "dialogue/prepare", new { id, campaign=c, actor=a, text=words, context=intent["context"] })) {
                     yield return req.SendWebRequest();
                     var packet = JObject.Parse(req.downloadHandler.text);
-                    string reply = (string)packet["reply"], cue = (string)packet["handoff"]?["cue"];
-                    string bubble = string.IsNullOrEmpty(cue) ? reply : reply + "\n*" + cue.Replace("*","") + "*";
+                    string reply = (string)packet["reply"];
                     proof["talk"] = new JObject {["id"]=id,["reply"]=reply,["text"]=words,["topic"]=packet["topic"],
                         ["passed"]=(string)packet["state"]=="complete" && outbox.SavedResult(id)!=null &&
-                            outbox.Pending()==null && npcBubble.VisibleText==new BubbleText(bubble,false).Plain};
+                            outbox.Pending()==null && npcBubble.VisibleText==new BubbleText(reply,false).Plain};
                 }
                 Close();
                 yield return LoadSnapshot(snapshot, owners[0]);

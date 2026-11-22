@@ -78,7 +78,7 @@ public sealed class Providers(Database db,IDataProtectionProvider protection,Htt
     }
     public static string Resolve(Profile p,string purpose)=>purpose switch {
         "conversation" when p.Conversation.Length>0=>p.Conversation,"memory" when p.Memory.Length>0=>p.Memory,_=>p.DefaultModel};
-    public async Task<string> Generate(Options options, string system,string player,Func<string,Task> emit,CancellationToken ct,string purpose="conversation")
+    public async Task<string> Generate(Options options, string system,string player,Func<string,Task> emit,CancellationToken ct,string purpose="conversation",bool residentOpener=false)
     {
         var provider=Find(options.Provider);
         var p=await Get(provider.Id);
@@ -87,7 +87,7 @@ public sealed class Providers(Database db,IDataProtectionProvider protection,Htt
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromSeconds(75));
         using var slot=await queue.Enter(provider.Id+"|"+model,purpose=="conversation",deadline.Token);
-        if(provider.Id=="codex_subscription") {await CodexDialogue.Stream(model,system,player,emit,deadline.Token,p.CodexHost,purpose=="conversation"?p.ConversationEffort:"");return model;}
+        if(provider.Id=="codex_subscription") {await CodexDialogue.Stream(model,system,player,emit,deadline.Token,p.CodexHost,purpose=="conversation"?p.ConversationEffort:"",residentOpener);return model;}
         var url=Url(provider.Id=="openai_compatible"?p.Endpoint:provider.Url);
         if(p.Secret=="" && provider.Id!="openai_compatible") throw new UserError("Save an API key for "+provider.Name+".",409);
         using var req=new HttpRequestMessage(HttpMethod.Post,url);
@@ -165,7 +165,7 @@ internal sealed class ProviderQueue
 internal static class CodexDialogue
 {
     // Reign's initialize → account/read → thread/start → turn/start transport.
-    public static async Task Stream(string model,string system,string player,Func<string,Task> emit,CancellationToken ct,string host,string effort)
+    public static async Task Stream(string model,string system,string player,Func<string,Task> emit,CancellationToken ct,string host,string effort,bool residentOpener=false)
     {
         var windows=host=="windows"?await WindowsCodex.Resolve(ct):null;
         var start=new ProcessStartInfo(windows?.Executable??"codex"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,
@@ -204,7 +204,7 @@ internal static class CodexDialogue
             var turn=new Dictionary<string,object>{{"threadId",thread},{"input",new[]{new{type="text",text=player}}}};
             if(!string.IsNullOrEmpty(effort))turn["effort"]=effort;
             await Rpc("turn/start",turn);
-            Console.WriteLine("Echoes Codex turn accepted: model={0} effort={1}",model,string.IsNullOrEmpty(effort)?"default":effort);
+            Console.WriteLine("Echoes Codex {0} accepted: model={1} effort={2}",residentOpener?"opener":"turn",model,string.IsNullOrEmpty(effort)?"default":effort);
             while(true)
             {
                 var m=await Read();await Notification(m);

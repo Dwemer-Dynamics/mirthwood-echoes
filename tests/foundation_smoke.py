@@ -297,7 +297,7 @@ for line in sys.stdin:
                     turn=say("I promise to deliver flour tomorrow.")
                     packet=api("/api/dialogue",turn)
                     assert [x["type"] for x in packet]==["delta","delta","done"] and packet[-1]["firstMs"]<packet[-1]["totalMs"]
-                    assert len(Model.calls)==1 and Model.calls[-1]["model"]=="town-default" and Model.calls[-1]["max_tokens"]==80+256
+                    assert len(Model.calls)==1 and Model.calls[-1]["model"]=="town-default" and Model.calls[-1]["max_tokens"]==80+384
                     assert "Gathered barley" in Model.calls[-1]["messages"][0]["content"] and "private reasoning" not in str(packet)
                     assert api("/api/dialogue",turn)[-1]["cached"] and len(Model.calls)==1
                     api("/api/dialogue",dict(turn,actor=twin),status=409)

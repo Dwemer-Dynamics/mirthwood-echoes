@@ -220,7 +220,7 @@ namespace Mirthwood.Echoes
         {
             for(int i=0;i<4;i++){
                 JObject read=null;yield return Request("quests/finish",ack,r=>read=r,5);
-                if((string)read?["state"]=="complete"){done?.Invoke(true);yield break;}
+                if((string)read?["state"]=="complete"||(string)read?["state"]=="expired"){done?.Invoke(true);yield break;}
                 yield return new WaitForSecondsRealtime(i+1);
             }
             done?.Invoke(false);
@@ -305,7 +305,7 @@ namespace Mirthwood.Echoes
             hint.name="Reply prompt";hint.text="Your reply…";hint.fontStyle=FontStyles.Italic;
             words.text="";words.richText=false;words.alignment=hint.alignment=TextAlignmentOptions.MidlineLeft;
             var target=editor.gameObject.AddComponent<Image>();target.color=Color.clear;
-            input=editor.gameObject.AddComponent<TMP_InputField>();input.targetGraphic=target;input.textViewport=viewport;
+            input=editor.gameObject.AddComponent<DialogueInputField>();input.targetGraphic=target;input.textViewport=viewport;
             input.textComponent=words;input.placeholder=hint;input.characterLimit=1200;input.richText=true;input.isRichTextEditingAllowed=true;
             words.richText=true;var projection=new DraftProjection();words.textPreprocessor=projection;words.OnPreRenderText+=projection.MapCaret;
             input.lineType=TMP_InputField.LineType.MultiLineSubmit;input.onSubmit.AddListener(Submit);

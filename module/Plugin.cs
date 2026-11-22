@@ -26,7 +26,7 @@ namespace Mirthwood.Echoes
     public sealed class Plugin : BaseUnityPlugin
     {
         internal const string Id = "mirthwood.echoes";
-        private const string Server = "http://127.0.0.1:17841";
+        private string ModuleApi => (isolated?.PrivateDiagnostics==true?isolated.TalkAddress:"http://127.0.0.1:17841/api/")+"module/";
         private readonly Queue<string> pending = new Queue<string>();
         private readonly Harmony hooks = new Harmony(Id);
         private static Plugin instance;
@@ -36,11 +36,16 @@ namespace Mirthwood.Echoes
         private int hookCount;
         private float nextBeat;
         private NativeConversation dialogue;
+        BepInEx.Configuration.ConfigEntry<BepInEx.Configuration.KeyboardShortcut> groupKey;
         private ReactionVoices reactionVoices;
         internal static ReactionVoices Voices => instance && instance.isActiveAndEnabled ? instance.reactionVoices : null;
         private string probing,completedProbe,completedPacket;
         private IsolatedGameRun isolated;
         private JArray testObservations;
+        internal static void AddressPlayer(NPCController npc,string card,string cue)
+        {
+            if(ReplacesTalk)instance.dialogue?.OfferNativeAddress(npc,card,cue);
+        }
         internal static void OfferReply(NPCController npc,string id,string kind,string line,float delay=0)
         {
             if(ReplacesTalk&&id!=null)instance.dialogue?.OfferPassingLine(npc,id,kind,line,delay);
@@ -61,12 +66,18 @@ namespace Mirthwood.Echoes
                 StartCoroutine(isolated.Load());
             }
             dialogue = new NativeConversation(this);
+            groupKey=Config.Bind("Controls","GroupTalk",new BepInEx.Configuration.KeyboardShortcut(KeyCode.T),"Gather nearby residents for a group conversation.");
             reactionVoices = new ReactionVoices(Config.Bind("Audio","OriginalVoices",true,"Play the Echoes cast for resident and player chat reactions."),Logger);
             hooks.CreateClassProcessor(typeof(ReactionVoices.NativeSound)).Patch();
             QuestPanel.Install(this,hooks);
             NativeCues.Start(this);
             InteractionHooks.Install(hooks,Logger);
+            if(InteractionHooks.Compatible){
+                hooks.CreateClassProcessor(typeof(GroupGathering.Routine)).Patch();
+                hooks.CreateClassProcessor(typeof(GroupGathering.Movement)).Patch();
+            }
             hooks.CreateClassProcessor(typeof(DraftPause)).Patch();
+            hooks.CreateClassProcessor(typeof(WaitingResident)).Patch();
             hooks.CreateClassProcessor(typeof(TalkOption)).Patch();
             hooks.CreateClassProcessor(typeof(QuickChatPages)).Patch();
             hooks.CreateClassProcessor(typeof(NativeSocialTurn)).Patch();
@@ -94,7 +105,7 @@ namespace Mirthwood.Echoes
             return new {
                 slot = IsolatedGameRun.Active?.SourceSlot ?? SaveMaster.GetActiveSlot(),
                 created = SaveMaster.GetSaveCreationTime().ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture),
-                player = player.CharacterInfo.id, cueHead=string.IsNullOrEmpty(NativeCues.Head)?null:NativeCues.Head, day = Mathf.FloorToInt(DayNightCycle.Instance.Now), yearLength = DayNightCycle.Instance.YearLength
+                player = player.CharacterInfo.id, memorySession=NativeCues.Session, cueHead=string.IsNullOrEmpty(NativeCues.Head)?null:NativeCues.Head, day = Mathf.FloorToInt(DayNightCycle.Instance.Now), yearLength = DayNightCycle.Instance.YearLength
             };
         }
 
@@ -102,20 +113,31 @@ namespace Mirthwood.Echoes
         {
             reactionVoices?.Collect();
             QuestPanel.Tick();
-            dialogue?.TickPassingLine();
+            dialogue?.GroupKeys(groupKey.Value);
+            if(dialogue?.GroupActive!=true)dialogue?.TickPassingLine();
             if (Time.realtimeSinceStartup >= nextBeat)
             {
                 nextBeat = Time.realtimeSinceStartup + (isolated==null?12:3);
                 isolated?.CheckQuit();
                 var currentWorld=World();
-                if(isolated?.TalkAddress!=null && currentWorld!=null)StartCoroutine(TestClock(currentWorld));
+                if(isolated?.TalkAddress!=null && !isolated.PrivateDiagnostics && currentWorld!=null)StartCoroutine(TestClock(currentWorld));
                 StartCoroutine(Post("heartbeat", JsonConvert.SerializeObject(new {
-                    session, version = ModIdentity.Version, hooks = hookCount+InteractionHooks.Installed.Count, dropped=dropped+NativeCues.Rejected, world = isolated==null?currentWorld:null,
+                    session, version = ModIdentity.Version, hooks = hookCount+InteractionHooks.Installed.Count, dropped=dropped+NativeCues.Rejected, world = isolated==null||isolated.PrivateDiagnostics?currentWorld:null,
                     probeWorld = isolated!=null && _Mirthwood.Scripts.Demo.GameState.GetCurrentState(1)==_Mirthwood.Scripts.Demo.GameState.State.Gameplay?currentWorld:null,
                     isolatedRun=isolated?.Id
                 }), null, OnHeartbeat));
             }
-            if (dialogue.Visible)dialogue.HandleKeys();
+            if (dialogue.Visible&&!dialogue.GroupActive)dialogue.HandleKeys();
+        }
+
+        // NPCController uses IsChatting to stop its agent and idle its walk animation.
+        [HarmonyPatch(typeof(ChatController),nameof(ChatController.IsChatting),MethodType.Getter)]
+        static class WaitingResident
+        {
+            static void Postfix(ChatController __instance,ref bool __result)
+            {
+                if(!__result && (instance?.dialogue?.WaitingFor(__instance)==true||GroupGathering.Holds(__instance)))__result=true;
+            }
         }
 
         [HarmonyPatch(typeof(PlayerChat),"GenerateOptions")]
@@ -130,7 +152,7 @@ namespace Mirthwood.Echoes
                 if(index<0)return; // Authored Speak and disabled or unavailable residents retain their native options.
                 __result.RemoveAll(o=>o.Name=="Talk");
                 __result.Insert(index,new IContextMenu.Option("Talk",playerIndex=>{
-                    if(playerIndex!=1||!ReplacesTalk||!npc||!npc.isActiveAndEnabled||!chat.chatEnabled||instance.dialogue.Visible||
+                    if(playerIndex!=1||!ReplacesTalk||!npc||!npc.isActiveAndEnabled||!chat.chatEnabled||instance.dialogue.Visible||instance.dialogue.GroupActive||
                        !ReferenceEquals(Selected.GetValue(__instance),chat)||chat.GetDialogueData()!=null)return;
                     var world=World();string owner=Owner(npc);
                     if(world!=null&&owner!=""&&npc.CharacterInfo!=null)
@@ -227,7 +249,7 @@ namespace Mirthwood.Echoes
                 }
                 if(mode=="interface" || (mode=="provider" && isolated!=null && isolated.PathsMatch())){
                     bool live=mode=="provider";
-                    var preview=dialogue.Preview(Server+"/api/module/probes/"+id+(live?"/talk":"/stream")+"?session="+session,report,live);
+                    var preview=dialogue.Preview(ModuleApi+"probes/"+id+(live?"/talk":"/stream")+"?session="+session,report,live);
                     while(true){
                         bool next;
                         try{next=preview.MoveNext();}catch(Exception e){Logger.LogWarning(e.GetBaseException().Message);dialogue.Close();break;}
@@ -236,8 +258,12 @@ namespace Mirthwood.Echoes
                 }
                 if(mode=="relationships"&&isolated?.TalkAddress!=null&&isolated.PathsMatch())
                     yield return dialogue.RunRelationships(report);
+                if(mode=="grouptalk"&&isolated?.PrivateDiagnostics==true&&isolated.PathsMatch())
+                    yield return dialogue.RunGroupHarness(report);
                 if(mode=="interactions"&&isolated?.TalkAddress!=null&&isolated.PathsMatch())
                     yield return dialogue.RunInteractions(report);
+                if((mode=="residentdialogue"||mode=="dialogueflow"||mode=="roleplay")&&isolated?.PrivateDiagnostics==true&&isolated.PathsMatch())
+                    yield return dialogue.RunResidentDialogue(report,mode);
                 if(mode=="quests"&&isolated?.TalkAddress!=null&&isolated.PathsMatch())
                     yield return dialogue.RunQuests(report);
                 if(mode=="socialbalance"&&isolated?.PathsMatch()==true)
@@ -290,7 +316,7 @@ namespace Mirthwood.Echoes
 
         private IEnumerator Post(string route, string data, Action<long> result = null, Action<string> success = null)
         {
-            using (var req = new UnityWebRequest(Server + "/api/module/" + route, "POST"))
+            using (var req = new UnityWebRequest(ModuleApi+route, "POST"))
             {
                 req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(data));
                 req.downloadHandler = new DownloadHandlerBuffer();

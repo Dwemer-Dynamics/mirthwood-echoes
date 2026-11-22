@@ -58,9 +58,8 @@ app.Use(async (ctx,next)=>{
     }
 });
 app.UseDefaultFiles();app.UseStaticFiles();
-if(Guid.TryParseExact(Environment.GetEnvironmentVariable("MIRTHWOOD_ECHOES_HARNESS_ID"),"N",out var testRun)
-    && app.Services.GetRequiredService<NpgsqlDataSource>().ConnectionString.Contains("Database=echoes_talk_"+testRun.ToString("N"),StringComparison.OrdinalIgnoreCase))
-    app.MapGet("/api/test-session",()=>new{run=testRun.ToString("N")});
+if(app.Services.GetRequiredService<Database>().HarnessRun is {} testRun)
+    app.MapGet("/api/test-session",()=>new{run=testRun});
 app.MapGet("/api/health",(ModuleInstaller installer)=>new{
     application=ModIdentity.Id, displayName=ModIdentity.Name,
     version=ModIdentity.Version, module=installer.Status
@@ -99,12 +98,15 @@ app.MapPost("/api/module/event",async(JsonObject input,Conversation dialogue)=>{
 app.MapPost("/api/module/cue",async(JsonObject input,Conversation dialogue)=>{await dialogue.ObserveCue(input);return Results.Ok();});
 app.MapPost("/api/dialogue",(JsonObject input,Conversation dialogue,HttpContext ctx)=>dialogue.Speak(input,ctx));
 app.MapPost("/api/dialogue/prepare",(JsonObject input,Conversation dialogue)=>dialogue.PrepareTalk(input));
+app.MapPost("/api/dialogue/group",(JsonObject input,Conversation dialogue,CancellationToken ct)=>dialogue.GroupReply(input,ct));
+app.MapPost("/api/dialogue/address",(JsonObject input,Conversation dialogue,CancellationToken ct)=>dialogue.AddressPlayer(input,ct));
 app.MapPost("/api/dialogue/finish",(JsonObject input,Conversation dialogue)=>dialogue.FinishTalk(input));
 app.MapPost("/api/quests/turn",(JsonObject input,Conversation dialogue)=>dialogue.QuestTurn(input));
 app.MapPost("/api/quests/finish",(JsonObject input,Conversation dialogue)=>dialogue.FinishQuest(input));
 var character=app.MapGroup("/api/saves/{c}/characters/{a}");
 character.MapGet("/profile",(string c,string a,CharacterJournal journal)=>journal.Profile(c,a));
 character.MapGet("/history/{view}",(string c,string a,string view,string? before,CharacterJournal journal,Conversation clock)=>journal.Entries(c,a,view,before,clock.LiveDay(c)));
+character.MapGet("/history/{view}/{entry}",(string c,string a,string view,string entry,CharacterJournal journal,Conversation clock)=>journal.HistoryDetail(c,a,view,entry,clock.LiveDay(c)));
 character.MapGet("/sources/{type}/{id:guid}",(string c,string a,string type,Guid id,CharacterJournal journal,Conversation clock)=>journal.Source(c,a,type,id,clock.LiveDay(c)));
 character.MapGet("/personality",async(string c,string a,CharacterJournal journal,Conversation clock,NativeProfile native)=>{
     var actor=await journal.Actor(c,a);return await journal.Growth(c,a,clock.LiveDay(c)??actor.I("day"),native.Describe(actor));});

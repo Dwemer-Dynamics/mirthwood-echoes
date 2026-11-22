@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using HarmonyLib;
 using Newtonsoft.Json.Linq;
@@ -48,7 +49,7 @@ namespace Mirthwood.Echoes
         NativeSocialTurn(PlayerChat player,NPCChatController npc,float previousRun,int minimumCostPercent)
         {this.player=player;this.npc=npc;this.previousRun=previousRun;this.minimumCostPercent=minimumCostPercent;}
 
-        public static TalkResult Play(PlayerChat player,NPCChatController npc,DnaData.Dna action,float previousRun,int minimumCostPercent)
+        public static TalkResult Play(PlayerChat player,NPCChatController npc,DnaData.Dna action,float previousRun,int minimumCostPercent,JObject returnCues=null)
         {
             if(active!=null)throw new InvalidOperationException("A native Talk exchange is already in progress.");
             var turn=new NativeSocialTurn(player,npc,previousRun,minimumCostPercent);
@@ -60,7 +61,8 @@ namespace Mirthwood.Echoes
                 FinishCard(turn.receive);
                 if(!turn.answered)throw new InvalidOperationException("Mirthwood did not return a Talk decision.");
                 float score=(float)LastScore.GetValue(npc);
-                var handoff=new JObject{["kind"]=turn.next==null?"ended":"followup",["cue"]=turn.Cue()};
+                string cue=turn.next==null?Describe(npc,null,null):(string)returnCues?[turn.next.name]??Describe(npc,turn.next,null);
+                var handoff=new JObject{["kind"]=turn.next==null?"ended":"followup",["cue"]=cue};
                 if(turn.next!=null)handoff["action"]=turn.next.name;
                 return new TalkResult(score>0?"warm":score<0?"cool":"neutral",handoff,turn.next==null?0:turn.positiveRun);
             }finally{active=null;}
@@ -90,13 +92,22 @@ namespace Mirthwood.Echoes
         static void ReadReturn(PlayerChat __instance,ChatController other,DnaData.Dna action,bool forceNoResponse,ref IEnumerator __result)
         {
             if(active!=null&&__instance==active.player&&other==active.npc){active.answered=true;active.next=action;return;}
-            if(!Plugin.ReplacesTalk||forceNoResponse||!(other?.Character is NPCController resident))return;
-            // The stock incoming-card coroutine closes quick actions and opens the response deck.
-            // Keep the resident's chosen subject available for the player's next voluntary Talk.
-            if(action!=null&&ReferenceEquals(Plugin.Selected.GetValue(__instance),other))
-                NativeCues.Recent(resident,null,"card","I brought up "+action.DnaNameLocalized+" with the player. The card supplied no spoken quotation.");
+            if(!Plugin.ReplacesTalk||forceNoResponse||__instance!=PlayerChatForLocalPlayer()||
+               !(other is NPCChatController brain)||!(brain.Character is NPCController resident))return;
+            Plugin.AddressPlayer(resident,action?.name??"Farewell",Describe(brain,action,new System.Random(Guid.NewGuid().GetHashCode())));
             __result=Empty();
         }
+        [HarmonyPostfix,HarmonyPatch(typeof(PlayerChat),"ReceiveChat",typeof(SocialActions.Action),typeof(ChatController))]
+        static void ReadPassingAction(PlayerChat __instance,SocialActions.Action action,ChatController other)
+        {
+            if(!Plugin.ReplacesTalk||action==null||__instance!=PlayerChatForLocalPlayer()||!(other is NPCChatController brain)||
+               !(brain.Character is NPCController resident))return;
+            var label=action.type.ToString();
+            var card=brain.dnaData?.chatActions?.FirstOrDefault(item=>item!=null&&
+                string.Equals(item.name.Replace(" ",""),label,StringComparison.OrdinalIgnoreCase));
+            Plugin.AddressPlayer(resident,label,card==null?label:Describe(brain,card,new System.Random(Guid.NewGuid().GetHashCode())));
+        }
+        static PlayerChat PlayerChatForLocalPlayer()=>_Mirthwood.Scripts.Demo.Combat.PlayerCharacterController.Instance?.GetComponent<PlayerChat>();
         [HarmonyPrefix,HarmonyPatch(typeof(NPCChatController),"DecreaseSocialNeed")]
         static void BeforeSocialCost(NPCChatController __instance,out float __state)
         {
@@ -127,13 +138,26 @@ namespace Mirthwood.Echoes
         static bool CloseNativePrompt(PlayerChat __instance)=>active==null||__instance!=active.player||__instance.chatTarget!=active.npc;
         [HarmonyPrefix,HarmonyPatch(typeof(ChatMenuController),"OnChatStart")]
         static bool ShowNativeCard()=>!Plugin.ReplacesTalk;
-        string Cue()
+        // Echoes picks the descriptive variant. Mirthwood still selects its actual card and spends desire once.
+        internal static JObject ReturnCues(NPCController resident,string turnId)
+        {
+            var brain=resident.GetComponent<NPCChatController>();
+            if(brain?.dnaData?.chatActions==null)return null;
+            var random=new System.Random(Guid.Parse(turnId).GetHashCode());
+            var cues=new JObject();
+            foreach(var card in brain.dnaData.chatActions.Where(card=>card!=null).OrderBy(card=>card.name,StringComparer.Ordinal)){
+                if(!string.IsNullOrWhiteSpace(card.name)&&cues[card.name]==null)cues[card.name]=Describe(brain,card,random);
+            }
+            return cues;
+        }
+        static string Describe(NPCChatController npc,DnaData.Dna next,System.Random random)
         {
             string name=npc.Character.CharacterInfo.name;
             if(topicText==null && Resources.Load<TextAsset>("Chat Topics") is TextAsset asset)
                 topicText=CSVReaderString.SplitCsvRowsDictionary(asset.text);
             if(topicText!=null&&topicText.TryGetValue(next?.name??"Ignore",out var row)&&row.Length>2){
-                string fixedPart=row[1],variable=row[UnityEngine.Random.Range(2,row.Length)];
+                var variants=row.Skip(2).Where(s=>!string.IsNullOrWhiteSpace(s)).ToArray();
+                string fixedPart=row[1],variable=variants.Length==0?"":variants[random==null?UnityEngine.Random.Range(0,variants.Length):random.Next(variants.Length)];
                 var words=new List<string>();
                 if(!string.IsNullOrWhiteSpace(fixedPart))words.Add(LocalizationManager.GetLocalizedStringUI(fixedPart));
                 if(!string.IsNullOrWhiteSpace(variable))words.Add(LocalizationManager.GetLocalizedStringUI(variable));

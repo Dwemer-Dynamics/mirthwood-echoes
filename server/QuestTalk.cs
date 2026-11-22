@@ -39,10 +39,11 @@ public sealed partial class Conversation
             ["terms"]=n.Required("terms",4000),["objectives"]=objectives.DeepClone()};
     }
 
-    Task<JsonNode?> QuestRow(Guid id,string c,string a)=>db.One("""
-        SELECT jsonb_build_object('state',state,'words',player_text,'packet',quest_offer,'reply',reply)::text
+    Task<JsonNode?> QuestRow(Guid id,string c,string a,string? words=null)=>db.One("""
+        SELECT jsonb_build_object('state',CASE WHEN dialogue_expired THEN 'expired' ELSE state END,'words',player_text,
+            'sameWords',request_digest=sha256(convert_to(jsonb_build_array(@words::text,NULL)::text,'UTF8')),'packet',quest_offer,'reply',reply)::text
         FROM turns WHERE id=@id AND campaign=@c AND actor=@a AND quest_offer IS NOT NULL
-        """,("id",id),("c",c),("a",a));
+        """,("id",id),("c",c),("a",a),("words",words));
 
     static JsonObject QuestResult(JsonNode row)
     {
@@ -66,10 +67,10 @@ public sealed partial class Conversation
 
         async Task<JsonNode?> Existing()
         {
-            var saved=await QuestRow(id,c,a);
+            var saved=await QuestRow(id,c,a,words);
             if(saved==null)return null;
             var p=saved["packet"]!;
-            if(saved.S("words")!=words||p.S("session")!=session.ToString()||p.S("key")!=key||
+            if((saved.S("state")=="expired"?saved["sameWords"]?.GetValue<bool>()!=true:saved.S("words")!=words)||p.S("session")!=session.ToString()||p.S("key")!=key||
                p.S("parent")!=(opening?"":parent.ToString())||opening&&!JsonNode.DeepEquals(terms,p["offer"]))
                 throw new UserError("This request already belongs to different words or a different offer.",409);
             return QuestResult(saved);
@@ -102,7 +103,7 @@ public sealed partial class Conversation
             var context=new JsonObject{["resident"]=profile,["nativeOffer"]=terms!.DeepClone(),["opening"]=opening,
                 ["alreadyRefusedToChangeTerms"]=warned,["previousNpcLine"]=previous,["latestPlayerSpeech"]=speech};
             var wire=new StringBuilder();
-            var model=await providers.Generate(options with {ReplyTokens=Math.Max(options.ReplyTokens,220)},QuestInstructions,context.ToJsonString(),part=>{
+            var model=await providers.Generate(options with {ReplyTokens=Math.Max(options.ReplyTokens,384)},QuestInstructions+"\n"+CharacterKnowledge.Instructions,context.ToJsonString(),part=>{
                 if(wire.Length+part.Length>6000)throw new UserError("Quest response exceeded its limit.",502);
                 wire.Append(part);return Task.CompletedTask;
             },CancellationToken.None);
@@ -126,6 +127,7 @@ public sealed partial class Conversation
             }
             string action=intent switch{"accept"=>"accept","decline"=>"decline","counter" when warned=>"decline",_=>"continue"};
             packet["intent"]=intent;packet["action"]=action;packet["line"]=line;packet["warned"]=warned||intent=="counter";
+            packet["learned"]=CharacterKnowledge.Hints(result["learned"]);
             packet["provider"]=options.Provider;packet["model"]=model;
             await db.Run("UPDATE turns SET quest_offer=@q::jsonb,state='ready',first_ms=@ms WHERE id=@id AND state='pending'",
                 ("q",packet.ToJsonString()),("ms",(int)watch.ElapsedMilliseconds),("id",id));
@@ -140,14 +142,22 @@ public sealed partial class Conversation
         var id=n.Id();string c=n.Required("campaign",64),a=n.Required("actor",64),action=n.Required("action",10);
         if(!Guid.TryParse(n.S("session"),out var session)||action is not ("accept" or "decline" or "continue"))throw new UserError("Invalid quest acknowledgement.");
         string key=n.Required("key",160);
-        await db.Run("""
-            UPDATE turns SET state='complete',reply=quest_offer->>'line',
+        await using var conn=await db.Source.OpenConnectionAsync();
+        await using var tx=await conn.BeginTransactionAsync();
+        await using var complete=Database.Command(conn,"""
+            UPDATE turns SET state='complete',reply=quest_offer->>'line',knowledge_reviewed=true,
                 total_ms=least(2147483647,extract(epoch FROM (clock_timestamp()-started))*1000)::int
             WHERE id=@id AND campaign=@c AND actor=@a AND state='ready' AND quest_offer->>'session'=@session
-                AND quest_offer->>'key'=@key AND quest_offer->>'action'=@action
+                AND quest_offer->>'key'=@key AND quest_offer->>'action'=@action RETURNING quest_offer::text
             """,("id",id),("c",c),("a",a),("session",session.ToString()),("key",key),("action",action));
+        if(await complete.ExecuteScalarAsync() is string completed){
+            await CharacterKnowledge.Private(conn,c,a,id,CharacterKnowledge.Hints(JsonNode.Parse(completed)?["learned"]));
+            await using var clean=Database.Command(conn,"UPDATE turns SET quest_offer=quest_offer-'learned' WHERE id=@id",("id",id));
+            await clean.ExecuteNonQueryAsync();
+        }
+        await tx.CommitAsync();
         var row=await QuestRow(id,c,a);var p=row?["packet"];
-        if(row.S("state")!="complete"||p.S("session")!=session.ToString()||p.S("key")!=key||p.S("action")!=action)
+        if(row.S("state") is not ("complete" or "expired")||p.S("session")!=session.ToString()||p.S("key")!=key||p.S("action")!=action)
             throw new UserError("Quest acknowledgement does not match the prepared turn.",409);
         return QuestResult(row!);
     }

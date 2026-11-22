@@ -25,25 +25,23 @@ namespace Mirthwood.Echoes
         }
         void PlayerLine(string id,string text)
         {
+            var bubble=playerBubble;
             speech.Say(id+"/player",_Mirthwood.Scripts.Demo.Combat.PlayerCharacterController.Instance,text,
-                (value,partial)=>playerBubble.Show(value,partial));
+                (heard,partial)=>{if(playerBubble==bubble&&bubble.Visible&&!bubble.Editing)bubble.ShowSpoken(text,heard,partial);},false);
         }
-        void DisplayTalk(string id,string reply,JObject handoff)
+        void DisplayTalk(string id,string reply,JObject handoff,bool playerLeaves=false)
         {
-            string kind=(string)handoff?["kind"],cue=(string)handoff?["cue"];
-            conversationOver=kind=="ended"||kind=="unknown";
-            if(!string.IsNullOrWhiteSpace(cue))reply+="\n*"+cue.Replace("*","")+"*";
+            string kind=(string)handoff?["kind"];
+            conversationOver=playerLeaves||kind=="ended"||kind=="unknown";
             phase=Phase.Reading;phaseFrame=Time.frameCount;
-            speech.Say(id+"/npc",resident,reply,(value,partial)=>{
-                playerBubble.SetVisible(false);npcBubble.Show(value,partial);ReadingHint();
-            });
+            speech.Say(id+"/npc",resident,reply,(heard,partial)=>ShowResidentReply(heard,partial,reply),showPlaceholder:false);
             ReadingHint();
         }
         IEnumerator NativeTurn(string message,int epoch)
         {
             if(!SameResident(epoch)){if(epoch==generation)Close();yield break;}
             var outbox=exchange;JObject turn=null;
-            try{turn=outbox.Accept(message,positiveRun,NativeCues.Binding(freshCue,resident),resident);freshCue=null;}catch(Exception){Retry(message,"Could not save this exchange. Enter to retry.");}
+            try{turn=outbox.Accept(message,positiveRun,NativeCues.Binding(freshCue,resident,conversationId),resident);freshCue=null;}catch(Exception){Retry(message,"Could not save this exchange. Enter to retry.");}
             if(turn==null)yield break;
             string id=(string)turn["id"],original=(string)turn["text"];
             if(original!=message){Retry(original,"An earlier exchange is pending. Enter to recover your original words.");yield break;}
@@ -53,7 +51,7 @@ namespace Mirthwood.Echoes
             while(SameResident(epoch)){
                 var values=resident.CharacterInfo.personality?.values;
                 var payload=new {id,campaign,actor,text=message,context=turn["context"],reaction=result?.Reaction,handoff=result?.Handoff,supportsSpokenFarewells=true,
-                    playerImpression=stage=="prepare"?turn["playerImpression"]:null,
+                    returnCues=stage=="prepare"?turn["returnCues"]:null,playerImpression=stage=="prepare"?turn["playerImpression"]:null,
                     socialDesire=stage=="prepare"&&values?.Length>5?(float?)values[5]:null,
                     liveTopicFit=stage=="prepare"?TopicFit(resident,true):null};
                 JObject answer=null;
@@ -71,9 +69,12 @@ namespace Mirthwood.Echoes
                     case "pending":
                         if(Time.realtimeSinceStartup>deadline){Retry(message,"Still waiting. Enter to check this exchange.");yield break;}
                         yield return new WaitForSecondsRealtime(.4f);continue;
+                    case "expired":
+                        try{positiveRun=outbox.Acknowledge(id);}catch(Exception){RecoverTalk(message,"Enter to close the saved exchange.");yield break;}
+                        Close();yield break;
                     case "complete":
                         try{positiveRun=outbox.Acknowledge(id);}catch(Exception){RecoverTalk(message,"Your reply was saved. Enter to recover it.");yield break;}
-                        busy=false;accepted=null;DisplayTalk(id,(string)answer["reply"],answer["handoff"] as JObject);yield break;
+                        busy=false;accepted=null;DisplayTalk(id,(string)answer["reply"],answer["handoff"] as JObject,(bool?)answer["playerLeaves"]==true);yield break;
                     case "failed":case "interrupted":
                         try{outbox.Acknowledge(id);}catch(Exception){Retry(message,"Could not close the interrupted exchange.");yield break;}
                         Retry(message,((string)answer["error"]??"The reply was interrupted.")+" Enter to start a new exchange.");yield break;
@@ -84,8 +85,11 @@ namespace Mirthwood.Echoes
                             foreach(string key in new[]{"warm","neutral","cool"})
                                 if(string.IsNullOrWhiteSpace((string)choices[key])||string.IsNullOrWhiteSpace((string)endings[key]))throw new FormatException();
                             result=outbox.Apply(id,(string)answer["topic"],resident,(int?)answer["positiveDesireCostPercent"]??100);
-                            var lines=(string)result.Handoff?["kind"]=="ended"?endings:choices;
-                            DisplayTalk(id,(string)lines[result.Reaction=="unknown"?"neutral":result.Reaction],result.Handoff);stage="finish";
+                            string card=(string)result.Handoff?["action"];
+                            var cardChoices=answer["cardChoices"] as JObject;
+                            var lines=(string)result.Handoff?["kind"]=="ended"?endings:
+                                (card==null?null:cardChoices?[card] as JObject)??choices;
+                            DisplayTalk(id,(string)lines[result.Reaction=="unknown"?"neutral":result.Reaction],result.Handoff,(bool?)answer["playerLeaves"]==true);stage="finish";
                         }catch(Exception){Retry(message,"Could not confirm the native reaction. Enter to recover this exchange.");yield break;}
                         if(IsolatedGameRun.Active?.TalkAddress!=null&&interruptBeforeFinish){
                             interruptBeforeFinish=false;yield return new WaitForEndOfFrame();

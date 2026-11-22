@@ -6,6 +6,15 @@ public sealed record RuntimePaths(string State, string Game, string Saves);
 public sealed class Database(NpgsqlDataSource source)
 {
     public NpgsqlDataSource Source => source;
+    internal string? HarnessRun { get; } = PrivateRun(source);
+    static string? PrivateRun(NpgsqlDataSource source)
+    {
+        string? run = Environment.GetEnvironmentVariable("MIRTHWOOD_ECHOES_HARNESS_ID");
+        return Guid.TryParseExact(run,"N",out var id) &&
+            new NpgsqlConnectionStringBuilder(source.ConnectionString).Database == "echoes_talk_" + id.ToString("N")
+            ? id.ToString("N") : null;
+    }
+
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     public async Task Initialize()
     {
@@ -65,7 +74,12 @@ public sealed class Database(NpgsqlDataSource source)
                 PRIMARY KEY(campaign,actor,source_type,source_id), FOREIGN KEY(campaign,actor) REFERENCES actors(campaign,key));
             UPDATE turns SET state='interrupted' WHERE state='pending';
             """);
-        cmd.CommandText += CueHistory.Schema;
+        cmd.CommandText += CueHistory.Schema + CharacterKnowledge.Schema + DialogueRetention.Schema + DialogueRecaps.Schema;
+        cmd.CommandText += """
+            CREATE TABLE IF NOT EXISTS resident_recaps(
+                campaign text,actor text,kind text,entry text,fingerprint text,body text NOT NULL,
+                PRIMARY KEY(campaign,actor,kind,entry,fingerprint),FOREIGN KEY(campaign,actor) REFERENCES actors(campaign,key));
+            """;
         await cmd.ExecuteNonQueryAsync();
     }
 

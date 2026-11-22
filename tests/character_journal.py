@@ -14,17 +14,81 @@ import urllib.error
 import urllib.request
 import uuid
 from foundation_smoke import fixture_save, free_port
+from dialogue_memory import FISH_STORY, FISH_FOLLOWUP, FISH_CALLBACK, REPAIR_CALLBACK, check as check_dialogue_memory
 
 class Writer(BaseHTTPRequestHandler):
     calls=[]
+    proposal_waiting=threading.Event()
+    release_proposal=threading.Event()
     def log_message(self,*args):pass
     def do_POST(self):
         packet=json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.calls.append(packet)
+        if packet["model"] == "offline-night":
+            self.send_error(503,"The fixture memory model is offline")
+            return
         self.send_response(200);self.send_header("Content-Type","application/json");self.end_headers()
         player=packet["messages"][1]["content"]
         marks=[{"speaker":"player","quote":player}] if player=="I promise to deliver flour tomorrow." else []
         text="The miller learned the rhythm of the mill in Brightoak." if packet["model"]=="historian" else json.dumps({"reply":"Welcome back.","commitments":marks})
+        if "Mirthwood quest" in packet["messages"][0]["content"]:
+            offer=json.loads(player)
+            text=json.dumps({"intent":"offer","evidence":"","reply":"Have you seen the copper whistle?"} if offer["opening"] else
+                            {"intent":"accept","evidence":"I accept.","reply":"Thank you."})
+        elif "Summarize one day of spoken dialogue" in packet["messages"][0]["content"]:
+            rows=json.loads(player)
+            highlights=[]
+            for row in rows:
+                if row["words"] in ("Mira, said Jo, took the ring.", "I sold the foal."):
+                    changed = "Reported Mira said Jo took the ring." if "Jo" in row["words"] else "Suggested they sold the foal."
+                    highlights.append(dict(i=row["i"],quote=row["words"],summary=changed,topics=[]))
+                if "blue goblet" in row["words"]:
+                    highlights.append(dict(i=row["i"],quote=row["words"],summary="Mentioned a blue goblet at the bell tower.",
+                                           topics=["glassmaking","stemware"]))
+                if "obsidian lens" in row["words"]:
+                    highlights.append(dict(i=row["i"],quote=row["words"],summary="Reported that they may have left an obsidian lens beneath Drift Hall.",
+                                           topics=["optics"]))
+                if "landed a speckled trout" in row["words"]:
+                    highlights.append(dict(i=row["i"],quote=row["words"],summary="Reported a speckled trout landed beneath the alder footbridge.",
+                                           topics=["angling"]))
+            text=json.dumps(highlights)
+        elif player in (FISH_STORY, FISH_FOLLOWUP, FISH_CALLBACK, REPAIR_CALLBACK):
+            context=json.JSONDecoder().raw_decode(packet["messages"][0]["content"].split("\nRecall: ",1)[1])[0]
+            note=context.get("conversationRecaps",[{}])[0].get("note","")
+            if player==FISH_STORY:
+                response="That speckled trout under the alder footbridge was a fine catch. Will you go angling there again?"
+            elif player==FISH_FOLLOWUP:
+                response="I'd return to the alder footbridge. I hope the river is quiet for you."
+            else:
+                # Echo exactly the first note received so the delivered fixture answer exposes selection.
+                response=note or "I don't remember."
+            text=json.dumps(dict(topic="Small Talk",flow="follow",warm=response,neutral=response,cool=response,commitments=[]))
+        elif "heardInOrder" in player:
+            text=json.dumps({"words":"Who told you about the mill?","to":"player","ownTopic":"Intellectual",
+                             "receivedTopic":"Small Talk","farewell":"Tell me about it another day."})
+        elif player in ("Could I ask about the allotment?","Rye bread.","Green.","I promise to mend the green banner tomorrow."):
+            response={"Could I ask about the allotment?":"The copper thimble fell off the gate. What is your favorite food?",
+                      "Rye bread.":"Sounds good. What is your favorite color?","Green.":"Good to know.",
+                      "I promise to mend the green banner tomorrow.":"Thank you."}[player]
+            marks=[{"speaker":"player","quote":player}] if "promise" in player else []
+            text=json.dumps(dict(topic="Small Talk",warm=response,neutral=response,cool=response,commitments=marks))
+        elif player in ("Did you hear my offer?","Would you do that for me?"):
+            if player=="Would you do that for me?":
+                self.proposal_waiting.set()
+                assert self.release_proposal.wait(12)
+                proposal="Could you bring the copper thimble to the mill?"
+            else:proposal="Could you bring a ribbon to the fair?"
+            text=json.dumps(dict(topic="Small Talk",warm="Yes, I will.",neutral="Yes, I will.",cool="Yes, I will.",
+                                 commitments=[dict(speaker="npc",quote="Yes, I will.",proposal=proposal)]))
+        elif player=="Do you still keep a stone from the river?":
+            text=json.dumps({"topic":"Small Talk","warm":"My favorite color is ruby.","neutral":"I do.","cool":"Sometimes.","commitments":[],
+                             "learned":[{"speaker":"npc","subject":"self","facet":"favorite color","value":"ruby","quote":"My favorite color is ruby."}]})
+        elif player.startswith("Do you still keep"):
+            text=json.dumps({"topic":"Small Talk","warm":"I do.","neutral":"I do.","cool":"I do.","commitments":[]})
+        elif "in all three alternatives" in packet["messages"][0]["content"]:
+            context = json.JSONDecoder().raw_decode(packet["messages"][0]["content"].split("\nRecall: ",1)[1])[0]
+            first = (context.get("conversationRecaps") or [{}])[0].get("note", "I see.")
+            text=json.dumps(dict(topic="Small Talk",flow="follow",warm=first,neutral=first,cool=first,commitments=[]))
         self.wfile.write(json.dumps({"choices":[{"message":{"content":text}}]}).encode())
 
 def main(package,game_assets):
@@ -57,6 +121,10 @@ def main(package,game_assets):
                 component["data"]=json.dumps({"dayNumber":4,"yearNumber":1})
         second.write_text(json.dumps(later))
         data=json.loads(file.read_text())
+        third=dict(next(row for row in data["saveData"] if row["guid"].startswith("East-NPC-NPCController")))
+        third["guid"]=third["guid"].replace("East-NPC","South-NPC")
+        third_info=json.loads(third["data"]);third_info["characterInfo"].update(id="third",name="Listener")
+        third["data"]=json.dumps(third_info);data["saveData"].append(third)
         for row in data["saveData"]:
             if "NPCController" in row["guid"]:
                 payload=json.loads(row["data"]);info=payload["characterInfo"]
@@ -73,8 +141,10 @@ def main(package,game_assets):
                  MIRTHWOOD_ECHOES_PORT=str(port),Logging__LogLevel__Default="Warning")
         app=package/"app"
         with (tmp/"test.log").open("w+") as log:
-            proc=subprocess.Popen(["dotnet",str(app/"Mirthwood.Echoes.Server.dll")],cwd=app,env=env,user=account.pw_uid,group=account.pw_gid,
-                                  extra_groups=[],stdout=log,stderr=log)
+            def start():
+                return subprocess.Popen(["dotnet",str(app/"Mirthwood.Echoes.Server.dll")],cwd=app,env=env,user=account.pw_uid,group=account.pw_gid,
+                                        extra_groups=[],stdout=log,stderr=log)
+            proc=start()
             try:
                 for _ in range(80):
                     try:
@@ -124,10 +194,12 @@ def main(package,game_assets):
                 assert api(left+"/history/memories")["items"]==mem and not api(right+"/history/memories")["items"]
                 assert not api("saves/"+other+"/characters/"+a+"/history/interactions")["items"]
                 calls=len(Writer.calls);assert api(left+"/history/conversations")["items"][0]["reply"]=="Welcome back." and calls==len(Writer.calls)
-                promise=api(left+"/history/commitments")["items"][0];assert promise["due"]==11
+                def flour_promise():return next(item for item in api(left+"/history/commitments")["items"] if item["kind"]=="promise")
+                assert any(item["kind"]=="marked" for item in api(left+"/history/commitments")["items"])
+                promise=flour_promise();assert promise["due"]==11
                 api("commitments/"+promise["id"]+"/fulfill",{"campaign":campaign,"actor":a},expected=204)
-                assert api(left+"/history/commitments")["items"][0]["status"]=="fulfilled";beat(13)
-                assert api(left+"/history/commitments")["items"][0]["status"]=="open"
+                assert flour_promise()["status"]=="fulfilled";beat(13)
+                assert flour_promise()["status"]=="open"
                 print("PASS timelines, attribution, lasting promises, deterministic compaction, automatic and marked personality development, duplicate delivery, rewind and actor/campaign isolation.",flush=True)
                 work_ids={event(13,"work","Hired-work fixture "+str(i)+".") for i in range(34)}
                 page=api(left+"/history/interactions");assert len(page["items"])==30 and page["next"]
@@ -144,8 +216,40 @@ def main(package,game_assets):
                 assert api(left+"/sources/event/"+sources[0])["description"].startswith("Hired-work fixture")
                 api(right+"/sources/turn/"+turn,expected=404);beat(8);api(left+"/sources/turn/"+turn,expected=404)
                 beat(17);api("dialogue",{"campaign":campaign,"actor":a,"text":"We have a deal.","commitment":True,"id":str(uuid.uuid4())})
-                assert all(x["statement"]!="We have a deal." for x in api(left+"/history/commitments")["items"])
+                assert all(x.get("statement")!="We have a deal." for x in api(left+"/history/commitments")["items"])
                 print("PASS every source on a busy day survives compaction, full source text remains actor/day scoped, and client flags cannot create a promise.")
+                from group_memory import check_memories
+                third_key=next(x["key"] for x in roster if x["owner"]=="South-NPC")
+                session=check_memories(api,beat,event,world,campaign,[a,b,third_key],turn,Writer.calls)
+                data["saveData"].append({"guid":"SVar-mirthwood.echoes.history","scene":"Global","data":world["cueHead"]})
+                clock=next(r for r in data["saveData"] if "DayNightCycle" in r["guid"])
+                clock["data"]=json.dumps({"dayNumber":world["day"],"yearNumber":0})
+                file.write_text(json.dumps(data));api("saves/refresh",{})
+                before=api(right+"/history/sessions/"+session)
+                receipts=[]
+                for attempt in range(2):
+                    proc.terminate();proc.wait(timeout=10);proc=start()
+                    for _ in range(100):
+                        count=pg("psql","-XAt","-d",db,"-c","SELECT count(*) FROM resident_recaps WHERE kind='group'")
+                        try:
+                            if int(count)>=3 and api(right+"/history/sessions/"+session)==before:break
+                        except OSError:pass
+                        time.sleep(.15)
+                    else:raise AssertionError("The background worker did not persist the three audience recaps")
+                    receipts.append(pg("psql","-XAt","-d",db,"-c","SELECT kind,entry,fingerprint,body FROM resident_recaps ORDER BY actor,kind,entry,fingerprint"))
+                assert receipts[0]==receipts[1] and "daily|" in receipts[0]
+                pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='Wren' WHERE player_name='Test player'")
+                renamed=next(item for item in api(right+"/history/sessions")["items"] if item["id"]==session)
+                assert "Wren — " in renamed["body"] and "Test player — " not in renamed["body"]
+                pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='' WHERE player_name='Wren'")
+                assert any(row.get("to")=="Player" for row in api(left+"/history/sessions/"+turn))
+                pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='Test player' WHERE player_name=''")
+                print("PASS two service restarts preserve the exact per-audience recaps and daily sources.",flush=True)
+                def memory_model(model):
+                    api("providers/openai_compatible",dict(defaultModel="everyday",memory=model,
+                        endpoint=f"http://127.0.0.1:{writer.server_port}/v1/chat/completions"),"PUT",204)
+                check_dialogue_memory(api,beat,world,campaign,[a,b,third_key],lambda q:pg("psql","-XAt","-d",db,"-c",q),Writer.calls,
+                                      Writer.proposal_waiting,Writer.release_proposal,memory_model)
                 # A controller reused by a different native ID must start a separate journal.
                 for r in data["saveData"]:
                     if r["guid"].startswith("East-NPC-NPCController"):
