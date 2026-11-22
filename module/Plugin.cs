@@ -31,6 +31,7 @@ namespace Mirthwood.Echoes
         private readonly Harmony hooks = new Harmony(Id);
         private static Plugin instance;
         internal static bool ReplacesTalk=>instance&&instance.isActiveAndEnabled&&!NativeConversation.UsingStockChat;
+        internal static bool CanObserveApproach=>ReplacesTalk && instance.dialogue?.Visible==false && !instance.dialogue.GroupActive;
         private readonly string session = Guid.NewGuid().ToString();
         private int dropped;
         private int hookCount;
@@ -74,6 +75,9 @@ namespace Mirthwood.Echoes
             InteractionHooks.Install(hooks,Logger);
             if(InteractionHooks.Compatible){
                 WorldCalendar.Install(hooks);
+                hooks.CreateClassProcessor(typeof(WorldAwareness.PlayerContact)).Patch();
+                hooks.CreateClassProcessor(typeof(WorldAwareness.PlayerLeft)).Patch();
+                hooks.CreateClassProcessor(typeof(WorldAwareness.BeforeSocialStop)).Patch();
                 hooks.CreateClassProcessor(typeof(GroupGathering.Routine)).Patch();
                 hooks.CreateClassProcessor(typeof(GroupGathering.Movement)).Patch();
             }
@@ -202,10 +206,10 @@ namespace Mirthwood.Echoes
         }
         internal static readonly System.Reflection.FieldInfo Selected=AccessTools.Field(typeof(PlayerChat),"SelectedNPC");
         [HarmonyPatch(typeof(SaveMaster),nameof(SaveMaster.SyncLoad))]
-        static class LoadHook {static void Prefix(){NativeCues.Load();InteractionHooks.Reset();QuestPanel.Close();instance?.dialogue?.Close();if(instance!=null)instance.nextBeat=0;}}
+        static class LoadHook {static void Prefix(){NativeCues.Load();WorldAwareness.ClearApproaches();InteractionHooks.Reset();QuestPanel.Close();instance?.dialogue?.Close();if(instance!=null)instance.nextBeat=0;}}
 
         private void LateUpdate(){dialogue?.Follow();}
-        private void OnSceneChanged(Scene oldScene, Scene newScene) { NativeCues.Clear();InteractionHooks.Reset();QuestPanel.Close();dialogue?.Close(); }
+        private void OnSceneChanged(Scene oldScene, Scene newScene) { NativeCues.Clear();WorldAwareness.ClearApproaches();InteractionHooks.Reset();QuestPanel.Close();dialogue?.Close(); }
         private void OnHeartbeat(string body)
         {
             if (probing != null || string.IsNullOrEmpty(body)) return;

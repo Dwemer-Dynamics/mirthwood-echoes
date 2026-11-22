@@ -410,32 +410,94 @@ namespace Mirthwood.Echoes
             return Compass[(Mathf.RoundToInt(Mathf.Atan2(delta.x, delta.y) / (Mathf.PI / 4)) + 8) % 8];
         }
 
-        internal static string InterruptedActivity(NPCController speaker)
+        static ITask RunningLeaf(NPCController speaker, out BehaviorTree tree)
         {
-            if (!Living(speaker) || speaker.DataContainer.data.InCombat || !(ActiveTree?.GetValue(speaker) is BehaviorTree tree) ||
+            tree = null;
+            if (!Living(speaker) || speaker.DataContainer.data.InCombat || (tree = ActiveTree?.GetValue(speaker) as BehaviorTree) == null ||
                 !ReferenceEquals(tree, RoutineTree?.GetValue(speaker))) return null;
             // ActiveTasks contains running tasks. The NPC's displayed debug status is sampled
             // every 60 frames and includes completed work, so it cannot prove an interruption.
             var leaves = tree.ActiveTasks.Where(t => t.Enabled && t.LastStatus == TaskStatus.Continue &&
                 t.Owner == speaker.gameObject && (t.Children == null || t.Children.Count == 0)).Take(2).ToArray();
-            if (leaves.Length != 1) return null;
-            var leaf = leaves[0];
+            return leaves.Length == 1 ? leaves[0] : null;
+        }
+
+        static string WalkingActivity(ITask leaf)
+        {
+            switch (leaf.Name) {
+                case "Go Home": case "Walk Home": return "walking home";
+                case "Go to Tavern": return "on the way to the tavern";
+                case "Go To Work": case "Walk to job location": return "on the way to work";
+                case "Walk to tree": return "walking to a tree";
+                case "Walk to ore": return "heading to a mineral deposit";
+                case "Walk to crop": case "Walk to soil": return "heading to tend the fields";
+                case "Walk to herb": return "walking to gather herbs";
+                case "Walk to bed": return "going to bed";
+                case "Walk To Relax": return "heading to a place to rest";
+                case "Walk to dropped item": return "going to pick something up";
+                default: return "walking";
+            }
+        }
+
+        // PlayerChat can react to the player at the edge of its contact trigger. An NPC
+        // can already be standing still when the generated Talk button is used.
+        internal sealed class ApproachedWalk
+        {
+            internal readonly NPCController Speaker;
+            internal bool StoppedForChat;
+            readonly ITask leaf;
+            readonly Vector3 destination, position;
+            readonly string owner, nativeId, load;
+            readonly int scene, day;
+            readonly float at;
+
+            ApproachedWalk(NPCController speaker, ITask running, NavMeshAgent agent)
+            {
+                Speaker = speaker;
+                leaf = running;
+                destination = agent.destination;
+                position = speaker.transform.position;
+                owner = Plugin.Owner(speaker);
+                nativeId = speaker.CharacterInfo.id;
+                load = NativeCues.Session;
+                scene = speaker.gameObject.scene.handle;
+                day = Mathf.FloorToInt(DayNightCycle.Instance.Now);
+                at = Time.realtimeSinceStartup;
+            }
+
+            internal static ApproachedWalk Observe(NPCController speaker)
+            {
+                if (!Living(speaker) || !DayNightCycle.Instance || string.IsNullOrEmpty(speaker.CharacterInfo.id) || string.IsNullOrEmpty(Plugin.Owner(speaker))) return null;
+                var agent = speaker.GetComponent<NavMeshAgent>();
+                if (!agent || !agent.isActiveAndEnabled || !agent.isOnNavMesh || agent.isStopped || !agent.hasPath ||
+                    agent.pathPending || agent.pathStatus != NavMeshPathStatus.PathComplete || agent.velocity.sqrMagnitude <= .04f) return null;
+                var running = RunningLeaf(speaker, out _);
+                return running is NavigateToTarget || running is NavigateToBbTarget ? new ApproachedWalk(speaker, running, agent) : null;
+            }
+
+            internal bool Expired => !Speaker || load != NativeCues.Session || scene != Speaker.gameObject.scene.handle ||
+                !DayNightCycle.Instance || Mathf.FloorToInt(DayNightCycle.Instance.Now) != day || Time.realtimeSinceStartup - at > 6f;
+
+            internal string PausedActivity(NPCController speaker)
+            {
+                if (speaker != Speaker || Expired || !Living(speaker) || speaker.CharacterInfo.id != nativeId || Plugin.Owner(speaker) != owner ||
+                    (speaker.transform.position - position).sqrMagnitude > 9f || !ReferenceEquals(RunningLeaf(speaker, out _), leaf)) return null;
+                var agent = speaker.GetComponent<NavMeshAgent>();
+                return agent && agent.isActiveAndEnabled && agent.isOnNavMesh && agent.isStopped && agent.hasPath && !agent.pathPending &&
+                    agent.pathStatus == NavMeshPathStatus.PathComplete &&
+                    (agent.destination-destination).sqrMagnitude < .01f && agent.remainingDistance > agent.stoppingDistance ?
+                    WalkingActivity(leaf) : null;
+            }
+        }
+
+        internal static string InterruptedActivity(NPCController speaker)
+        {
+            var leaf = RunningLeaf(speaker, out var tree);
+            if (leaf == null) return null;
             var agent = speaker.GetComponent<NavMeshAgent>();
             bool walking = agent && agent.isActiveAndEnabled && agent.isOnNavMesh && !agent.isStopped && agent.hasPath;
-            if (walking) {
-                switch (leaf.Name) {
-                    case "Go Home": case "Walk Home": return "walking home";
-                    case "Go to Tavern": return "on the way to the tavern";
-                    case "Go To Work": case "Walk to job location": return "on the way to work";
-                    case "Walk to tree": return "walking to a tree";
-                    case "Walk to ore": return "heading to a mineral deposit";
-                    case "Walk to crop": case "Walk to soil": return "heading to tend the fields";
-                    case "Walk to herb": return "walking to gather herbs";
-                    case "Walk to bed": return "going to bed";
-                    case "Walk To Relax": return "heading to a place to rest";
-                    case "Walk to dropped item": return "going to pick something up";
-                }
-            }
+            if (walking && agent.velocity.sqrMagnitude > .04f && (leaf is NavigateToTarget || leaf is NavigateToBbTarget))
+                return WalkingActivity(leaf);
             switch (leaf.Name) {
                 case "Relax": return "resting";
                 case "Sleep": return "sleeping";

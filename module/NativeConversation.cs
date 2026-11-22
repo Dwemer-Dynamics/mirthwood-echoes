@@ -202,6 +202,7 @@ namespace Mirthwood.Echoes
         public void Open(NPCController npc,object target)
         {
             if(npc?.CharacterInfo==null||Visible||GameState.GetCurrentState(1)!=GameState.State.Gameplay)return;
+            var beforeChat=WorldAwareness.Interruption.Observe(npc,playerApproached:true);
             string opener=null,openedSession=null;
             if(passing?.Speaker==npc&&passing.CanReply&&(passing.Kind!="address"||passing.Heard)&&passing.Bubble!=null&&InReplyRange(npc)){
                 opener=passing.Line;
@@ -209,7 +210,6 @@ namespace Mirthwood.Echoes
                 if(passing.EventId!=null)NativeCues.Recent(npc,passing.EventId,passing.Kind,passing.Line);
             }
             DismissPassingLine();
-            var beforeChat=WorldAwareness.Interruption.Observe(npc);
             if(!Build(npc))return;
             interruption=beforeChat;
             if(openedSession!=null)conversationId=openedSession;
