@@ -148,7 +148,7 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
         if(axis is <0 or >4 || direction is not (-1 or 1))throw new UserError("Choose a temperament direction.");
         var reason=form.Required("reason",320);var source=form.Required("sourceType",10);var id=form.Id();
         string table=source switch{"turn"=>"SELECT day,echoes_marked_evidence(id,@reason) AS evidence FROM turns WHERE state='complete' AND",
-            "event"=>"SELECT day,jsonb_build_object('observation',description) AS evidence FROM daily_events WHERE",_=>throw new UserError("Choose a recorded interaction.")};
+            "event"=>"SELECT day,echoes_marked_observation(id,@reason) AS evidence FROM daily_events WHERE",_=>throw new UserError("Choose a recorded interaction.")};
         var valid=await db.ScopedOne("SELECT to_jsonb(s)::text FROM ("+table+" campaign=@c AND actor=@a AND id=@id AND day<=@day) s",false,null,("c",c),("a",a),("id",id),("day",day),("reason",reason));
         if(valid==null)throw new UserError("This interaction is unavailable for this character and date.",404);
         int inserted=await db.Run("""

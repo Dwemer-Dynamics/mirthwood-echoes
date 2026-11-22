@@ -43,8 +43,17 @@ def check(api, beat, world, campaign, residents, sql, calls):
     turning=next(r for r in view(averil,"commitments") if r["kind"]=="marked" and r["source"]==marked["id"])
     assert turning["evidence"]=={"player":"My father passed away."},turning
     say("I love you. I like it here. I hate when it rains.")
+    say("I like talking to you. I love being with him.")
+    address=str(uuid4())
+    api("module/cue",dict(world=dict(world),kind="address",parent=world["cueHead"],id=address,
+                          people=[dict(owner="East-NPC",nativeId="twin",description="The copper thimble fell off the gate. Please forgive me.")]))
+    world["cueHead"]=address;beat(20)
+    observed=sql("SELECT id FROM daily_events WHERE cue_anchor='"+address+"'")
+    api(prefix+averil+"/personality",dict(id=observed,sourceType="event",axis=1,direction=1,reason="She said Please forgive me."),expected=204)
+    marked_address=next(r for r in view(averil,"commitments") if r["kind"]=="marked" and r["source"]==observed)
+    assert marked_address["evidence"]=={"observation":"Please forgive me."},marked_address
     assert {"plum tart", "fishing", "green", "blue", "chess", "green apples"} <= values(averil)
-    assert not {"crab pie", "red", "purple", "you", "it here", "when it rains"} & values(averil)
+    assert not {"crab pie", "red", "purple", "you", "it here", "when it rains", "talking to you", "being with him"} & values(averil)
     beliefs = view(averil, "knowledge")
     assert all(r["earlier"] for r in beliefs if r["value"]=="green")
     assert any(r["stance"]=="retracted" for r in beliefs if r["value"]=="Green")
@@ -71,9 +80,9 @@ def check(api, beat, world, campaign, residents, sql, calls):
     session = str(uuid4())
     packets = []
 
-    def group(who, words, audience, **extra):
+    def group(who, words, audience, to="group", **extra):
         packet = dict(id=str(uuid4()), parent=world.get("cueHead"), world=dict(world), kind="group", people=[],
-                      line=dict(session=session, seq=len(packets)+1, speaker=who, to="group", words=words,
+                      line=dict(session=session, seq=len(packets)+1, speaker=who, to=to, words=words,
                                 at=datetime.now(timezone.utc).isoformat(), audience=audience, **extra))
         api("module/cue", packet)
         packets.append(packet)
@@ -92,6 +101,11 @@ def check(api, beat, world, campaign, residents, sql, calls):
     assert any(r["subject"]=="Test player" and r["speakerLabel"]!="Test player" and r["value"]=="dancing"
                for r in view(drystan,"knowledge"))
     group("player", "The magpie stole a buckle.", both)
+    group(averil,"What is your favorite color?",[*both,guest],to=drystan)
+    wrong=group(guest,"Teal.",[*both,guest])
+    group(averil,"What is your favorite food? I'm curious.",both)
+    ambiguous=group("player","Honey cake.",both)
+    assert all(r["source"] not in (wrong,ambiguous) for actor in residents for r in view(actor,"knowledge"))
     full_head = world["cueHead"]
     world["cueHead"] = answer
     beat(20)
@@ -146,10 +160,19 @@ def check(api, beat, world, campaign, residents, sql, calls):
     assert clock()==elapsed
     world["memorySession"]=current_load;beat(25)
     fresh=say("The alder tree has a crooked limb.")
+    pending=dict(id=str(uuid4()),campaign=campaign,actor=averil,text="Do you still keep an alder by the gate?")
+    assert api("dialogue/prepare",pending)["state"]=="ready"
+    # Reproduce a prepared reply from a save containing both an old and a still-current proposal.
+    sql(f"""UPDATE turns SET talk=jsonb_set(talk,'{{recentSpeech}}',(SELECT jsonb_agg(
+          jsonb_build_object('turn',id,'day',day,'player',player_text,'npc',reply) ORDER BY started)
+          FROM turns WHERE id IN ('{old["id"]}','{fresh["id"]}'))) WHERE id='{pending["id"]}'""")
     beat(26)
     until(lambda: sql("SELECT dialogue_expired FROM turns WHERE id='"+old["id"]+"'")=="t")
     assert any(r["id"]==fresh["id"] for r in view(averil,"conversations"))
     assert not any(r["id"]==old["id"] for r in view(averil,"conversations"))
+    retained=json.loads(sql(f"""SELECT talk->'recentSpeech' FROM turns WHERE id='{pending["id"]}'"""))
+    assert [r["turn"] for r in retained]==[fresh["id"]],retained
+    assert api("dialogue/finish",dict(pending,reaction="neutral"))["state"]=="complete"
     for table in ("turns","cue_events","memory_summaries","resident_recaps","dialogue_day_recaps","daily_events","character_knowledge","personality_turning_points"):
         assert sql("SELECT count(*) FROM "+table+" t WHERE to_jsonb(t)::text LIKE ANY(ARRAY['%copper thimble%','%magpie stole%'])")=="0",table
     assert {"fishing","plum tart"}<=values(averil) and "gold" in values(drystan)

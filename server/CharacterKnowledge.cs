@@ -85,7 +85,7 @@ internal static class CharacterKnowledge
     }
 
     static bool SpecificDetail(string value)=>PlainValue(value)&&!Regex.IsMatch(value,
-        @"^(?:you|it|here|there|them|him|her|us|this|that|these|those|when|how|what|who|the way|to (?:be|think|say))\b",RegexOptions.IgnoreCase);
+        @"\b(?:you|them|him|her|us)\b|^(?:it|here|there|this|that|these|those|when|how|what|who|the way|to (?:be|think|say))\b",RegexOptions.IgnoreCase);
 
     static IEnumerable<Detail> Details(Line line,Line? prior,JsonArray hints)
     {

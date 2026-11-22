@@ -6,6 +6,16 @@ internal static class DialogueRetention
     internal const int Days=30;
     internal const string Schema = """
         ALTER TABLE personality_turning_points ADD COLUMN IF NOT EXISTS evidence jsonb;
+        CREATE OR REPLACE FUNCTION echoes_marked_sentence(words text,reason text) RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$
+          SELECT trim(sentence) FROM regexp_split_to_table(words,'(?<=[.!?…])\s+') WITH ORDINALITY s(sentence,n)
+          WHERE length(trim(sentence)) BETWEEN 3 AND 260 AND strpos(lower(reason),lower(trim(sentence)))>0 ORDER BY n LIMIT 1
+        $$;
+        CREATE OR REPLACE FUNCTION echoes_marked_observation(marked uuid,reason text) RETURNS jsonb LANGUAGE sql STABLE AS $$
+          SELECT jsonb_strip_nulls(jsonb_build_object('observation',CASE WHEN d.kind<>'address' THEN d.description ELSE
+            coalesce(echoes_marked_sentence(d.description,reason),(SELECT k.quote FROM character_knowledge k WHERE
+              k.campaign=d.campaign AND k.holder=d.actor AND k.source=d.cue_anchor AND k.facet='major moment' ORDER BY k.speech_position LIMIT 1)) END))
+          FROM daily_events d WHERE d.id=marked
+        $$;
         CREATE OR REPLACE FUNCTION echoes_marked_evidence(marked uuid,reason text) RETURNS jsonb LANGUAGE sql STABLE AS $$
           SELECT coalesce(jsonb_object_agg(label,quote),'{}'::jsonb) FROM (
             SELECT DISTINCT ON(label) label,quote FROM (
@@ -14,11 +24,9 @@ internal static class DialogueRetention
                 WHERE k.source=marked AND k.facet='major moment'
               UNION ALL SELECT CASE WHEN p.speaker='player' THEN 'player' ELSE 'reply' END,p.statement,2
                 FROM commitments p WHERE p.turn_id=marked
-              UNION ALL SELECT line.label,trim(sentence),0 FROM turns t CROSS JOIN LATERAL
-                (VALUES ('player',t.player_text),('reply',t.reply)) line(label,words)
-                CROSS JOIN LATERAL regexp_split_to_table(line.words,'(?<=[.!?…])\s+') sentence
-                WHERE t.id=marked AND length(trim(sentence)) BETWEEN 3 AND 260 AND strpos(lower(reason),lower(trim(sentence)))>0
-            ) evidence ORDER BY label,priority,quote) selected
+              UNION ALL SELECT line.label,echoes_marked_sentence(line.words,reason),0 FROM turns t CROSS JOIN LATERAL
+                (VALUES ('player',t.player_text),('reply',t.reply)) line(label,words) WHERE t.id=marked
+            ) evidence WHERE quote IS NOT NULL ORDER BY label,priority,quote) selected
         $$;
         CREATE TABLE IF NOT EXISTS dialogue_clock(campaign text PRIMARY KEY REFERENCES campaigns, day int NOT NULL,
           load_id text NOT NULL, elapsed bigint NOT NULL DEFAULT 0);
@@ -64,7 +72,7 @@ internal static class DialogueRetention
     internal static async Task Maintain(Database db,CancellationToken ct)
     {
         await db.Run("""
-            UPDATE personality_turning_points p SET evidence=jsonb_build_object('observation',e.description)
+            UPDATE personality_turning_points p SET evidence=echoes_marked_observation(e.id,p.reason)
               FROM daily_events e WHERE p.source_type='event' AND e.id=p.source_id AND p.evidence IS NULL AND e.description<>'';
             INSERT INTO dialogue_clock(campaign,day,load_id) SELECT c.id,c.day,'' FROM campaigns c JOIN slots s ON c.id=s.campaign
               WHERE c.day>=0 ON CONFLICT DO NOTHING;
@@ -145,8 +153,14 @@ internal static class DialogueRetention
             UPDATE turns t SET request_digest=coalesce(t.request_digest,sha256(convert_to(jsonb_build_array(t.player_text,t.cue_binding)::text,'UTF8'))),
               cue_binding=t.cue_binding-'remark' FROM old_cues x WHERE t.campaign=x.campaign AND
               t.cue_binding->'remark'->>'kind'='address' AND t.cue_binding->>'event'=x.id::text;
-            UPDATE turns t SET talk=t.talk-'recentSpeech' WHERE t.state='complete' AND t.talk ? 'recentSpeech'
-              AND EXISTS(SELECT FROM old_turns x WHERE x.campaign=t.campaign);
+            WITH retained AS (
+              SELECT t.id,coalesce(jsonb_agg(r.line ORDER BY r.seq) FILTER(WHERE x.id IS NULL),'[]'::jsonb) AS lines
+              FROM turns t CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(t.talk->'recentSpeech')='array'
+                THEN t.talk->'recentSpeech' ELSE '[]'::jsonb END) WITH ORDINALITY r(line,seq)
+              LEFT JOIN old_turns x ON x.campaign=t.campaign AND x.id::text=r.line->>'turn'
+              WHERE t.talk ? 'recentSpeech' AND EXISTS(SELECT FROM old_turns active WHERE active.campaign=t.campaign)
+              GROUP BY t.id HAVING bool_or(x.id IS NOT NULL))
+            UPDATE turns t SET talk=jsonb_set(t.talk,'{recentSpeech}',r.lines) FROM retained r WHERE t.id=r.id;
             DELETE FROM resident_recaps r USING old_entries x WHERE r.kind<>'daily' AND r.campaign=x.campaign AND r.actor=x.actor AND
               r.entry IN (x.session,'day-'||x.day,'day-'||x.day||'-'||x.session);
             DELETE FROM dialogue_day_recaps r USING old_entries x WHERE r.campaign=x.campaign AND r.actor=x.actor AND r.day=x.day
