@@ -166,6 +166,24 @@ class AwarenessPlay:
             raise AssertionError("More than one ordinary dialogue call per accepted player turn.")
         if self.plan.get("compareFallPosters") and not self.baseline:
             self.verify_fall_posters(records, observations)
+        if self.plan["turns"][0].get("watchResidentWalk") and not self.baseline:
+            walking, = [o for o in observations if o["stage"] == "walking-before-talk"]
+            active = {task["name"] for task in walking["resident"]["jobs"]
+                      if task["sameOwner"] and task["enabled"] and task["status"] == "Continue"}
+            if "Go To Work" not in active or walking["resident"]["stopped"] or walking["extra"]["moved"] <= .4:
+                raise AssertionError("The copied visit did not establish the resident's own walk to work.")
+            activity = records[0]["provider"][0]["awareness"].get("interruptedActivity", "")
+            if "work" not in activity.casefold():
+                raise AssertionError("The accepted provider input lost the resident's observed trip to work.")
+        if not self.baseline:
+            for step, row in zip(self.plan["turns"], records):
+                if "venue" not in step:
+                    continue
+                venue = step["venue"]
+                status = "ended" if venue.get("end") else "active"
+                today = row["provider"][0]["awareness"].get("today", [])
+                if not any(e["title"] == venue["title"] and e["status"] == status and e["source"] == "firsthand" for e in today):
+                    raise AssertionError("The speaker at the confirmed venue lacks the witnessed " + status + " event.")
         if route == "residentdialogue":
             addressed = []
             for opener in result["openers"]:

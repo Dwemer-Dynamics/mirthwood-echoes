@@ -332,8 +332,10 @@ namespace Mirthwood.Echoes
             IEnumerator Doorway(int index, NPCController npc, JObject spec)
             {
                 string building = (string)spec["building"];
+                var doorName=(string)spec["entrance"];
                 var doors = Resources.FindObjectsOfTypeAll<DoorTrigger>()
-                    .Where(d => d.gameObject.scene.isLoaded && PathOf(d.transform).IndexOf(building,StringComparison.OrdinalIgnoreCase)>=0)
+                    .Where(d => d.gameObject.scene.isLoaded && PathOf(d.transform).IndexOf(building,StringComparison.OrdinalIgnoreCase)>=0 &&
+                        (doorName==null||PathOf(d.transform).EndsWith("/"+doorName,StringComparison.OrdinalIgnoreCase)))
                     .OrderByDescending(d => PathOf(d.transform).IndexOf("Exterior",StringComparison.OrdinalIgnoreCase)>=0)
                     .ThenBy(d => (d.transform.position-npc.transform.position).sqrMagnitude).ToArray();
                 Record("authored-doors",index,npc,doors.Select(d=>new {path=PathOf(d.transform),position=At(d.transform.position),forward=At(d.transform.forward)}).ToArray());
@@ -343,6 +345,8 @@ namespace Mirthwood.Echoes
                 {
                     center=candidate.transform.position;
                     yield return Approach(center);
+                    float streamUntil=Time.realtimeSinceStartup+3f;
+                    while(candidate&&!candidate.isActiveAndEnabled&&Time.realtimeSinceStartup<streamUntil)yield return null;
                     if(!candidate || !candidate.isActiveAndEnabled)continue;
                     inward=Vector3.ProjectOnPlane(candidate.transform.forward,Vector3.up).normalized;
                     Vector3 lateral=Vector3.Cross(inward,Vector3.up);
@@ -371,8 +375,14 @@ namespace Mirthwood.Echoes
                 yield return player.CoTeleport(Landing((string)spec["playerSide"]),0,0,false,false);
                 StageGuest(npc,Landing((string)spec["speakerSide"]));
                 yield return new WaitForFixedUpdate();
+                if(StoryCardOpen)yield return DismissGroupTestCards();
+                var nativeInside=AccessTools.Method(typeof(DoorTrigger),"IsOtherInside");
+                var fading=AccessTools.Field(typeof(DoorTrigger),"fadeOutOnEnterSprites").GetValue(door) as System.Collections.Generic.List<SpriteRenderer>;
                 Record("doorway",index,npc,new { path=PathOf(door.transform), center=At(center),forward=At(inward),
                     playerSide=Vector3.Dot(player.transform.position-center,inward), residentSide=Vector3.Dot(npc.transform.position-center,inward),
+                    nativeSpeakerSide=nativeInside.Invoke(door,new object[]{npc.transform.position}),
+                    nativePlayerSide=nativeInside.Invoke(door,new object[]{player.transform.position}),
+                    exteriorSprites=fading?.Where(sprite=>sprite).Select(sprite=>new {name=sprite.name,alpha=sprite.color.a,visible=sprite.isVisible}).ToArray(),
                     nativePlayerInside=AccessTools.Field(typeof(DoorTrigger),"isPlayer1Inside").GetValue(door),
                     sight=GroupGathering.ClearSight(npc.transform.position,player.transform.position) });
                 yield return Screenshot("door-" + (index+1));
@@ -401,24 +411,46 @@ namespace Mirthwood.Echoes
                 var root = field?.GetValue(story.story) as GameObject;
                 if (!root || !root.activeInHierarchy) throw new InvalidOperationException("The native event has no active venue.");
                 string target = (string)spec["landmark"];
-                var marks = root.GetComponentsInChildren<Renderer>(true).Where(r => r.name.StartsWith(target,StringComparison.OrdinalIgnoreCase));
-                var mark = marks.OrderBy(m => (m.transform.position-npc.transform.position).sqrMagnitude).FirstOrDefault();
-                if (!mark) throw new InvalidOperationException("No actual venue landmark named " + target);
-                yield return Approach(mark.transform.position);
+                var marks=root.GetComponentsInChildren<Renderer>(true)
+                    .Where(r=>r.name.StartsWith(target,StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(r=>(r.transform.position-npc.transform.position).sqrMagnitude).ToArray();
+                Record("venue-landmarks",index,npc,marks.Select(r=>new {path=PathOf(r.transform),position=At(r.transform.position)}));
+                if(marks.Length==0)throw new InvalidOperationException("No actual venue landmark named "+target);
+                yield return Approach(marks[0].transform.position);
                 yield return DismissGroupTestCards();
-                yield return Await(() => mark && mark.enabled && mark.gameObject.activeInHierarchy, "The event object did not become visible.", 8);
-                var spot=mark.transform.position;
-                var landings=Enumerable.Range(0,16).Select(i => spot + Quaternion.Euler(0,22.5f*i,0)*Vector3.forward*1.8f);
-                bool staged=false;
-                foreach (var point in landings) {
-                    if (!NavMesh.SamplePosition(point,out var hit,1f,NavMesh.AllAreas)) continue;
-                    if (!GroupGathering.ClearSight(hit.position,spot) || (hit.position-spot).sqrMagnitude>10f) continue;
-                    StageGuest(npc,hit.position);
-                    yield return Approach(npc.transform.position);
-                    staged=true;
-                    break;
+                yield return Await(()=>marks.Any(r=>r&&r.enabled&&r.gameObject.activeInHierarchy),"No venue landmark became visible.",8);
+                Renderer mark=null;
+                Vector3 landing=default;
+                foreach(var candidate in marks.Where(r=>r&&r.enabled&&r.gameObject.activeInHierarchy)){
+                    int walkable=0;
+                    string blockedBy=null;
+                    foreach(float radius in new[]{1.4f,2f,2.7f,3.2f}){
+                        for(int i=0;i<16;i++){
+                            var point=candidate.transform.position+Quaternion.Euler(0,i*22.5f,0)*Vector3.forward*radius;
+                            if(!NavMesh.SamplePosition(point,out var hit,3f,NavMesh.AllAreas)||
+                                (hit.position-candidate.transform.position).sqrMagnitude>12.25f)continue;
+                            walkable++;
+                            var eye=hit.position+Vector3.up*.85f;
+                            var direction=candidate.bounds.ClosestPoint(eye)-eye;
+                            var obstruction=Physics.RaycastAll(eye,direction.normalized,direction.magnitude,Physics.DefaultRaycastLayers,
+                                QueryTriggerInteraction.Ignore).OrderBy(v=>v.distance).FirstOrDefault(v=>!v.collider.GetComponentInParent<Character>());
+                            if(obstruction.collider && obstruction.transform!=candidate.transform &&
+                                !obstruction.transform.IsChildOf(candidate.transform) &&
+                                (candidate.bounds.ClosestPoint(obstruction.point)-obstruction.point).sqrMagnitude>.01f){
+                                blockedBy=PathOf(obstruction.transform);
+                                continue;
+                            }
+                            landing=hit.position;mark=candidate;break;
+                        }
+                        if(mark)break;
+                    }
+                    Record("venue-view-search",index,npc,new {path=PathOf(candidate.transform),walkable,blockedBy,found=mark!=null});
+                    if(mark)break;
                 }
-                if (!staged) throw new InvalidOperationException("No walkable view of the active venue.");
+                if(!mark)throw new InvalidOperationException("No walkable view of the active venue.");
+                StageGuest(npc,landing);
+                yield return Approach(npc.transform.position);
+                var spot=mark.transform.position;
                 recentVenue=spot;
                 Record("at-venue",index,npc,new {title,root=root.name,landmark=PathOf(mark.transform),position=At(spot),
                     boundsCenter=At(mark.bounds.center),render=mark.isVisible,live=teller.HasActiveStory(title)});
@@ -499,6 +531,7 @@ namespace Mirthwood.Echoes
 
             public IEnumerator OpenNativeMenu(NPCController npc, int index)
             {
+                if(StoryCardOpen)yield return DismissGroupTestCards();
                 Record("before-native-menu",index,npc);
                 var menu = ShowQuickMenu(npc);
                 var labels = QuickLabels(menu);

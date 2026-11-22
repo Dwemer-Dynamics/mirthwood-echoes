@@ -219,22 +219,37 @@
     "turns": [
       {
         "calendar": { "season": "Fall", "day": 9, "time": 0.22 },
-        "doorway": { "building": "Bog & Briar Inn", "speakerSide": "outside", "playerSide": "outside" },
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside" },
         "words": "How does the weather look from where you're standing?",
         "check": "Sample the speaker and the weather in the actual open air. Compare the rendered inn and present company.",
         "capture": true
       },
       {
-        "doorway": { "building": "Bog & Briar Inn", "speakerSide": "inside", "playerSide": "outside" },
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "inside", "playerSide": "outside" },
         "words": "Can you see what the weather's doing from where you are?",
         "check": "Use the resident's side of the doorway. Do not assume the player's outdoor sightline or claim to hear rain without evidence.",
         "capture": true
       },
       {
-        "doorway": { "building": "Bog & Briar Inn", "speakerSide": "outside", "playerSide": "inside" },
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "inside" },
         "words": "What's one landmark I could use to find my way back here?",
         "check": "Check the direction against the physical landmark and speaker coordinates. The player stands across the doorway.",
         "capture": true
+      }
+    ]
+  },
+  "inn-side-door": {
+    "resident": "Averil",
+    "turns": [
+      {
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Door Trigger Side Variant", "speakerSide": "outside", "playerSide": "outside" },
+        "words": "Are we inside the inn or out in the open here? Can you see what the weather is doing?",
+        "check": "Compare both characters at the side entrance with native door membership, the exterior sprites and the rendered scene.", "capture": true
+      },
+      {
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Door Trigger Side Variant", "speakerSide": "inside", "playerSide": "inside" },
+        "words": "What changed when we went through the door?",
+        "check": "Compare the other side of the same native door with the first observation and the current room.", "capture": true
       }
     ]
   },
