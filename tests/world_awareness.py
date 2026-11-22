@@ -499,6 +499,52 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     assert "heardToday" not in prompt["yourMemory"] and "saw the player" not in str(prompt)
     checked("actual speaker per group turn, repeatable address/group requests, public recall excludes private gifts and another resident's witness")
 
+    # A new guest joins between a delivered relay and a source question. Only the two original
+    # listeners heard the smaller circle. The common transcript remains the source for effects.
+    relay_session = uid()
+    before_relay = world["cueHead"]
+    original_listeners = [speaker, visitor]
+    expanded_circle = [speaker, visitor, twin]
+
+    def group_line(seq, author, to, audience, words):
+        source_id = uid()
+        api("/api/module/cue", dict(id=source_id, parent=world["cueHead"], kind="group", people=[], world=world,
+            line=dict(session=relay_session, seq=seq, speaker=author, to=to, audience=audience,
+                      words=words, at=datetime.now(timezone.utc).isoformat())))
+        world["cueHead"] = source_id
+        return source_id
+
+    def relay_question(seq, listener, words):
+        question_id = group_line(seq, "player", listener, expanded_circle, words)
+        beat()
+        request = dict(group, id=uid(), session=relay_session, head=question_id, actor=listener, audience=expanded_circle,
+                       worldAwareness=deepcopy(facts if listener == speaker else other))
+        response, packet = generate("/api/dialogue/group", request)
+        projected = context(packet)
+        assert response["previous"] == question_id == projected["heardInOrder"][-1]["id"]
+        assert all(row["seq"] >= 4 for row in projected["heardInOrder"])
+        for restricted in ("copper", "red ledger", "old kiln", "turquoise locket"):
+            assert restricted not in json.dumps(projected).casefold()
+        return request, response, projected["yourMemory"].get("earlierGroupSource")
+
+    original_claim = group_line(1, "player", visitor, original_listeners,
+                                "I saw a copper streamer by the field. Would you tell Miller about it?")
+    delivered_relay = group_line(2, visitor, speaker, original_listeners,
+                                 "Miller, Test player saw a copper streamer by the field. I'll keep the red ledger here.")
+    group_line(3, speaker, visitor, original_listeners, "Thank you, Linn. I remember the streamer.")
+    source_question = "Did you see the streamer yourself, or did you hear about it here?"
+    request, response, earlier = relay_question(4, speaker, source_question)
+    assert earlier == dict(source=delivered_relay, heardFrom="Linn", addressedToYou=True,
+                           subjectInCurrentLine=["streamer"], inReplyTo=dict(source=original_claim, speaker="Test player"))
+    assert without_generation("/api/dialogue/group", request) == response
+    assert relay_question(5, twin, source_question)[2] is None
+    assert relay_question(6, speaker, "Could we speak about my brother?")[2] is None
+    world["cueHead"] = before_relay
+    assert relay_question(4, speaker, source_question)[2] is None
+    world["cueHead"] = before_relay
+    beat()
+    checked("a group hearer retains the relay's source after a late join, with separate claimant, private words, replay and rewind")
+
     session = uid()
     offer = dict(key="native-flour", title="Flour", terms="Bring flour.", objectives=["Collect flour"])
     quest = dict(id=session, session=session, campaign=campaign, actor=speaker, key=offer["key"], offer=offer,
