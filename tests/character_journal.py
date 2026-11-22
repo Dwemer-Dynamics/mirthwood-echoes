@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 import uuid
 from foundation_smoke import fixture_save, free_port
+from dialogue_memory import FISH_STORY, FISH_FOLLOWUP, FISH_CALLBACK, REPAIR_CALLBACK, check as check_dialogue_memory
 
 class Writer(BaseHTTPRequestHandler):
     calls=[]
@@ -23,13 +24,45 @@ class Writer(BaseHTTPRequestHandler):
     def do_POST(self):
         packet=json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.calls.append(packet)
+        if packet["model"] == "offline-night":
+            self.send_error(503,"The fixture memory model is offline")
+            return
         self.send_response(200);self.send_header("Content-Type","application/json");self.end_headers()
         player=packet["messages"][1]["content"]
         marks=[{"speaker":"player","quote":player}] if player=="I promise to deliver flour tomorrow." else []
         text="The miller learned the rhythm of the mill in Brightoak." if packet["model"]=="historian" else json.dumps({"reply":"Welcome back.","commitments":marks})
-        if "Summarize one day of spoken dialogue" in packet["messages"][0]["content"]:
+        if "Mirthwood quest" in packet["messages"][0]["content"]:
+            offer=json.loads(player)
+            text=json.dumps({"intent":"offer","evidence":"","reply":"Have you seen the copper whistle?"} if offer["opening"] else
+                            {"intent":"accept","evidence":"I accept.","reply":"Thank you."})
+        elif "Summarize one day of spoken dialogue" in packet["messages"][0]["content"]:
             rows=json.loads(player)
-            text=json.dumps([{"i":row["i"],"quote":row["words"]} for row in rows[:2]])
+            highlights=[]
+            for row in rows:
+                if row["words"] in ("Mira, said Jo, took the ring.", "I sold the foal."):
+                    changed = "Reported Mira said Jo took the ring." if "Jo" in row["words"] else "Suggested they sold the foal."
+                    highlights.append(dict(i=row["i"],quote=row["words"],summary=changed,topics=[]))
+                if "blue goblet" in row["words"]:
+                    highlights.append(dict(i=row["i"],quote=row["words"],summary="Mentioned a blue goblet at the bell tower.",
+                                           topics=["glassmaking","stemware"]))
+                if "obsidian lens" in row["words"]:
+                    highlights.append(dict(i=row["i"],quote=row["words"],summary="Reported that they may have left an obsidian lens beneath Drift Hall.",
+                                           topics=["optics"]))
+                if "landed a speckled trout" in row["words"]:
+                    highlights.append(dict(i=row["i"],quote=row["words"],summary="Reported a speckled trout landed beneath the alder footbridge.",
+                                           topics=["angling"]))
+            text=json.dumps(highlights)
+        elif player in (FISH_STORY, FISH_FOLLOWUP, FISH_CALLBACK, REPAIR_CALLBACK):
+            context=json.JSONDecoder().raw_decode(packet["messages"][0]["content"].split("\nRecall: ",1)[1])[0]
+            note=context.get("conversationRecaps",[{}])[0].get("note","")
+            if player==FISH_STORY:
+                response="That speckled trout under the alder footbridge was a fine catch. Will you go angling there again?"
+            elif player==FISH_FOLLOWUP:
+                response="I'd return to the alder footbridge. I hope the river is quiet for you."
+            else:
+                # Echo exactly the first note received so the delivered fixture answer exposes selection.
+                response=note or "I don't remember."
+            text=json.dumps(dict(topic="Small Talk",flow="follow",warm=response,neutral=response,cool=response,commitments=[]))
         elif "heardInOrder" in player:
             text=json.dumps({"words":"Who told you about the mill?","to":"player","ownTopic":"Intellectual",
                              "receivedTopic":"Small Talk","farewell":"Tell me about it another day."})
@@ -52,6 +85,10 @@ class Writer(BaseHTTPRequestHandler):
                              "learned":[{"speaker":"npc","subject":"self","facet":"favorite color","value":"ruby","quote":"My favorite color is ruby."}]})
         elif player.startswith("Do you still keep"):
             text=json.dumps({"topic":"Small Talk","warm":"I do.","neutral":"I do.","cool":"I do.","commitments":[]})
+        elif "in all three alternatives" in packet["messages"][0]["content"]:
+            context = json.JSONDecoder().raw_decode(packet["messages"][0]["content"].split("\nRecall: ",1)[1])[0]
+            first = (context.get("conversationRecaps") or [{}])[0].get("note", "I see.")
+            text=json.dumps(dict(topic="Small Talk",flow="follow",warm=first,neutral=first,cool=first,commitments=[]))
         self.wfile.write(json.dumps({"choices":[{"message":{"content":text}}]}).encode())
 
 def main(package,game_assets):
@@ -208,9 +245,11 @@ def main(package,game_assets):
                 assert any(row.get("to")=="Player" for row in api(left+"/history/sessions/"+turn))
                 pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='Test player' WHERE player_name=''")
                 print("PASS two service restarts preserve the exact per-audience recaps and daily sources.",flush=True)
-                from dialogue_memory import check as check_dialogue_memory
+                def memory_model(model):
+                    api("providers/openai_compatible",dict(defaultModel="everyday",memory=model,
+                        endpoint=f"http://127.0.0.1:{writer.server_port}/v1/chat/completions"),"PUT",204)
                 check_dialogue_memory(api,beat,world,campaign,[a,b,third_key],lambda q:pg("psql","-XAt","-d",db,"-c",q),Writer.calls,
-                                      Writer.proposal_waiting,Writer.release_proposal)
+                                      Writer.proposal_waiting,Writer.release_proposal,memory_model)
                 # A controller reused by a different native ID must start a separate journal.
                 for r in data["saveData"]:
                     if r["guid"].startswith("East-NPC-NPCController"):

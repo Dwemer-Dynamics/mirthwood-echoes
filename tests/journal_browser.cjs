@@ -37,6 +37,11 @@ async function capture(filename){const {data}=await cmd('Page.captureScreenshot'
     await until("document.querySelectorAll('.roster button').length==="+roster.length);
     await evaluate("document.querySelectorAll('.roster button')["+index+"].click()");
     await until("document.querySelector('.inspect-header h3')?.textContent==='Averil'");
+    await evaluate("document.querySelector('#char-tab-sessions').click()");
+    await until("[...document.querySelectorAll('.journal-entry')].some(e=>e.querySelector('strong')?.textContent.includes('recap'))");
+    if(await evaluate("[...document.querySelectorAll('.journal-entry')].some(e=>e.querySelector('strong')?.textContent.includes('recap')&&e.querySelector('details'))"))
+      throw Error('A closed-day recap still invites the player to open the retired transcript.');
+    await capture('averil-daily-conversation-recaps.png');
     await evaluate("document.querySelector('#char-tab-knowledge').click()");
     await until("document.querySelector('.journal-scroll')?.textContent.includes('Plum tart is my favorite food.')");
     await capture('averil-character-knowledge.png');

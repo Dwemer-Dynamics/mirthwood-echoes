@@ -123,6 +123,7 @@ function entryView(view,e,person,openTurningPoint,path) {
     if(e.visits>1)entry.append(el('small','source',e.visits+' visits'));
     if(e.participants?.length)entry.append(el('p','hint',e.participants.join(', ')));
     entry.append(daily?el('p','journal-prose',e.body):roleplayLine(e.body,'journal-prose'));
+    if(!daily&&e.hasOriginal===false)return entry;
     const detail=el('details','memory-originals'),body=el('div');
     detail.append(el('summary','',daily?'Read original observations':'Read conversation'),body);
     let loaded=false,loading=false;

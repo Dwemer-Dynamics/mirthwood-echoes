@@ -58,9 +58,8 @@ app.Use(async (ctx,next)=>{
     }
 });
 app.UseDefaultFiles();app.UseStaticFiles();
-if(Guid.TryParseExact(Environment.GetEnvironmentVariable("MIRTHWOOD_ECHOES_HARNESS_ID"),"N",out var testRun)
-    && app.Services.GetRequiredService<NpgsqlDataSource>().ConnectionString.Contains("Database=echoes_talk_"+testRun.ToString("N"),StringComparison.OrdinalIgnoreCase))
-    app.MapGet("/api/test-session",()=>new{run=testRun.ToString("N")});
+if(app.Services.GetRequiredService<Database>().HarnessRun is {} testRun)
+    app.MapGet("/api/test-session",()=>new{run=testRun});
 app.MapGet("/api/health",(ModuleInstaller installer)=>new{
     application=ModIdentity.Id, displayName=ModIdentity.Name,
     version=ModIdentity.Version, module=installer.Status

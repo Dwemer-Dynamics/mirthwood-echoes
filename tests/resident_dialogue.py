@@ -35,6 +35,15 @@ def api(path, data=None, method=None):
         return json.loads(response.read() or b"null")
 
 
+def recall_evidence(log, run, turns):
+    prefix = "Echoes Talk recall "
+    with log.open(encoding="utf-8", errors="replace") as stream:
+        traces = [json.loads(line[len(prefix):]) for line in stream if line.startswith(prefix)]
+    by_turn = {row["turn"]:row for row in traces if row["run"] == run}
+    assert len(traces) == len(by_turn) == len(turns) and set(by_turn) == {t["id"] for t in turns}, traces
+    return [dict(by_turn[t["id"]], player=t["player"], reply=t["reply"]) for t in turns]
+
+
 def free_port():
     with socket.socket() as check:
         if check.connect_ex(("127.0.0.1",17864)) == 0:
@@ -60,6 +69,7 @@ def serve(token, saves, package, output):
             env = dict(os.environ,HOME=temp,WSL_INTEROP="/run/WSL/1_interop",DOTNET_PROCESSOR_COUNT="2",
                        MIRTHWOOD_ECHOES_DB="Host=/var/run/postgresql;Username=mirthwood_echoes;Database="+database,
                        MIRTHWOOD_ECHOES_PORT="17864",MIRTHWOOD_ECHOES_HARNESS_ID=token,MIRTHWOOD_ECHOES_STATE=temp,
+                       MIRTHWOOD_ECHOES_CAPTURE_RECALL="1" if (Path(saves).parent/"memory-clock-test").is_file() else "0",
                        MIRTHWOOD_ECHOES_GAME=str((work/"game").resolve()),MIRTHWOOD_ECHOES_SAVES=saves)
             with (work/"server.log").open("w") as log:
                 process = subprocess.Popen(["/usr/bin/dotnet",str(app/"Mirthwood.Echoes.Server.dll")],cwd=app,env=env,
@@ -173,10 +183,10 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
                 if (session/f"ready-{seen_ready}").is_file():
                     if knowledge:
                         words=[
-                            "The gate hinge squeaks again. I like fishing. Plum tart is my favorite food.",
+                            "I like fishing. Plum tart is my favorite food. We landed a speckled trout beneath the alder footbridge.",
                             "My favorite color is green. Do you have one you like to wear?",
-                            "I'm packing a lunch for a day by the river. Any thought what I might bring?",
-                            "Good to see you again. I've a free afternoon coming. What do you reckon I should do with it?",
+                            "Which stretch of river would you recommend for angling again? I'd love to go back there.",
+                            "I've got my rod out again. Remind me, whereabouts did we catch that one together?",
                             "I'm off to the baker. Do you remember which treat I like best?"
                         ]
                         if seen_ready:
@@ -184,11 +194,19 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
                             path=f"saves/{first['campaign']}/characters/{first['actor']}/history/"
                             until=time.monotonic()+50
                             while True:
-                                full=api(path+"conversations")["items"]
+                                page=api(path+"conversations")
+                                full=page["items"]
                                 found=any(x["id"]==first["id"] for x in full)
-                                if found==(seen_ready<4) or time.monotonic()>=until:break
+                                if found==(seen_ready<2) or time.monotonic()>=until:break
                                 time.sleep(.4)
-                            assert found==(seen_ready<4),(seen_ready,found)
+                            assert found==(seen_ready<2),(seen_ready,found)
+                            if seen_ready==1:first_day=page["day"]
+                            assert page["day"]==first_day+(0,0,1,29,30)[seen_ready],(seen_ready,page["day"],first_day)
+                            sessions=api(path+"sessions")["items"]
+                            if seen_ready>=2:
+                                source_day=next(x["day"] for x in api(path+"knowledge")["items"] if x["value"].lower()=="plum tart")
+                                recaps=[r for r in sessions if r["day"]==source_day and r.get("hasOriginal") is False]
+                                assert bool(recaps)==(seen_ready<4),(seen_ready,sessions)
                             facts=api(path+"knowledge")["items"]
                             assert {"fishing","plum tart"}<={x["value"].lower() for x in facts},facts
                             if seen_ready>=2:assert "green" in {x["value"].lower() for x in facts},facts
@@ -224,20 +242,32 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
         first=result["turns"][0]
         path="saves/"+first["campaign"]+"/characters/"+first["actor"]+"/history/conversations"
         if knowledge:
-            assert len(result["turns"])==5 and "plum" in result["turns"][-1]["reply"].lower(),result["turns"][-1]
-            subprocess.run(["node","tests/journal_browser.cjs",str(work),"--knowledge"],check=True,timeout=90)
-            print("PASS Averil recalled the favorite after 30 elapsed game days; the original words were visible through day 30 and removed on day 31.",flush=True)
-        expected={r["id"]:r["reply"] for r in (result["turns"][2:] if knowledge else result["turns"])}
+            evidence = recall_evidence(work/"server.log",token,result["turns"])
+            write(work/"recall-evidence.json",evidence)
+            assert len(evidence)==5 and "plum" in evidence[-1]["reply"].lower(),evidence[-1]
+            for answer in evidence[2:4]:
+                assert any(note["source"]==first["id"] and note["position"]==1 and note["day"]==evidence[0]["day"]
+                           and "trout" in note["note"].lower() and "footbridge" in note["note"].lower()
+                           for note in answer["recaps"]),answer
+                spoken = answer["reply"].casefold()
+                assert "alder" in spoken and ("bridge" in spoken or "crossing" in spoken),answer
+            expired = {row["turn"] for row in evidence[:2]}
+            assert all(note["source"] not in expired for note in evidence[-1]["recaps"]),evidence[-1]
+        expected={r["id"]:r["reply"] for r in (result["turns"][-1:] if knowledge else result["turns"])}
         for r in result["openers"]:
+            if knowledge and r["id"]!=result["turns"][-1]["id"]:continue
             source=hashlib.md5((r["id"]+"/"+r["actor"]).encode(),usedforsecurity=False).hexdigest()
             expected[str(uuid.UUID(hex=source))]=r["line"]
         end=time.monotonic()+15
         while True:
             entries=[r for r in api(path)["items"] if r["id"] in expected]
             if {r["id"]:r["reply"] for r in entries}==expected:break
-            if time.monotonic()>=end:raise AssertionError("Journal differs from the in-game speech")
+            if time.monotonic()>=end:raise AssertionError(("Journal differs from the in-game speech",expected,entries))
             time.sleep(.5)
         write(work/"journal.json",entries)
+        if knowledge:
+            subprocess.run(["node","tests/journal_browser.cjs",str(work),"--knowledge"],check=True,timeout=90)
+            print("PASS Averil recalled the fishing place on days 2 and 30, and the favorite after its recap expired.",flush=True)
         if not resident:
             subprocess.run(["node","tests/journal_browser.cjs",str(work),"--averil"],check=True,timeout=90)
         log=(work/"server.log").read_text(encoding="utf-8",errors="replace")
