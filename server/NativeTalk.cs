@@ -90,8 +90,9 @@ public sealed partial class Conversation
             }
             var continuations=ReadContinuations(packet,freshCues,topic,actor.S("name"),flow);
             // A short acceptance can refer to a proposal in the preceding two exchanges.
-            var recentProposals=facts["recentSpeech"]!.AsArray().TakeLast(2).ToArray();
-            var saved=new {topic,flow,choices,endingChoices,continuations,returnCues=cues,playerImpression=impression,learned=CharacterKnowledge.Hints(packet["learned"]),commitments=packet["commitments"],recentSpeech=recentProposals,provider=opt.Provider,model,opt.PositiveDesireCostPercent};
+            var prior=facts["recentSpeech"]!.AsArray().TakeLast(2).ToArray();
+            if(packet["commitments"] is JsonArray marks)StageProposalReferences(marks,prior,words);
+            var saved=new {topic,flow,choices,endingChoices,continuations,returnCues=cues,playerImpression=impression,learned=CharacterKnowledge.Hints(packet["learned"]),commitments=packet["commitments"],recentSpeech=prior.Select(line=>new {turn=line.S("turn")}),provider=opt.Provider,model,opt.PositiveDesireCostPercent};
             await db.Run("UPDATE turns SET state='ready',talk=@packet::jsonb,first_ms=@ms WHERE id=@id AND state='pending'",
                 ("packet",JsonSerializer.Serialize(saved,Database.Json)),("ms",(int)timer.ElapsedMilliseconds),("id",id));
         }catch(Exception e){
@@ -100,6 +101,21 @@ public sealed partial class Conversation
                 ("reason",e is UserError?e.Message:"The model did not complete this exchange."),("id",id));
         }
         return PublicTalk((await TalkState(id,c,a,words,binding))!);
+    }
+
+    // A previous turn may expire while the provider is composing the reply. Keep only a
+    // reference into that source until the player and resident actually accept the exchange.
+    static void StageProposalReferences(JsonArray marks,JsonNode?[] recent,string player)
+    {
+        foreach(var mark in marks.OfType<JsonObject>()){
+            if(!mark.ContainsKey("proposal"))continue;
+            string terms=mark.S("proposal"),who=mark.S("speaker");
+            if(who=="npc"&&DialogueOutput.IsWholeQuote(player,terms))continue;
+            mark["proposal"]=null;
+            string side=who=="npc"?"player":"npc";
+            var source=recent.LastOrDefault(line=>DialogueOutput.IsWholeQuote(line.S(side),terms));
+            if(source!=null)mark["proposal"]=new JsonObject{["turn"]=source.S("turn"),["start"]=source.S(side).IndexOf(terms,StringComparison.Ordinal),["length"]=terms.Length};
+        }
     }
 
     const string SameTalkRequest = """
@@ -192,6 +208,16 @@ public sealed partial class Conversation
                     endings!=null&&spoken&&!answer.Contains(quote,StringComparison.Ordinal);
                 if(unspokenAlternative||partingOnly)entries.Remove(mark);
             }
+        if(marks is JsonArray evidence && evidence.OfType<JsonObject>().Any(mark=>mark.ContainsKey("proposal"))){
+            await LoadProposalSources(conn,c,a,p);
+            foreach(var mark in evidence.OfType<JsonObject>()){
+                if(mark["proposal"] is not JsonObject reference)continue; // Older prepared packets carry the quoted words.
+                var line=p["recentSpeech"]!.AsArray().FirstOrDefault(s=>s.S("turn")==reference.S("turn"));
+                string source=line.S(mark.S("speaker")=="npc"?"player":"npc");
+                int start=reference.I("start",-1),length=reference.I("length");
+                mark["proposal"]=start>=0&&length>=2&&start<=source.Length-length ? source.Substring(start,length) : null;
+            }
+        }
         var output=new DialogueOutput(_=>Task.CompletedTask);
         await output.Push(JsonSerializer.Serialize(new{reply,commitments=marks},Database.Json));
         var review=output.Finish(words,id,p);

@@ -17,6 +17,8 @@ from foundation_smoke import fixture_save, free_port
 
 class Writer(BaseHTTPRequestHandler):
     calls=[]
+    proposal_waiting=threading.Event()
+    release_proposal=threading.Event()
     def log_message(self,*args):pass
     def do_POST(self):
         packet=json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -37,6 +39,14 @@ class Writer(BaseHTTPRequestHandler):
                       "I promise to mend the green banner tomorrow.":"Thank you."}[player]
             marks=[{"speaker":"player","quote":player}] if "promise" in player else []
             text=json.dumps(dict(topic="Small Talk",warm=response,neutral=response,cool=response,commitments=marks))
+        elif player in ("Did you hear my offer?","Would you do that for me?"):
+            if player=="Would you do that for me?":
+                self.proposal_waiting.set()
+                assert self.release_proposal.wait(12)
+                proposal="Could you bring the copper thimble to the mill?"
+            else:proposal="Could you bring a ribbon to the fair?"
+            text=json.dumps(dict(topic="Small Talk",warm="Yes, I will.",neutral="Yes, I will.",cool="Yes, I will.",
+                                 commitments=[dict(speaker="npc",quote="Yes, I will.",proposal=proposal)]))
         elif player=="Do you still keep a stone from the river?":
             text=json.dumps({"topic":"Small Talk","warm":"My favorite color is ruby.","neutral":"I do.","cool":"Sometimes.","commitments":[],
                              "learned":[{"speaker":"npc","subject":"self","facet":"favorite color","value":"ruby","quote":"My favorite color is ruby."}]})
@@ -199,7 +209,8 @@ def main(package,game_assets):
                 pg("psql","-XAt","-d",db,"-c","UPDATE campaigns SET player_name='Test player' WHERE player_name=''")
                 print("PASS two service restarts preserve the exact per-audience recaps and daily sources.",flush=True)
                 from dialogue_memory import check as check_dialogue_memory
-                check_dialogue_memory(api,beat,world,campaign,[a,b,third_key],lambda q:pg("psql","-XAt","-d",db,"-c",q),Writer.calls)
+                check_dialogue_memory(api,beat,world,campaign,[a,b,third_key],lambda q:pg("psql","-XAt","-d",db,"-c",q),Writer.calls,
+                                      Writer.proposal_waiting,Writer.release_proposal)
                 # A controller reused by a different native ID must start a separate journal.
                 for r in data["saveData"]:
                     if r["guid"].startswith("East-NPC-NPCController"):

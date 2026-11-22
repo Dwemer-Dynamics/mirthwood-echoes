@@ -90,7 +90,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
             recent AS (
                 SELECT id AS turn,day,left(player_text,300) AS player,left(reply,600) AS npc,started,
                     CASE WHEN @includeCues AND talk->>'deliveredContinuation'='true' THEN talk->'handoff'->>'cue' END AS "voicedCue"
-                FROM turns WHERE campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day AND state='complete'
+                FROM turns WHERE campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day AND state='complete' AND NOT dialogue_expired
                 ORDER BY started DESC,id DESC LIMIT @recentTurns
             )
             SELECT jsonb_build_object(
@@ -112,7 +112,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                 SELECT t.id AS turn,t.day,left(t.player_text,300) AS player,left(t.reply,600) AS npc,t.started
                 FROM turns t CROSS JOIN q
                 CROSS JOIN LATERAL (SELECT to_tsvector('english',t.player_text||' '||coalesce(t.reply,'')) AS words) s
-                WHERE @related AND t.campaign=@c AND t.actor=@a AND t.state='complete' AND t.day BETWEEN @earliest AND @day
+                WHERE @related AND t.campaign=@c AND t.actor=@a AND t.state='complete' AND NOT t.dialogue_expired AND t.day BETWEEN @earliest AND @day
                   AND NOT EXISTS(SELECT FROM recent r WHERE r.turn=t.id) AND s.words @@ q.speech
                 ORDER BY ts_rank_cd(s.words,q.speech) DESC,t.started DESC,t.id DESC LIMIT 2)x)
             )::text
@@ -195,6 +195,10 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
             web.RequestAborted.ThrowIfCancellationRequested();
             await using var conn=await db.Source.OpenConnectionAsync();
             await using var tx=await conn.BeginTransactionAsync();
+            if(review.Items.Any(item=>item.ProposalTurn is {} prior&&prior!=id)){
+                await LoadProposalSources(conn,c,a,facts);
+                review=output.Finish(player,id,facts);
+            }
             await using(var cmd=Database.Command(conn,"UPDATE turns SET state='complete',knowledge_reviewed=true,reply=@r,commitment_review=@review,first_ms=@first::int,total_ms=@total WHERE id=@id",
                 ("r",output.Reply),("review",review.Status),("first",first),("total",(int)timer.ElapsedMilliseconds),("id",id)))await cmd.ExecuteNonQueryAsync();
             await StoreAgreements(conn,c,a,day,id,facts,review,opt.Provider,model);
@@ -207,6 +211,21 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
             if(!web.Response.HasStarted)throw;
             if(!web.RequestAborted.IsCancellationRequested)await Send(new{type="error",message=e is UserError?e.Message:"The reply was interrupted."});
         }
+    }
+
+    static async Task LoadProposalSources(Npgsql.NpgsqlConnection conn,string campaign,string actor,JsonNode facts)
+    {
+        var ids=(facts["recentSpeech"] as JsonArray??[]).Select(line=>line.S("turn"))
+            .Where(value=>Guid.TryParse(value,out _)).Select(Guid.Parse).ToArray();
+        facts["recentSpeech"]=new JsonArray();
+        if(ids.Length==0)return;
+        await using var query=Database.Command(conn,"""
+            SELECT coalesce(jsonb_agg(to_jsonb(r)-'started' ORDER BY r.started,r.turn),'[]')::text FROM (
+              SELECT id AS turn,day,left(player_text,300) AS player,left(reply,600) AS npc,started
+              FROM turns WHERE campaign=@c AND actor=@a AND id=ANY(@ids) AND state='complete' AND NOT dialogue_expired
+              ORDER BY id FOR SHARE) r
+            """,("c",campaign),("a",actor),("ids",ids));
+        facts["recentSpeech"]=JsonNode.Parse((string)(await query.ExecuteScalarAsync())!);
     }
 
     static async Task StoreAgreements(Npgsql.NpgsqlConnection conn,string c,string a,int day,Guid id,JsonNode facts,DialogueOutput.Review review,string provider,string model,bool explicitHead=false,Guid? head=null)

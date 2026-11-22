@@ -1,11 +1,12 @@
 """Verify learning, day boundaries and durable delivery receipts against the actual server and database."""
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import time
 from uuid import uuid4
 
 
-def check(api, beat, world, campaign, residents, sql, calls):
+def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     averil, drystan, guest = residents
     load = str(uuid4())
     world["memorySession"] = load
@@ -143,6 +144,14 @@ def check(api, beat, world, campaign, residents, sql, calls):
     assert any(r["value"]=="fishing" for r in private_memory.get("characterKnowledge",[]))
     api("dialogue/finish",dict(native,reaction="neutral"))
     say("I promise to deliver flour tomorrow.")
+    ribbon=say("Could you bring a ribbon to the fair?")
+    agreement=dict(id=str(uuid4()),campaign=campaign,actor=averil,text="Did you hear my offer?")
+    assert api("dialogue/prepare",agreement)["state"]=="ready"
+    staged=json.loads(sql(f"""SELECT talk FROM turns WHERE id='{agreement["id"]}'"""))
+    assert staged["commitments"][0]["proposal"]["turn"]==ribbon["id"] and "ribbon" not in json.dumps(staged)
+    assert api("dialogue/finish",dict(agreement,reaction="neutral"))["state"]=="complete"
+    assert sql(f"""SELECT proposal FROM commitments WHERE turn_id='{agreement["id"]}'""")==ribbon["text"]
+    expiring=say("Could you bring the copper thimble to the mill?")
     beat(21)
     assert any(r["id"]=="day-20" and r["visits"]>=2 for r in view(averil,"sessions"))
     assert any(r["source"]==old["id"] for r in api(prefix+averil+"/history/sessions/day-20"))
@@ -153,12 +162,12 @@ def check(api, beat, world, campaign, residents, sql, calls):
     beat(49)
     assert clock()==elapsed
     # Restoring an earlier save consumes no days. Reaching the next date in that load consumes one.
-    world["memorySession"]=str(uuid4());beat(25)
+    world["memorySession"]=str(uuid4());beat(20)
     assert clock()==elapsed
     current_load=world["memorySession"]
     world["memorySession"]=load;beat(65)
     assert clock()==elapsed
-    world["memorySession"]=current_load;beat(25)
+    world["memorySession"]=current_load;beat(20)
     fresh=say("The alder tree has a crooked limb.")
     pending=dict(id=str(uuid4()),campaign=campaign,actor=averil,text="Do you still keep an alder by the gate?")
     assert api("dialogue/prepare",pending)["state"]=="ready"
@@ -166,8 +175,24 @@ def check(api, beat, world, campaign, residents, sql, calls):
     sql(f"""UPDATE turns SET talk=jsonb_set(talk,'{{recentSpeech}}',(SELECT jsonb_agg(
           jsonb_build_object('turn',id,'day',day,'player',player_text,'npc',reply) ORDER BY started)
           FROM turns WHERE id IN ('{old["id"]}','{fresh["id"]}'))) WHERE id='{pending["id"]}'""")
-    beat(26)
-    until(lambda: sql("SELECT dialogue_expired FROM turns WHERE id='"+old["id"]+"'")=="t")
+    legacy_marks=json.dumps([dict(speaker="npc",quote="I do.",proposal="The copper thimble fell off the gate.")])
+    sql(f"""UPDATE turns SET talk=jsonb_set(talk,'{{commitments}}','{legacy_marks}'::jsonb) WHERE id='{pending["id"]}'""")
+    delayed=dict(id=str(uuid4()),campaign=campaign,actor=averil,text="Would you do that for me?")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future=pool.submit(api,"dialogue/prepare",delayed)
+        try:
+            assert waiting.wait(5),"The provider did not receive the delayed reply"
+            prompt=next(call["messages"][0]["content"] for call in reversed(calls) if call["messages"][1]["content"]==delayed["text"])
+            assert expiring["text"] in prompt
+            beat(21)
+            until(lambda: sql("SELECT dialogue_expired FROM turns WHERE id='"+expiring["id"]+"'")=="t")
+        finally:release.set()
+        assert future.result()["state"]=="ready"
+    for turn in (delayed,pending):
+        assert "copper thimble" not in sql(f"""SELECT talk FROM turns WHERE id='{turn["id"]}'"""),turn["text"]
+    assert api("dialogue/finish",dict(delayed,reaction="neutral"))["state"]=="complete"
+    assert sql(f"""SELECT count(*) FROM commitments WHERE turn_id='{delayed["id"]}'""")=="0"
+    print("PASS a proposal that expires during generation cannot return through a pending reply or become a commitment.",flush=True)
     assert any(r["id"]==fresh["id"] for r in view(averil,"conversations"))
     assert not any(r["id"]==old["id"] for r in view(averil,"conversations"))
     retained=json.loads(sql(f"""SELECT talk->'recentSpeech' FROM turns WHERE id='{pending["id"]}'"""))

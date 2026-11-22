@@ -160,7 +160,15 @@ internal static class DialogueRetention
               LEFT JOIN old_turns x ON x.campaign=t.campaign AND x.id::text=r.line->>'turn'
               WHERE t.talk ? 'recentSpeech' AND EXISTS(SELECT FROM old_turns active WHERE active.campaign=t.campaign)
               GROUP BY t.id HAVING bool_or(x.id IS NOT NULL))
-            UPDATE turns t SET talk=jsonb_set(t.talk,'{recentSpeech}',r.lines) FROM retained r WHERE t.id=r.id;
+            UPDATE turns t SET talk=jsonb_set(t.talk,'{recentSpeech}',r.lines) ||
+              CASE WHEN jsonb_typeof(t.talk->'commitments')='array' THEN jsonb_build_object('commitments',(
+                SELECT coalesce(jsonb_agg(CASE WHEN jsonb_typeof(m->'proposal')='string'
+                    AND NOT (m->>'speaker'='npc' AND strpos(t.player_text,m->>'proposal')>0)
+                    AND NOT EXISTS(SELECT FROM jsonb_array_elements(r.lines) l WHERE
+                      strpos(l->>(CASE WHEN m->>'speaker'='npc' THEN 'player' ELSE 'npc' END),m->>'proposal')>0)
+                  THEN m||'{"proposal":null}'::jsonb ELSE m END ORDER BY seq),'[]') FROM
+                  jsonb_array_elements(t.talk->'commitments') WITH ORDINALITY marks(m,seq))) ELSE '{}'::jsonb END
+              FROM retained r WHERE t.id=r.id;
             DELETE FROM resident_recaps r USING old_entries x WHERE r.kind<>'daily' AND r.campaign=x.campaign AND r.actor=x.actor AND
               r.entry IN (x.session,'day-'||x.day,'day-'||x.day||'-'||x.session);
             DELETE FROM dialogue_day_recaps r USING old_entries x WHERE r.campaign=x.campaign AND r.actor=x.actor AND r.day=x.day
