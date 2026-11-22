@@ -597,5 +597,51 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release, m
     assert quotes[0].rstrip(".") in concordance(busy,"What was Jo asking to borrow?",210)[0]["note"]
     assert warning.rstrip(".") in concordance(refusal,"Who warned me against lending him the cart?",210)[0]["note"]
     print("PASS named corrections qualify only their evidenced subject, and quoted questions retain their reporting clause.", flush=True)
+    beat(245)
+    grant = exchange([("player",averil,"You may borrow my cart. I take that back. I have to go.")])
+    refusal = exchange([("player",averil,"You may not borrow my saddle. I take that back. The kettle is boiling.")])
+    maybe, (cloak, _) = exchange([("player",averil,"I might lend you my cloak."),
+                                  ("player",averil,"I take that back. The lantern has gone out.")])
+    across, (wagon, _) = exchange([("player",averil,"You may borrow my wagon."),("player",averil,"I take that back. I have to go.")])
+    actor_only = exchange([("player",averil,"I landed a speckled trout beneath the alder footbridge. I was mistaken. It was Ada.")])
+    painter, (painted, _) = exchange([("player",averil,"I painted the red handcart."),("player",averil,"I was mistaken. It was Nia.")])
+    named_actor = exchange([("player",averil,"I polished the bronze buckle. I was mistaken about who polished it. It was Nell.")])
+    pottery = exchange([("player",averil,"I glazed the stoneware jug.")])
+    _, (potter,) = exchange([("player",averil,"I was mistaken. Nell glazed the jug.")])
+    plain = exchange([("player",averil,"You may borrow my mirror. I take that back.")])
+    unclear_grant = exchange([("player",averil,"You may borrow my spade. You may borrow my rake. I take that back. I have to go.")])
+    tools_chat = str(uuid4())
+    hoe = group("player","You may borrow my hoe.",[*both,guest],to=averil,chat=tools_chat)
+    pitchfork = group("player","You may borrow my pitchfork.",[*both,guest],to=averil,chat=tools_chat)
+    withdrawal = group("player","I take that back. I have to go.",both,to=averil,chat=tools_chat)
+    beat(246)
+    for scene, word, original in [(grant,"cart","may borrow"), (refusal,"saddle","may not borrow"),
+                                   ((maybe,[cloak]),"cloak","might lend"), ((across,[wagon]),"wagon","may borrow"),
+                                   (plain,"mirror","may borrow")]:
+        note = concordance(scene, f"What did you say about lending the {word}?",245)[0]
+        assert original in note["note"] and note["correction"]["note"]=="Withdrew their earlier account.", note
+    assert "kettle" in concordance(refusal,"What was boiling?",245)[0]["note"]
+    pot = concordance(pottery,"Who glazed the stoneware jug?",245)[0]
+    assert pot["correction"]["source"]==potter and "Nell glazed the jug" in pot["note"], pot
+    for scene, query, name in [(actor_only,"Who landed the trout beneath the bridge?","Ada"),
+                               ((painter,[painted]),"Who actually painted the handcart?","Nia"),
+                               (named_actor,"Who polished the bronze buckle?","Nell")]:
+        note = concordance(scene,query,245)[0]
+        assert f"It was {name}" in note["correction"]["note"], note
+    for scene, tool in [(unclear_grant,"spade"),((tools_chat,[hoe]),"hoe"),((tools_chat,[pitchfork]),"pitchfork")]:
+        note = concordance(scene,f"What permission did I give about the {tool}?",245)[0]
+        amendment = note.get("uncertainty") or note.get("correction")
+        assert "unclear target" in note["note"] and amendment["targetUnclear"], note
+    def original_permission(listener, query):
+        note = next(r for r in check_recall(listener,query) if r["source"]==hoe)
+        body = next(r["body"] for r in view(listener,"sessions") if r["id"]=="day-245-"+tools_chat)
+        assert note["note"] in body and not ({"correction","uncertainty"} & note.keys()) and "Withdrew" not in body, (note,body)
+        return dict(recap=note,journal=body)
+    partial = original_permission(guest,"What did the player say about the hoe?")
+    world["cueHead"]=pitchfork; beat(246)
+    rewind = original_permission(averil,"What did I tell you about the hoe?")
+    print("Withdrawal witnesses",json.dumps(dict(withdrawal=withdrawal,partialWitness=partial,rewound=rewind)),flush=True)
+    world["cueHead"]=withdrawal; beat(246)
+    print("PASS a bare withdrawal survives the next sentence, actor-only replacements stay attributed, and ambiguous withdrawals qualify possible permissions.",flush=True)
     memory_model("historian")
     print("PASS Talk and journal agree on sourced roles, recipients, corrections and unresolved claims after an unavailable overnight model.", flush=True)

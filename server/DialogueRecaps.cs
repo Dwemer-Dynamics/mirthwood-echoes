@@ -29,9 +29,12 @@ internal static partial class DialogueRecaps
           (left(detail,5)<>'Said ' OR journal_note NOT IN ('Reported '||substr(detail,6),'Reported that '||substr(detail,6),
             detail,'Said that '||substr(detail,6)));
         ALTER TABLE dialogue_recap_parts ADD COLUMN IF NOT EXISTS corrects_source uuid,
-          ADD COLUMN IF NOT EXISTS corrects_pos int, ADD COLUMN IF NOT EXISTS corrects_sentence int;
+          ADD COLUMN IF NOT EXISTS corrects_pos int, ADD COLUMN IF NOT EXISTS corrects_sentence int,
+          ADD COLUMN IF NOT EXISTS possible_targets text[];
         CREATE INDEX IF NOT EXISTS recap_corrections ON dialogue_recap_parts(campaign,corrects_source,corrects_pos,corrects_sentence)
           WHERE corrects_source IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS recap_possible_targets ON dialogue_recap_parts USING gin(possible_targets)
+          WHERE possible_targets IS NOT NULL;
         CREATE INDEX IF NOT EXISTS recap_age ON dialogue_recap_parts(campaign,age);
         CREATE INDEX IF NOT EXISTS recap_search ON dialogue_recap_parts USING gin(search);
         CREATE INDEX IF NOT EXISTS recap_concepts ON dialogue_recap_parts USING gin(concepts);
@@ -98,7 +101,8 @@ internal static partial class DialogueRecaps
         Recall a speaker's account as something they told you. Keep their uncertainty or disagreement. A question or a list of subjects establishes only what was discussed.
         Read fragments in the original speaker's voice and keep nested speech with the person quoted. The original addressee in to can be different from a witness.
         Leave a missing addressee unresolved. A line to the group does not single out one person. Preserve refusals and conditions. A partial note cannot establish consent.
-        Use a speaker's later correction when its target is clear. If the note says its target is unclear, preserve that uncertainty.
+        Use a speaker's later correction when its target is clear. A withdrawn grant or an unclear withdrawal cannot establish current consent.
+        Withdrawing a refusal does not grant permission. Preserve uncertainty when the target or the replacement is unclear.
         Another speaker's disagreement remains their own account.
         """;
 
@@ -263,19 +267,18 @@ internal static partial class DialogueRecaps
                 {UnresolvedYou=reader.GetBoolean(14)});
         }
         foreach(var row in rows){
-            foreach(var part in Notes(row)){
-                var target = part.Correction ? await EarlierAccount(conn,row,part,ct) : null;
-                string note = part.NeedsMatch && target==null ? Detail(part.Text,part.Question,part.Gesture,part.Terms) : part.Note;
+            foreach(var part in await ResolveNotes(conn,row,ct)){
+                var target = part.Target is {Possible:null} definite ? definite : null;
                 await using var insert=Database.Command(conn,"""
                     INSERT INTO dialogue_recap_parts(campaign,source,pos,sentence,anchor,day,age,session,mode,said_at,seq,speaker,audience,detail,keywords,concepts,question,
-                        corrects_source,corrects_pos,corrects_sentence)
-                    VALUES(@c,@id,@p,@sentence,@anchor,@day,@age,@session,@mode,@at,@seq,@speaker,@audience,@detail,@terms,@concepts,@question,@previous,@position,@earlier)
+                        corrects_source,corrects_pos,corrects_sentence,possible_targets)
+                    VALUES(@c,@id,@p,@sentence,@anchor,@day,@age,@session,@mode,@at,@seq,@speaker,@audience,@detail,@terms,@concepts,@question,@previous,@position,@earlier,@possible)
                     ON CONFLICT DO NOTHING
                     """,("c",row.Campaign),("id",row.Id),("p",row.Position),("anchor",row.Anchor),("day",row.Day),("age",row.Age),
                     ("session",row.Session),("mode",row.Mode),("at",row.At),("seq",row.Sequence),("speaker",row.Speaker),
-                    ("audience",row.Audience),("detail",note),("terms",string.Join(" ",part.Terms.Order())),
+                    ("audience",row.Audience),("detail",part.Note),("terms",string.Join(" ",part.Terms.Order())),
                     ("concepts",Concepts(part.Terms)),("question",part.Question),("sentence",part.Index),
-                    ("previous",target?.Source),("position",target?.Position),("earlier",target?.Sentence));
+                    ("previous",target?.Source),("position",target?.Position),("earlier",target?.Sentence),("possible",part.Target?.Possible));
                 if(await insert.ExecuteNonQueryAsync(ct)>0 && !part.Gesture && !part.Correction && part.Terms.Length>0 && row.Audience.Length>0)
                     samples.Add(row with {Words=part.Text,Sentence=part.Index,Note=part.Note});
             }
@@ -300,15 +303,17 @@ internal static partial class DialogueRecaps
           AND (p.anchor IS NULL OR p.anchor IN (SELECT id FROM ancestry))
         """;
     const string Revision = """
-        LEFT JOIN LATERAL (SELECT r.* FROM eligible r
-          WHERE r.corrects_source=coalesce(p.corrects_source,p.source) AND r.corrects_pos=coalesce(p.corrects_pos,p.pos)
+        LEFT JOIN LATERAL (SELECT revision.* FROM (
+          SELECT r.* FROM eligible r WHERE r.corrects_source=coalesce(p.corrects_source,p.source) AND r.corrects_pos=coalesce(p.corrects_pos,p.pos)
             AND (r.corrects_sentence=coalesce(p.corrects_sentence,p.sentence)
               OR r.corrects_sentence=-1 AND p.corrects_source IS NULL AND p.sentence<r.sentence AND NOT p.question)
-          ORDER BY r.age DESC,r.said_at DESC,r.seq DESC,r.source DESC,r.pos DESC,r.sentence DESC LIMIT 1) rev
+          UNION ALL SELECT r.* FROM eligible r WHERE r.possible_targets @> ARRAY[concat_ws('/',
+            coalesce(p.corrects_source,p.source),coalesce(p.corrects_pos,p.pos),coalesce(p.corrects_sentence,p.sentence))]
+          ) revision ORDER BY age DESC,said_at DESC,seq DESC,source DESC,pos DESC,sentence DESC LIMIT 1) rev
           ON (rev.source,rev.pos,rev.sentence)<>(p.source,p.pos,p.sentence)
         """;
     const string RevisedDetail = """
-        CASE WHEN rev.corrects_sentence=-1 THEN 'A later correction in this account has an unclear target — '
+        CASE WHEN rev.corrects_sentence=-1 OR rev.possible_targets IS NOT NULL THEN 'A later correction in this account has an unclear target — '
           WHEN rev.detail LIKE 'Clarified their account.%' THEN 'Earlier account, later clarified — '
           ELSE 'Earlier account, later corrected — ' END||p.detail||' '||rev.name||coalesce(' to '||rev.to_name,'')||' — '||rev.detail
         """;
@@ -380,10 +385,11 @@ internal static partial class DialogueRecaps
             )
             SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('source',p.source,'position',p.pos,'sentence',p.sentence,'day',p.day,
               'speaker',p.name,'speakerKey',p.speaker,'to',p.to_name,'toKey',p.to_key,'kind',p.mode,
-              'note',CASE WHEN rev.source IS NULL THEN p.detail ELSE {RevisedDetail} END,
-              'correction',CASE WHEN rev.source IS NOT NULL THEN jsonb_build_object('source',rev.source,'position',rev.pos,'sentence',rev.sentence,
+              'note',CASE WHEN rev.source IS NULL THEN p.detail ELSE {RevisedDetail} END) ||
+              CASE WHEN rev.source IS NULL THEN jsonb_build_object() ELSE jsonb_build_object(
+                CASE WHEN rev.possible_targets IS NULL THEN 'correction' ELSE 'uncertainty' END,jsonb_build_object('source',rev.source,'position',rev.pos,'sentence',rev.sentence,
                   'day',rev.day,'speakerKey',rev.speaker,'to',rev.to_name,'toKey',rev.to_key,'note',rev.detail,
-                  'targetUnclear',CASE WHEN rev.corrects_sentence=-1 THEN true END) END))
+                  'targetUnclear',CASE WHEN rev.corrects_sentence=-1 OR rev.possible_targets IS NOT NULL THEN true END)) END)
               ORDER BY p.question,p.words DESC,p.addressed DESC,p.specificity DESC,p.said_at DESC,p.source,p.pos,p.sentence)::text
             FROM selected p {Revision}
             """;
