@@ -77,10 +77,18 @@ class AwarenessPlay:
             raise AssertionError("The world context receipt differs from the literal provider input.")
         clock = observed["calendar"]
         date = context["calendar"]
-        # The game HUD has no year-zero label. The model can omit the native zero-based year.
-        if (date["season"], date["dayOfSeason"], date["timeOfDay"], date.get("year", 0)) != (
-                clock["hudSeason"], int(clock["hudDay"]), clock["TimeOfDayString"], clock["YearNumber"]):
+        if (date["season"], date["dayOfSeason"], date["timeOfDay"]) != (
+                clock["hudSeason"], int(clock["hudDay"]), clock["TimeOfDayString"]):
             raise AssertionError("The speaker's date or time differs from the native HUD and clock.")
+        for scene in actual:
+            dates = [scene["calendar"], *scene.get("today", []), *scene.get("nextByKind", {}).values()]
+            dates.extend(scene[key] for key in ("nextNotice", "previousNotice") if key in scene)
+            if any("year" in entry for entry in dates):
+                raise AssertionError("A model-facing date exposes the game's internal year.")
+        if observed["stage"] == "accepted":
+            frozen = observed["extra"]["intent"]["worldAwareness"]["calendar"]
+            if frozen["year"] != clock["YearNumber"]:
+                raise AssertionError("The accepted native snapshot lost the engine year used to order notices.")
         if observed["resident"].get("homeTown") == "Brightoak":
             # All seven entries were transcribed from the two opened native notices in this game build.
             posted = {
@@ -183,12 +191,14 @@ class AwarenessPlay:
             walking, = [o for o in observations if o["stage"] == "walking-before-talk"]
             active = {task["name"] for task in walking["resident"]["jobs"]
                       if task["sameOwner"] and task["enabled"] and task["status"] == "Continue"}
-            if "Go To Work" not in active or walking["resident"]["stopped"] or walking["extra"]["moved"] <= .4:
-                raise AssertionError("The copied visit did not establish the resident's own walk to work.")
+            routines = {"Go To Work": "work", "Walk To Relax": "rest"}
+            observed_routines = [word for task, word in routines.items() if task in active]
+            if len(observed_routines) != 1 or walking["resident"]["stopped"] or walking["extra"]["moved"] <= .4:
+                raise AssertionError("The copied visit did not establish one identifiable native walk to work or rest.")
             for record in records[:2]:
                 activity = record["provider"][0]["awareness"].get("interruptedActivity", "")
-                if "work" not in activity.casefold():
-                    raise AssertionError("The accepted provider input lost the resident's observed trip to work.")
+                if observed_routines[0] not in activity.casefold():
+                    raise AssertionError("The provider input lost the resident's observed routine during Talk.")
         if not self.baseline:
             for step, row in zip(self.plan["turns"], records):
                 if "venue" not in step:
