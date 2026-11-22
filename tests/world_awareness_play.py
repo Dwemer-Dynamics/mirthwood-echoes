@@ -177,10 +177,12 @@ class AwarenessPlay:
         if any(step.get("nativePrecipitation") for step in self.plan["turns"]) and not self.baseline:
             for step, record in zip(self.plan["turns"], records):
                 scene = record["provider"][0]["awareness"]
-                if step["doorway"]["speakerSide"] == "inside":
+                if step.get("doorway", {}).get("speakerSide") == "inside":
                     if not scene.get("place", {}).get("interior") or scene.get("weather"):
                         raise AssertionError("Indoor Talk borrowed the outdoor weather.")
                     continue
+                if record["source"]["resident"].get("overhead"):
+                    raise AssertionError("The outdoor weather trial still has an obstruction above the speaker.")
                 native = {r["condition"] for r in record["source"]["resident"]["weatherVolumes"] if r["condition"]}
                 condition, = native
                 if step.get("nativePrecipitation") and condition == "Sun":

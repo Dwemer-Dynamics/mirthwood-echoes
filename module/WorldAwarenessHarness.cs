@@ -126,6 +126,7 @@ namespace Mirthwood.Echoes
                     .OrderBy(hit=>hit.distance).Take(4).Select(hit=>PathOf(hit.collider.transform)).ToArray();
                 return new { name = npc.CharacterInfo.name, nativeId = npc.CharacterInfo.id, owner = Plugin.Owner(npc),
                     homeTown = npc.CharacterInfo.town.ToString(),
+                    overhead = Overhead(position,npc.transform).Select(hit=>PathOf(hit.transform)).ToArray(),
                     scene = npc.gameObject.scene.name, position = At(position), layer = npc.gameObject.layer,
                     chatEnabled = brain && brain.chatEnabled, scriptedSpeak = brain && brain.GetDialogueData() != null,
                     taskType = task?.GetType().FullName, lastTaskLabel = AccessTools.Field(typeof(NPCController), "_lastTask").GetValue(npc) as string,
@@ -339,7 +340,40 @@ namespace Mirthwood.Echoes
                     Record("walking-before-talk",index,npc,new {start=At(start),moved=Vector3.Distance(start,npc.transform.position)});
                 }
                 if (plan["turns"][index]["doorway"] == null && plan["turns"][index]["venue"] == null)
+                {
                     yield return Approach(npc.transform.position);
+                    var player = PlayerCharacterController.Instance;
+                    if (!SolidFloor(player.transform.position) || (player.transform.position-npc.transform.position).sqrMagnitude>6.25f)
+                    {
+                        Vector3? landing=null;
+                        yield return Await(() => (landing=GroundBeside(npc.transform.position)).HasValue,
+                            "No solid walking surface streamed beside the Talk resident.",10);
+                        yield return player.CoTeleport(landing.Value,0,0,false,false);
+                        yield return new WaitForFixedUpdate();
+                        Record("regrounded-approach",index,npc,new {landing=At(landing.Value)});
+                    }
+                    if (!SolidFloor(player.transform.position) || (player.transform.position-npc.transform.position).sqrMagnitude>6.25f)
+                        throw new InvalidOperationException("The player could not stand beside the Talk resident.");
+                }
+            }
+
+            static bool SolidFloor(Vector3 position) =>
+                Physics.RaycastAll(position+Vector3.up*.65f,Vector3.down,1.3f,
+                    Physics.DefaultRaycastLayers,QueryTriggerInteraction.Ignore).Any(hit =>
+                    hit.normal.y>.4f && !hit.collider.GetComponentInParent<Character>() && Mathf.Abs(hit.point.y-position.y)<.45f);
+
+            static RaycastHit[] Overhead(Vector3 position, Transform speaker=null) =>
+                Physics.RaycastAll(position+Vector3.up*1.2f,Vector3.up,15f,Physics.AllLayers,QueryTriggerInteraction.Ignore)
+                    .Where(hit=>!speaker || !hit.transform.IsChildOf(speaker)).OrderBy(hit=>hit.distance).ToArray();
+
+            static Vector3? GroundBeside(Vector3 resident)
+            {
+                for(int i=0;i<8;i++){
+                    var point=resident+Quaternion.Euler(0,i*45f,0)*Vector3.right;
+                    if(NavMesh.SamplePosition(point,out var hit,1f,NavMesh.AllAreas) &&
+                        (hit.position-resident).sqrMagnitude<4f && SolidFloor(hit.position))return hit.position;
+                }
+                return null;
             }
 
             static Vector3? StandBackFrom(Vector3 resident, bool requireGround)
@@ -349,9 +383,7 @@ namespace Mirthwood.Echoes
                     if (!NavMesh.SamplePosition(sample,out var hit,1.5f,NavMesh.AllAreas)) continue;
                     float distance=(hit.position-resident).sqrMagnitude;
                     if (distance<16f || distance>49f) continue;
-                    if (requireGround && !Physics.RaycastAll(hit.position+Vector3.up*.65f,Vector3.down,1.3f,
-                        Physics.DefaultRaycastLayers,QueryTriggerInteraction.Ignore).Any(p=>
-                        p.normal.y>.4f && !p.collider.GetComponentInParent<Character>() && Mathf.Abs(p.point.y-hit.position.y)<.45f)) continue;
+                    if (requireGround && !SolidFloor(hit.position)) continue;
                     return hit.position;
                 }
                 return null;
@@ -396,12 +428,31 @@ namespace Mirthwood.Echoes
                 if(!door)throw new InvalidOperationException("No pair of walkable points on opposing sides of "+building);
                 Vector3 Landing(string side) => side=="inside"?inside:side=="outside"?outside:throw new InvalidDataException("Unknown side of doorway.");
                 var player = PlayerCharacterController.Instance;
+                var residentLanding=Landing((string)spec["speakerSide"]);
+                var playerLanding=Landing((string)spec["playerSide"]);
+                if ((bool?)spec["openSky"]==true)
+                {
+                    var lateral=Vector3.Cross(inward,Vector3.up);
+                    var paths=from depth in new[]{3f,5f,7f,10f,12f}
+                              from offset in new[]{0f,2f,-2f,4f,-4f}
+                              select center-inward*depth+lateral*offset;
+                    bool found=false;
+                    foreach(var point in paths)
+                    {
+                        if(!NavMesh.SamplePosition(point,out var residentPoint,1f,NavMesh.AllAreas) ||
+                            !SolidFloor(residentPoint.position) || Overhead(residentPoint.position).Length!=0)continue;
+                        if(!NavMesh.SamplePosition(residentPoint.position+lateral*1.7f,out var playerPoint,.65f,NavMesh.AllAreas) ||
+                            !SolidFloor(playerPoint.position) || Vector3.Distance(residentPoint.position,playerPoint.position)<1.25f)continue;
+                        residentLanding=residentPoint.position;playerLanding=playerPoint.position;found=true;break;
+                    }
+                    if(!found)throw new InvalidOperationException("No exposed walking surface beyond the inn doorway.");
+                }
                 yield return player.CoTeleport(Landing("outside"),0,0,false,false);
                 yield return new WaitForFixedUpdate();
                 yield return player.CoTeleport(center,0,0,false,false);
                 yield return new WaitForFixedUpdate();
-                yield return player.CoTeleport(Landing((string)spec["playerSide"]),0,0,false,false);
-                StageGuest(npc,Landing((string)spec["speakerSide"]));
+                yield return player.CoTeleport(playerLanding,0,0,false,false);
+                StageGuest(npc,residentLanding);
                 yield return new WaitForFixedUpdate();
                 if(StoryCardOpen)yield return DismissGroupTestCards();
                 var nativeInside=AccessTools.Method(typeof(DoorTrigger),"IsOtherInside");
@@ -506,13 +557,15 @@ namespace Mirthwood.Echoes
                 var herald=joust ? AccessTools.Field(typeof(JoustingMiniGame),"npcEventStarter")?.GetValue(joust) as NPCChatController : null;
                 if(!herald || !herald.transform.IsChildOf(root.transform)) throw new InvalidOperationException("The active joust has no public starter.");
                 yield return Approach(herald.transform.position);
-                yield return Await(()=>herald.isActiveAndEnabled && herald.GetDialogueData()!=null,
-                    "No public tournament dialogue at the native herald.",10);
                 yield return DismissGroupTestCards();
+                var offer=herald.isActiveAndEnabled ? herald.GetDialogueData() : null;
+                Record("joust-public-frontage",index,witness,new {path=PathOf(herald.transform),position=At(herald.transform.position),
+                    active=herald.isActiveAndEnabled,hasDialogue=offer!=null,spawnedInstance=root.GetInstanceID()});
+                // A spectator can see this event's active performers even if the herald has no conversation to open.
+                if(offer==null)yield break;
                 var player=PlayerCharacterController.Instance.GetComponent<PlayerChat>();
                 var selected=Plugin.Selected.GetValue(player);
                 var target=player.chatTarget;
-                var offer=herald.GetDialogueData();
                 DialogueView stock=null;
                 try {
                     stock=ChooseSpeak(herald.GetComponent<NPCController>());

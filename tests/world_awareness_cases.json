@@ -249,12 +249,12 @@
     "turns": [
       {
         "calendar": { "season": "Fall", "day": 9, "time": 0.88 },
-        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside" },
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside", "openSky": true },
         "words": "It's late. How does the weather look to you out here?",
         "check": "Compare the native night and actual weather at the resident. A fair-weather condition at night is not daylight.", "capture": true
       },
       {
-        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside" },
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside", "openSky": true },
         "nativePrecipitation": true,
         "words": "I left my cloak behind. What's the weather doing out here now?",
         "check": "Use the resident's actual native outdoor precipitation in the spoken reply.", "capture": true
