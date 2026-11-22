@@ -249,6 +249,7 @@
     "turns": [
       {
         "calendar": { "season": "Fall", "day": 9, "time": 0.88 },
+          "nativePrecipitation": false,
         "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside", "openSky": true },
         "words": "It's late. How does the weather look to you out here?",
         "check": "Compare the native night and actual weather at the resident. A fair-weather condition at night is not daylight.", "capture": true
@@ -283,21 +284,25 @@
   },
   "witness-and-rewind": {
     "resident": "Graham",
+    "attendanceEvent": "Grand Joust",
     "turns": [
       {
         "calendar": { "season": "Spring", "day": 14, "time": 0.44 },
         "snapshot": true,
+          "attendance": "unknown",
         "words": "I'm thinking of going to the joust. Have you seen me at it yet, or only heard me talk about it?",
         "check": "Source the posted event and leave unobserved attendance open."
       },
       {
         "venue": { "title": "Grand Joust", "landmark": "Dummy Juggler" },
+          "attendance": "witnessed",
         "words": "What can you actually see here? Who's with you at the joust gathering?",
         "check": "Pair the event's own visible performers in Brightoak, both people and the spoken words with the firsthand cue.",
         "capture": true
       },
       {
         "venue": { "title": "Grand Joust", "landmark": "Dummy Juggler", "end": true },
+          "attendance": "witnessed",
         "words": "Did you see the jousting stop, or does the notice just give today's date?",
         "check": "Only a direct witness of the actual end can call it finished.",
         "capture": true
@@ -305,11 +310,13 @@
       {
         "calendar": { "season": "Spring", "day": 15, "time": 0.42 },
         "words": "Did you see me at the joust yesterday?",
+          "attendance": "witnessed",
         "check": "Recover attested earlier attendance from this save branch."
       },
       {
         "rewind": true,
         "words": "Did you see me at the joust, and do you know if it has ended?",
+          "attendance": "unknown",
         "check": "The earlier same-date save lacks the future witness and ending. The public notice still applies.",
         "capture": true
       }
@@ -388,6 +395,47 @@
       {
         "words": "I have to go. Take care.",
         "check": "End naturally."
+      }
+    ]
+  },
+  "joust-blocked": {
+    "resident": "Drystan",
+    "startingDesire": "eager",
+    "turns": [
+      {
+        "calendar": {"season": "Spring", "day": 14, "time": 0.44},
+        "doorway": {"building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside", "openSky": true},
+        "words": "I'm thinking of going to the joust. Have you seen me there yet?",
+        "check": "An intention and a public date do not establish attendance."
+      },
+      {
+        "venue": {"title": "Grand Joust", "landmark": "Dummy Juggler", "view": "blocked"},
+        "words": "What can you actually see here? Can you tell who is at the gathering?",
+        "check": "Compare the blocked performer, visible player and separate stock notice with the spoken answer.",
+        "capture": true
+      }
+    ]
+  },
+  "joust-witness-only": {
+    "resident": "Drystan",
+    "startingDesire": "eager",
+    "turns": [
+      {
+        "calendar": {"season": "Spring", "day": 14, "time": 0.44},
+        "doorway": {"building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside", "openSky": true},
+        "words": "I'd like to go to the joust today. Has it started?",
+        "check": "Identify what is posted before any personal sighting."
+      },
+      {
+        "venue": {"title": "Grand Joust", "landmark": "Dummy Juggler", "view": "event-only"},
+        "words": "What can you see at the gathering? Did you see me with the performers?",
+        "check": "The resident could see a performer independently of seeing the player.",
+        "capture": true
+      },
+      {
+        "returnFromVenue": "Grand Joust",
+        "words": "What did you see at the joust? Can you tell if it is still going on from here?",
+        "check": "Attribute any earlier performance and leave the remote ending unknown."
       }
     ]
   },

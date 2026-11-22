@@ -185,6 +185,8 @@ class AwarenessPlay:
                     raise AssertionError("The outdoor weather trial still has an obstruction above the speaker.")
                 native = {r["condition"] for r in record["source"]["resident"]["weatherVolumes"] if r["condition"]}
                 condition, = native
+                if step.get("nativePrecipitation") is False and condition != "Sun":
+                    raise AssertionError("The native trial did not start with clear weather at the speaker.")
                 if step.get("nativePrecipitation") and condition == "Sun":
                     raise AssertionError("The native trial did not establish outdoor precipitation.")
                 if scene.get("weather") != ("clear weather" if condition == "Sun" else condition):
@@ -203,13 +205,7 @@ class AwarenessPlay:
                     raise AssertionError("The provider input lost the resident's observed routine during Talk.")
         if not self.baseline:
             for step, row in zip(self.plan["turns"], records):
-                if "venue" not in step:
-                    continue
-                venue = step["venue"]
-                status = "ended" if venue.get("end") else "active"
-                today = row["provider"][0]["awareness"].get("today", [])
-                if not any(e["title"] == venue["title"] and e["status"] == status and e["source"] == "firsthand" for e in today):
-                    raise AssertionError("The speaker at the confirmed venue lacks the witnessed " + status + " event.")
+                self.verify_venue(step, row)
         if route == "residentdialogue":
             addressed = []
             for opener in result["openers"]:
@@ -233,6 +229,33 @@ class AwarenessPlay:
             game.write(work / "journal-openers.json", written)
             if {row["id"]: row["reply"] for row in written} != expected or len(written) != len(expected):
                 raise AssertionError("The passing remark recovery disagrees with the private journal.")
+
+    def verify_venue(self, step, row):
+        venue = step.get("venue", {})
+        attendance = step.get("attendance")
+        if venue.get("view") == "event-only":
+            attendance = "unknown"
+        if not venue and not attendance:
+            return
+        call = row["provider"][0]
+        title = venue.get("title") or self.plan["attendanceEvent"]
+        if attendance:
+            facts = json.JSONDecoder().raw_decode(call["system"].split("Recall: ", 1)[1])[0]
+            descriptions = [entry["description"] for entry in facts.get("eventWitnesses", [])]
+            name = row["source"]["player"]["name"]
+            saw_player = any(title in line and f"I saw {name} there." in line for line in descriptions)
+            if attendance not in ("witnessed", "unknown") or saw_player != (attendance == "witnessed"):
+                raise AssertionError("The personal attendance record differs from the observed event, branch or visit.")
+        if not venue:
+            return
+        firsthand = [e for e in call["awareness"].get("today", []) if e["title"] == title and e["source"] == "firsthand"]
+        if venue.get("view") == "blocked":
+            if firsthand:
+                raise AssertionError("The blocked spectator received a firsthand sighting. Check the performers and the prior visit.")
+        else:
+            status = "ended" if venue.get("end") else "active"
+            if not any(e["status"] == status for e in firsthand):
+                raise AssertionError("The speaker at the confirmed venue lacks the witnessed " + status + " event.")
 
     def verify_fall_posters(self, records, observations):
         visits = {row["source"]["extra"]["intent"]["context"]["conversation"] for row in records}

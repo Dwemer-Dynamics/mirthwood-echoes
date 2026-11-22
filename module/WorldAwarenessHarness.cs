@@ -145,7 +145,7 @@ namespace Mirthwood.Echoes
                     .Select(s => new { title = s.story.eventData.title, s.startTime }).ToArray();
                 var entry = new { sequence = ++sequence, stage, turn, utc = DateTime.UtcNow, unityFrame = Time.frameCount,
                     scene = SceneManager.GetActiveScene().name, world = Plugin.World(), calendar = Calendar(),
-                    player = new { position = At(player.transform.position), scene = player.gameObject.scene.name, layer = player.gameObject.layer },
+                    player = new { name=player.CharacterInfo?.name, position = At(player.transform.position), scene = player.gameObject.scene.name, layer = player.gameObject.layer },
                     playerWeather = new { region = weather?.CurrentRegion?.name, condition = weather?.CurrentWeatherCondition?.Type },
                     resident = Resident(npc), activeStories = stories, extra };
                 File.AppendAllText(Path.Combine(output, "observations.jsonl"), JsonConvert.SerializeObject(entry) + Environment.NewLine);
@@ -476,13 +476,19 @@ namespace Mirthwood.Echoes
                 if (!teller.TryGetActiveStory(title,out var story)) {
                     var schedule = teller.scheduledStories.FirstOrDefault(s => s.story?.eventData?.title == title &&
                         s.season.HasFlag(DayNightCycle.Instance.CurrentSeason));
-                    if(schedule!=null && schedule.story.CanBegin())teller.StartNewScheduledStory(schedule);
+                    bool scheduled=schedule!=null && schedule.story.CanBegin();
+                    if(scheduled)teller.StartNewScheduledStory(schedule);
                     else{
-                        var random=teller.stories.SingleOrDefault(s=>s?.eventData?.title==title);
-                        if(random==null)throw new InvalidOperationException("The copied native event cannot start: " + title);
-                        teller.ForceStartStory(random);
+                        var choices=teller.stories.Select((entry,ordinal)=>new {entry,ordinal})
+                            .Where(x=>x.entry?.eventData?.title==title).ToArray();
+                        var eligible=choices.Where(x=>x.entry.CanBegin()).ToArray();
+                        Record("native-story-choices",index,npc,new {title,
+                            entries=choices.Select(x=>new {x.ordinal,asset=x.entry.eventData.name,eligible=eligible.Contains(x)}),
+                            chosen=eligible.FirstOrDefault()?.ordinal});
+                        if(eligible.Length==0)throw new InvalidOperationException("No eligible native story for " + title);
+                        teller.ForceStartStory(eligible[0].entry);
                     }
-                    Record("fixture-started-native-story",index,npc,new {title,scheduled=schedule!=null});
+                    Record("fixture-started-native-story",index,npc,new {title,scheduled});
                     yield return Await(() => teller.HasActiveStory(title),"The native event did not start.");
                     teller.TryGetActiveStory(title,out story);
                 }
@@ -537,18 +543,95 @@ namespace Mirthwood.Echoes
                 yield return observer.CoTeleport(playerPoint.position,0,0,false,false);
                 GroupGathering.Face(npc,spot);
                 recentVenue=spot;
-                Record("at-venue",index,npc,new {title,root=root.name,landmark=PathOf(mark.transform),position=At(spot),
-                    speakerDistance=Vector3.Distance(npc.transform.position,spot),playerDistance=Vector3.Distance(observer.transform.position,spot),
-                    spawnedInstance=root.GetInstanceID(),landmarkInstance=mark.GetInstanceID(),
-                    boundsCenter=At(mark.bounds.center),render=mark.isVisible,live=teller.HasActiveStory(title)});
-                yield return Screenshot("venue-" + (index+1));
-                yield return new WaitForSecondsRealtime(3);
-                if ((bool?)spec["end"] == true) {
-                    teller.EndStory(title);
-                    yield return Await(() => !teller.HasActiveStory(title),"The native event did not end.",8);
-                    Record("after-native-event-end",index,npc,new {title});
-                    yield return DismissGroupTestCards();
+                var agent=npc.GetComponent<NavMeshAgent>();
+                bool stopped=agent.isStopped;
+                string view=(string)spec["view"] ?? "shared";
+                if(view!="shared" && view!="blocked" && view!="event-only")throw new InvalidDataException("Unknown spectator view.");
+                try {
+                    agent.isStopped=true;
+                    RecordSight("arrival");
+                    PositionSpectator(npc,mark,observer.transform,view);
+                    Record("at-venue",index,npc,new {title,root=root.name,landmark=PathOf(mark.transform),position=At(spot),
+                        speakerDistance=Vector3.Distance(npc.transform.position,spot),playerDistance=Vector3.Distance(observer.transform.position,spot),
+                        spawnedInstance=root.GetInstanceID(),landmarkInstance=mark.GetInstanceID(),
+                        boundsCenter=At(mark.bounds.center),render=mark.isVisible,live=teller.HasActiveStory(title)});
+                    yield return Screenshot("venue-" + (index+1));
+                    // The release observes normal unpaused gameplay every two seconds.
+                    // Keep the measured sightlines through that tick and through an actual ending.
+                    float until=Time.realtimeSinceStartup+3f;
+                    do {
+                        GroupGathering.Face(npc,spot);
+                        yield return new WaitForSecondsRealtime(.15f);
+                    } while(Time.realtimeSinceStartup<until);
+                    RecordSight("before departure");
+                    if(!RequestedView(npc,mark,observer.transform,view))
+                        throw new InvalidOperationException("The spectator lost the "+view+" view before the venue step finished.");
+                    if ((bool?)spec["end"] == true) {
+                        teller.EndStory(title);
+                        yield return Await(() => !teller.HasActiveStory(title),"The native event did not end.",8);
+                        Record("after-native-event-end",index,npc,new {title});
+                        yield return DismissGroupTestCards();
+                    }
+                } finally {
+                    if(agent && agent.isActiveAndEnabled && agent.isOnNavMesh)agent.isStopped=stopped;
                 }
+
+                void RecordSight(string phase)
+                {
+                    object Sight(Transform target, Vector3 point) {
+                        return new {position=At(target.position),target=At(point),clear=ClearView(npc,target,point),
+                            blockers=Obstructions(npc,target,point).OrderBy(h=>h.distance)
+                                .Select(h=>new {collider=PathOf(h.transform),h.distance}).ToArray()};
+                    }
+                    Record("spectator-sightlines",index,npc,new {phase,title,view,root=root.GetInstanceID(),landmark=PathOf(mark.transform),
+                        npc.IsDead,npc.isActiveAndEnabled,solidFloor=SolidFloor(npc.transform.position),facing=At(npc.DataContainer.data.FacingDirection),
+                        gameState=GameState.GetCurrentState(1).ToString(),paused=GameState.IsPaused,
+                        visibleRenderer=mark.enabled && mark.gameObject.activeInHierarchy && !mark.forceRenderingOff,
+                        performer=Sight(mark.transform,mark.bounds.center),player=Sight(observer.transform,observer.transform.position+Vector3.up*.95f)});
+                }
+            }
+
+            static System.Collections.Generic.IEnumerable<RaycastHit> Obstructions(NPCController npc, Transform target, Vector3 point)
+            {
+                var eye=npc.transform.position+Vector3.up*.95f;
+                var ray=point-eye;
+                return Physics.RaycastAll(eye,ray.normalized,ray.magnitude,Physics.AllLayers,QueryTriggerInteraction.Ignore)
+                    .Where(h=>!h.transform.IsChildOf(npc.transform) && !h.transform.IsChildOf(target));
+            }
+
+            static bool ClearView(NPCController npc,Transform target,Vector3 point)
+            {
+                var facing=npc.DataContainer.data.FacingDirection;
+                var direction=point-npc.transform.position;
+                return target.gameObject.activeInHierarchy && Mathf.Abs(target.position.y-npc.transform.position.y)<1.4f &&
+                    facing.x*direction.x+facing.z*direction.z>0 && !Obstructions(npc,target,point).Any();
+            }
+
+            static bool RequestedView(NPCController npc,Renderer mark,Transform player,string view)
+            {
+                if((npc.transform.position-mark.transform.position).sqrMagnitude>16f || (player.position-mark.transform.position).sqrMagnitude>16f ||
+                    !mark.enabled || mark.forceRenderingOff || !mark.gameObject.activeInHierarchy)return false;
+                bool seesPerformer=ClearView(npc,mark.transform,mark.bounds.center);
+                bool seesPlayer=ClearView(npc,player,player.position+Vector3.up*.95f);
+                return seesPerformer==(view!="blocked") && seesPlayer==(view!="event-only");
+            }
+
+            static void PositionSpectator(NPCController npc,Renderer mark,Transform player,string view)
+            {
+                if(RequestedView(npc,mark,player,view))return;
+                var original=npc.transform.position;
+                foreach(float radius in new[]{1.4f,1.85f,2.35f,1.05f}){
+                    for(int i=0;i<16;i++){
+                        var spot=player.position+Quaternion.Euler(0,i*22.5f,0)*Vector3.forward*radius;
+                        if(!NavMesh.SamplePosition(spot,out var hit,1f,NavMesh.AllAreas) || !SolidFloor(hit.position) ||
+                            Vector3.Distance(hit.position,mark.transform.position)>3.85f || Vector3.Distance(hit.position,player.position)>2.65f)continue;
+                        StageGuest(npc,hit.position);
+                        GroupGathering.Face(npc,mark.transform.position);
+                        if(RequestedView(npc,mark,player,view))return;
+                    }
+                }
+                StageGuest(npc,original);
+                throw new InvalidOperationException("Could not establish the requested "+view+" spectator position.");
             }
 
             IEnumerator VisitJoustHerald(int index, NPCController witness, GameObject root, bool speakToHerald)
@@ -562,16 +645,22 @@ namespace Mirthwood.Echoes
                 var renderers=herald.GetComponentsInChildren<Renderer>(true).Select(r=>new {
                     path=PathOf(r.transform),r.enabled,active=r.gameObject.activeInHierarchy,visible=r.isVisible
                 }).ToArray();
-                Record("joust-public-frontage",index,witness,new {path=PathOf(herald.transform),position=At(herald.transform.position),
-                    characterActive=herald.gameObject.activeInHierarchy,dialogueBehaviourEnabled=herald.enabled,herald.chatEnabled,
-                    hasDialogue=offer!=null,nativeDialogue=offer?.Dialogue,renderers,speakToHerald,spawnedInstance=root.GetInstanceID()});
-                // Spectators normally walk past the starter to the active performers without opening Speak.
-                if(!speakToHerald || !herald.gameObject.activeInHierarchy || offer==null)yield break;
                 var player=PlayerCharacterController.Instance.GetComponent<PlayerChat>();
                 var selected=Plugin.Selected.GetValue(player);
                 var target=player.chatTarget;
                 DialogueView stock=null;
                 try {
+                    Plugin.Selected.SetValue(player,herald);
+                    player.chatTarget=herald;
+                    var labels=herald.gameObject.activeInHierarchy ? Choices(player).Select(option=>option.Name).ToArray() : Array.Empty<string>();
+                    var visual=herald.GetComponent<NPCController>()?.Visuals?.Data;
+                    var body=herald.GetComponentsInChildren<MeshRenderer>(true).FirstOrDefault(r=>r.GetComponent("SkeletonAnimation"));
+                    Record("joust-public-frontage",index,witness,new {path=PathOf(herald.transform),position=At(herald.transform.position),
+                        characterActive=herald.gameObject.activeInHierarchy,dialogueBehaviourEnabled=herald.enabled,herald.chatEnabled,
+                        body=body ? PathOf(body.transform):null,vertices=body?.GetComponent<MeshFilter>()?.sharedMesh?.vertexCount,alpha=visual?.Skeleton?.A,
+                        hasDialogue=offer!=null,nativeDialogue=offer?.Dialogue,labels,renderers,speakToHerald,spawnedInstance=root.GetInstanceID()});
+                    // Reading the stock choices opens no portrait. Most spectators simply walk past the starter.
+                    if(!speakToHerald || offer==null || !labels.Contains("Speak"))yield break;
                     stock=ChooseSpeak(herald.GetComponent<NPCController>());
                     yield return null;
                     Record("joust-public-starter",index,witness,new {path=PathOf(herald.transform),position=At(herald.transform.position),
@@ -633,14 +722,15 @@ namespace Mirthwood.Echoes
                     Record("branch-saved", index, npc);
                 }
                 if (step?["doorway"] is JObject door) yield return Doorway(index,npc,door);
-                if ((bool?)step?["nativePrecipitation"] == true) {
+                if (step?["nativePrecipitation"]?.Type == JTokenType.Boolean) {
                     var weather=Object.FindObjectOfType<WeatherManager>();
                     if(!weather || !weather.CurrentRegion) throw new InvalidOperationException("The private scene has no active weather region.");
+                    bool requested=(bool)step["nativePrecipitation"];
                     bool already=weather.GlobalPrecipitation;
                     string before=weather.CurrentWeatherCondition?.Type;
-                    if(!already) AccessTools.Method(typeof(WeatherManager),"StartPrecipitation").Invoke(weather,null);
-                    yield return Await(()=>weather.GlobalPrecipitation,"The native weather system did not start precipitation.",8);
-                    Record("native-precipitation",index,npc,new {already,before,after=weather.CurrentWeatherCondition?.Type,
+                    if(already!=requested) AccessTools.Method(typeof(WeatherManager),requested?"StartPrecipitation":"StopPrecipitation").Invoke(weather,null);
+                    yield return Await(()=>weather.GlobalPrecipitation==requested,"The native weather did not reach the requested state.",8);
+                    Record("native-precipitation",index,npc,new {requested,already,before,after=weather.CurrentWeatherCondition?.Type,
                         region=weather.CurrentRegion.name,globalPrecipitation=weather.GlobalPrecipitation});
                 }
                 if (step?["venue"] is JObject venue) yield return Venue(index,npc,venue);
