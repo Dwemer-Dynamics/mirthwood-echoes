@@ -59,6 +59,12 @@ QUEST_CHOICES = [
     ("I will attend the joust. Did he ask “Will you bring the flour?”", "Will you bring the flour", "job", "accept", "continue"),
     ("She asked “When is the joust?” I will bring the flour.", "I will bring the flour", "job", "accept", "accept"),
     ("Yes.", "Yes", None, "accept", "accept"),
+    ("I'll bring flour recipes.", "I'll bring flour recipes.", "job", "accept", "continue"),
+    ("I'm going to the joust. I'll bring the flour sack.", "I'm going to the joust. I'll bring the flour sack.", "job", "accept", "continue"),
+    ("I won't take the flour mill job.", "I won't take the flour mill job.", "job", "decline", "continue"),
+    ("I'll bring you some flour.", "I'll bring you some flour.", "job", "accept", "accept"),
+    ("I won't take the flour job.", "I won't take the flour job.", "job", "decline", "decline"),
+    ("Yes, on those terms.", "Yes, on those terms.", "job", "accept", "accept"),
 ]
 
 
@@ -315,25 +321,66 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     assert quest_turn(dict(event_choice,id=uid(),parent=event_choice["id"],text=refuse_job))["action"]=="decline"
     checked("quest offer and action remain native with a separately bound world context and replay")
 
-    def fresh_offer():
+    def fresh_offer(native_offer=offer):
         root_id=uid()
-        root=dict(quest,id=root_id,session=root_id)
-        opening=quest_turn(root)
+        root=dict(quest,id=root_id,session=root_id,key=native_offer["key"],offer=native_offer)
+        opening, packet = generate(quest_route, root)
         assert opening["state"]=="ready" and opening["action"]=="continue"
+        assert context(packet)["nativeOffer"] == native_offer
         assert without_generation("/api/quests/finish",dict(root,action="continue"))["state"]=="complete"
-        return dict(question,id=uid(),session=root_id,parent=root_id)
+        return dict(question,id=uid(),session=root_id,parent=root_id,key=native_offer["key"])
+
+    def classified_turn(body, classification, native_offer=offer, previously_warned=False):
+        model.samples["quest/"+body["text"]] = json.dumps(classification)
+        actual, packet = generate(quest_route, body)
+        prompt = context(packet)
+        assert prompt["nativeOffer"] == native_offer and prompt["latestPlayerSpeech"] == body["text"], body["id"]
+        assert prompt["alreadyRefusedToChangeTerms"] is previously_warned, body["id"]
+        assert actual["state"] == "ready" and without_generation(quest_route, body) == actual, body["id"]
+        return actual
 
     for speech,evidence,subject,intent,expected in QUEST_CHOICES:
         body=dict(fresh_offer(),text=speech)
         classification=dict(intent=intent,evidence=evidence,reply="I hear you.")
         if subject is not None:
             classification["subject"]=subject
-        model.samples["quest/"+speech]=json.dumps(classification)
-        actual=quest_turn(body)
-        assert actual["state"]=="ready" and actual["action"]==expected, (speech,intent,actual)
+        actual=classified_turn(body,classification)
+        assert actual["action"]==expected, (speech,intent,actual)
         if intent=="counter":
             assert actual["warned"] and actual["intent"]=="counter"
-        assert without_generation(quest_route,body)==actual
+
+    numbered = dict(key="native-red-apples", title="Red Apples", terms="Bring 3 red apples.", objectives=["Collect 3 red apples"])
+    for speech, expected in [
+        ("I'll bring you 3 green apples.", "continue"),
+        ("I'll bring you 2 red apples.", "continue"),
+        ("I'll bring you 3 red apples.", "accept"),
+    ]:
+        body = dict(fresh_offer(numbered), text=speech)
+        classification = dict(intent="accept", subject="job", evidence=speech, offerDetail="apples", reply="I hear you.")
+        actual = classified_turn(body, classification, numbered)
+        assert actual["action"] == expected and actual["warned"] is False, (speech, actual)
+    checked("a named job and a numbered offer preserve the requested item and quantity across replay")
+
+    for speech, evidence, real_counter in [
+        ("If it rains, I'll attend the Grand Joust instead.", "If it rains", False),
+        ("No, unless you pay more", "No, unless you pay more", True),
+        ("Can you pay double?", "Can you pay double?", True),
+    ]:
+        body = dict(fresh_offer(), text=speech)
+        classification = dict(intent="counter", subject="job", termChange="reward", evidence=evidence, manner="plain")
+        for repeated in (False, True):
+            actual = classified_turn(body, classification, previously_warned=repeated and real_counter)
+            action = "decline" if repeated and real_counter else "continue"
+            assert actual["intent"] == ("counter" if real_counter else "unclear"), (speech, actual)
+            assert actual["warned"] is real_counter and actual["action"] == action, (speech, repeated, actual)
+            ack = dict(body, action=action)
+            confirmed = without_generation("/api/quests/finish", ack)
+            assert confirmed == dict(actual, state="complete")
+            assert without_generation("/api/quests/finish", ack) == confirmed
+            body = dict(body, id=uid(), parent=body["id"])
+        if real_counter:
+            without_generation(quest_route, body, status=409)
+    checked("only a genuine reward counter warns on its first turn and closes the offer on its second")
 
     # A bare answer to the resident's subsequent question about attendance belongs to that question.
     body=dict(fresh_offer(),text="Are you going to the joust?")

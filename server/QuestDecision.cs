@@ -12,13 +12,23 @@ internal static class QuestDecision
     static readonly Regex ClauseBreak = new(@"[,—–:]|\s+(?:and|but|so|yet)\s+(?=(?:I|we|you|what|when|where|how|why|who|will|would|is|do|can|could)\b)", MatchCase);
     static readonly Regex Preface = new(@"^(?:(?:and|but|so|yet|then)\s+)+", MatchCase);
     static readonly Regex Question = new(@"^(?:what|which|when|where|how|why|who|would|could|can|do|did|does|is|are|will)\b", MatchCase);
-    static readonly Regex OfferWords = new(@"\b(job|work|task|quest|offer|terms|payment|pay|reward|deadline)\b", MatchCase);
     static readonly Regex WorkObject = new(@"^(?:(?:to|on|up)\s+)?(?:(?:the|this|your|that|original|offered)\s+)*(?:(?<detail>[\p{L} '-]+)\s+)?(?:job|work|task|quest|offer|terms)$",MatchCase);
     static readonly Regex OriginalTerms = new(@"\s+(?:as (?:originally )?offered|on (?:the|your) (?:original )?terms|for you)$",MatchCase);
     static readonly HashSet<string> SupplyVerbs=["bring","collect","gather","deliver","fetch","supply","provide"];
+    static readonly Regex Objective = new(@"^(?<verb>[\p{L}]+)\s+(?<object>.+)$",MatchCase);
+    static readonly Regex Determiners = new(@"^(?:(?:you|all of|all|some|a|an|the|that|this|these|those|your|requested)\s+)+",MatchCase);
+    static readonly string[] Counts=["","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve"];
+    static readonly Regex Quantity = new(@"^(?:(?<count>\d+)\s*(?:[x×]\s*)?|(?<count>"+string.Join("|",Counts.Skip(1))+@")\s+)(?=[\p{L}])",MatchCase);
+    static readonly Regex ChangeRequest = new(
+        @"^(?:(?:(?:could|can|would|will) you|you(?: (?:could|can|would|will))?|please)\s+)?"+
+        @"(?:(?<reward>pay (?:me )?(?:more|less|double|extra|twice as much|\d+(?: gold| coins?)?)|give me (?:more|double|extra)(?: (?:pay|gold|coins?))?)|"+
+        @"(?:raise|lower|double|increase|reduce|change|extend|move) (?:the |your |my |our )?"+
+        @"(?:(?<reward>pay|price|reward|payment)|(?<amount>amount|quantity)|(?<deadline>deadline)|(?<destination>destination)|(?<work>terms))(?: (?:by|to|until) .+)?)$",MatchCase);
     static readonly Regex Invitation = new(@"^(?:(?:will|would|could|can) you(?: (?:be (?:willing|able)|like) to)?|(?:are you (?:willing|able|ready)|do you want) to) (?<action>.+)\?$", MatchCase);
     static readonly Regex Assent = new(@"^(?:(?:yes|aye|sure)[, ]+)?(?:yes|aye|sure|agreed|okay|of course|absolutely|deal|I accept|I agree|I will|I'll do it|I'll take it|count on me|you can count on me)$", MatchCase);
     static readonly Regex Refusal = new(@"^(?:(?:no|sorry)[, ]+)?(?:no|no thanks|no thank you|I decline|I refuse|I won't|I can't|I'll pass|I won't do it|I can't do it)$", MatchCase);
+    static readonly Regex OnTerms = new(@",?\s+on (?:those|these|your|the(?: original)?) terms$",MatchCase);
+    static bool DirectReply(Regex polarity,string clause)=>polarity.IsMatch(OnTerms.Replace(clause,""));
     // Only a first-person choice or undertaking can operate a native button. Capture
     // both polarity and the verb so merely mentioning an item cannot authorize work.
     static readonly Regex Choice = new(
@@ -33,7 +43,7 @@ internal static class QuestDecision
         // actual last spoken question and a reference to the live job before saving it.
         var question=Invitation.Match(invitation);
         return question.Success && Sentence.Matches(reply).LastOrDefault()?.Value.Trim()==invitation &&
-            NamesJobDecision(offer,null,"I will "+question.Groups["action"].Value,"accept","");
+            NamesJobDecision(offer,"I will "+question.Groups["action"].Value,"accept","");
     }
 
     readonly record struct Clause(string Words,int Start,bool Indecisive,bool Question,bool InformationQuestion);
@@ -42,6 +52,13 @@ internal static class QuestDecision
     {
         var text=TrimProof(sentence.Value);
         var offset=sentence.Index+sentence.Value.IndexOf(text,StringComparison.Ordinal);
+        // "Yes, on those terms" is a single reply to the pending offer. Its stated
+        // object must stay within the quoted proof just like a named quest item.
+        if(OnTerms.IsMatch(text) && (DirectReply(Assent,text)||DirectReply(Refusal,text))){
+            bool asks=sentence.Value.EndsWith('?');
+            yield return new(text,offset,asks,asks,false);
+            yield break;
+        }
         int position=0;
         var pieces=ClauseBreak.Split(text);
         // An attached condition still qualifies the work when it ends in a question
@@ -91,7 +108,7 @@ internal static class QuestDecision
         string detail=result.S("offerDetail");
         if(decision){
             var contrary=intent=="accept"?"decline":"accept";
-            if(clauses.Any(c=>!c.Indecisive && NamesJobDecision(offer,scene,c.Words,contrary,detail)))return false;
+            if(clauses.Any(c=>!c.Indecisive && NamesJobDecision(offer,c.Words,contrary,detail)))return false;
         }
 
         // Only the verified clause can supply a job reference. The words of a
@@ -107,10 +124,10 @@ internal static class QuestDecision
                 clause.Words.Contains('\uFFFC') || decision&&clause.Indecisive)continue;
             if(decision){
                 var direct=intent=="accept"?Assent:Refusal;
-                if(answersInvitation && direct.IsMatch(clause.Words) &&
+                if(answersInvitation && DirectReply(direct,clause.Words) &&
                     sentences.All(s=>s.Index<=clause.Start && clause.Start<s.Index+s.Length || s.Value.EndsWith('?') ||
-                        Clauses(s).All(c=>direct.IsMatch(c.Words)||NamesJobDecision(offer,scene,c.Words,intent,detail))))return true;
-                if(NamesJobDecision(offer,scene,clause.Words,intent,detail))return true;
+                        Clauses(s).All(c=>DirectReply(direct,c.Words)||NamesJobDecision(offer,c.Words,intent,detail))))return true;
+                if(NamesJobDecision(offer,clause.Words,intent,detail))return true;
             }else if(subject=="job" && !EventWords(scene).Overlaps(Words(clause.Words)) &&
                 ProposesChange(clause.Words,result.S("termChange")))return true;
         }
@@ -119,12 +136,15 @@ internal static class QuestDecision
 
     static bool ProposesChange(string clause,string term)
     {
-        bool proposed=Conditional.IsMatch(clause) || Regex.IsMatch(clause,
-            @"^(?:(?:can|could|will|would)\s+you\s+|please\s+)?(?:give|pay|move|double|raise|change|increase|reduce|extend|lower)\b",MatchCase);
-        return proposed && (OfferWords.IsMatch(clause) || term is "reward" or "amount" or "destination" or "deadline" or "work");
+        // Repeated counters can decline the native job. A model's term category
+        // cannot turn an unrelated condition into a request to change the offer.
+        var condition=Conditional.Match(clause);
+        var proposed=condition.Success ? clause[(condition.Index+condition.Length)..].Trim() : clause;
+        var change=ChangeRequest.Match(proposed);
+        return change.Success && (term.Length==0 || change.Groups[term].Success);
     }
 
-    static bool NamesJobDecision(JsonObject offer,JsonObject? scene,string words,string intent,string citedDetail)
+    static bool NamesJobDecision(JsonObject offer,string words,string intent,string citedDetail)
     {
         var statement=Choice.Match(words);
         if(!statement.Success)return false;
@@ -134,10 +154,14 @@ internal static class QuestDecision
         bool negative=refusal||statement.Groups["negative"].Success;
         if(negative!=(intent=="decline"))return false;
         var remainder=words[statement.Length..].Trim();
+        var objectives=offer["objectives"]!.AsArray().Select(o=>Objective.Match(o!.ToString())).Where(m=>m.Success).ToArray();
         if(verb is "accept" or "decline" or "refuse" or "agree" or "do" or "take" or "undertake" or "complete" or "handle"){
             var target=WorkObject.Match(OriginalTerms.Replace(remainder,""));
-            if(target.Success && (!target.Groups["detail"].Success ||
-                MentionsNativeDetail(offer,scene,target.Groups["detail"].Value,citedDetail)))return true;
+            if(target.Success){
+                string name=target.Groups["detail"].Value;
+                if(name.Length==0)return true;
+                return MatchesObject(offer,name,citedDetail,objectives.Select(o=>o.Groups["object"].Value).Append(offer.S("title")));
+            }
         }
         // A promise to perform the actual action on its named object can identify
         // the job even without saying "job", as in "I'll bring the flour."
@@ -146,17 +170,11 @@ internal static class QuestDecision
         if(qualifier.Length>0 && !qualifier.Equals("to you",StringComparison.OrdinalIgnoreCase) &&
             !qualifier.Equals("for you",StringComparison.OrdinalIgnoreCase) &&
             !offer.S("terms").Contains(qualifier,StringComparison.OrdinalIgnoreCase))return false;
-        var targetWords=Words(targetPhrase.Groups["object"].Value);
-        targetWords.ExceptWith(EventWords(scene));
-        foreach(var item in offer["objectives"]!.AsArray()){
-            var objective=Regex.Match(item!.ToString(),@"^(?<verb>[\p{L}]+)\s+(?<object>.+)$");
-            string nativeVerb=objective.Groups["verb"].Value.ToLowerInvariant();
-            var objectWords=Words(objective.Groups["object"].Value);
-            if((nativeVerb==verb || SupplyVerbs.Contains(verb)&&SupplyVerbs.Contains(nativeVerb)) &&
-                objectWords.Count>0 && objectWords.IsSubsetOf(targetWords))return true;
-        }
-        return SupplyVerbs.Contains(verb) && SupplyVerbs.Overlaps(Words(offer.S("terms"))) &&
-            SharedTerms(offer,targetPhrase.Groups["object"].Value,citedDetail) && Words(citedDetail).Overlaps(targetWords);
+        bool SameAction(string native)=>native.Equals(verb,StringComparison.OrdinalIgnoreCase) ||
+            SupplyVerbs.Contains(verb)&&SupplyVerbs.Contains(native.ToLowerInvariant());
+        var names=objectives.Where(o=>SameAction(o.Groups["verb"].Value)).Select(o=>o.Groups["object"].Value).ToArray();
+        if(names.Length==0 && !(SupplyVerbs.Contains(verb)&&SupplyVerbs.Overlaps(Words(offer.S("terms")))))return false;
+        return MatchesObject(offer,targetPhrase.Groups["object"].Value,citedDetail,names);
     }
 
     static HashSet<string> Words(string value)=>Regex.Matches(value.ToLowerInvariant(),@"[\p{L}\p{N}]+")
@@ -168,22 +186,31 @@ internal static class QuestDecision
         .Append(scene?["nextNotice"].S("title")).Append(scene?["previousNotice"].S("title"))
         .Concat((scene?["nextByKind"] as JsonObject??[]).Select(p=>p.Value.S("title")))));
 
-    static bool SharedTerms(JsonObject offer,string clause,string citedDetail)
+    static (string Name,string Count) ObjectName(string phrase)
     {
-        if(citedDetail.Length is 0 or >160)return false;
-        var phrase=@"(?<!\w)"+Regex.Escape(citedDetail)+@"(?!\w)";
-        return Regex.IsMatch(offer.S("terms"),phrase,MatchCase) && Regex.IsMatch(clause,phrase,MatchCase);
+        string name=Determiners.Replace(phrase.Trim(),"").ToLowerInvariant();
+        var quantity=Quantity.Match(name);
+        if(!quantity.Success)return (name,"");
+        var count=quantity.Groups["count"].Value;
+        var number=Array.IndexOf(Counts,count);
+        return (name[quantity.Length..],number>0?number.ToString():count);
     }
 
-    static bool MentionsNativeDetail(JsonObject offer,JsonObject? scene,string clause,string citedDetail="")
+    static bool MatchesObject(JsonObject offer,string spoken,string citedDetail,IEnumerable<string> names)
     {
-        var detail=Words(offer.S("title")+" "+string.Join(" ",offer["objectives"]!.AsArray()));
-        // Some generated offers put their named item or place only in the spoken terms.
-        if(SharedTerms(offer,clause,citedDetail))detail.UnionWith(Words(citedDetail));
-        detail.ExceptWith(["you","some","bring","collect","deliver","get","find","take","return","provide","help","needed"]);
-        var words=Words(clause);
-        var eventWords=EventWords(scene);
-        detail.ExceptWith(eventWords);
-        return detail.Overlaps(words);
+        var native=names.Select(ObjectName).Where(o=>o.Name.Length>0).ToHashSet();
+        // Some native offers name the object only in their prose. A quoted detail
+        // must be that entire object and also occur verbatim in the original terms.
+        if(citedDetail.Length is >0 and <=160 && Regex.IsMatch(offer.S("terms"),@"(?<!\w)"+Regex.Escape(citedDetail)+@"(?!\w)",MatchCase)){
+            var cited=ObjectName(citedDetail);
+            if(cited.Name.Length>0 && (native.Count==0 || native.Contains(cited) || native.Contains((cited.Name,""))))native.Add(cited);
+        }
+        bool Matches(string part){
+            var asked=ObjectName(part);
+            return asked.Name.Length>0 && native.Any(n=>n.Name==asked.Name && (asked.Count.Length==0 || n.Count==asked.Count));
+        }
+        // The noun following the native action is the thing the player undertook
+        // to supply. "Flour recipes" and "flour" identify different things.
+        return Matches(spoken) || Regex.Split(spoken,@"\s+and\s+",MatchCase).All(Matches);
     }
 }
