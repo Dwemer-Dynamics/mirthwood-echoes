@@ -169,6 +169,13 @@ namespace Mirthwood.Echoes
                     ". "+stages.ToString(Newtonsoft.Json.Formatting.None));
                 report["firstMs"]=Mathf.RoundToInt((Time.unscaledTime-started)*1000);
                 bool captured=false;yield return Capture("latest-group-talk.png",ok=>captured=ok);report["capture"]=captured;
+                if(awareness!=null&&groupParting){
+                    awareness.Record("natural-circle-parting",groupSequence,resident,new {
+                        groupLastSpeaker,groupTo,words=npcBubble.ReadRenderedText(),
+                        nativeReceipt=SaveMaster.GetString("mirthwood.echoes.group.score."+ownSession)
+                    });
+                    throw new InvalidOperationException("The native residents ended this visit before the late guest could join.");
+                }
                 if(groupTo=="player"&&nextGroupReply==0){IsolatedGameRun.PostListenKey();yield return null;}
                 yield return Await(()=>groupSequence>=3||!GroupActive,"The second resident never answered.",95);
                 Require(GroupActive&&groupSequence>=3,"The group ended before the second resident spoke.");

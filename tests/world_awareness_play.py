@@ -47,9 +47,9 @@ class AwarenessPlay:
         if not pending.is_file() or ready.exists():
             return
         request = load(pending)
-        for line in (work / "server.log").read_text(encoding="utf-8",errors="replace").splitlines():
+        for line in (work / "server.log").read_text(encoding="utf-8",errors="replace").splitlines(keepends=True):
             prefix = "Echoes world awareness "
-            if line.startswith(prefix):
+            if line.endswith("\n") and line.startswith(prefix):
                 call = json.loads(line[len(prefix):])
                 if call["turn"] == request["id"] and call["mode"] == "address" and call["run"] == work.name:
                     tmp = ready.with_suffix(".tmp")
@@ -164,6 +164,8 @@ class AwarenessPlay:
                     raise AssertionError("Missing the submitted prompt or mismatched player words.")
         if not self.baseline and len([item for item in trace if item["mode"] == "private"]) != len(actual):
             raise AssertionError("More than one ordinary dialogue call per accepted player turn.")
+        if self.plan.get("compareFallPosters") and not self.baseline:
+            self.verify_fall_posters(records, observations)
         if route == "residentdialogue":
             addressed = []
             for opener in result["openers"]:
@@ -182,6 +184,26 @@ class AwarenessPlay:
                 interrupted, = [o for o in observations if o["stage"] == "address-disconnect"]
                 if interrupted["extra"]["id"] != addressed[0]["opener"]["id"]:
                     raise AssertionError("The recovered native opener has a different identity.")
+
+    def verify_fall_posters(self, records, observations):
+        visits = {row["source"]["extra"]["intent"]["context"]["conversation"] for row in records}
+        if len(visits) != 1:
+            raise AssertionError("The festival follow-up must belong to the original conversation.")
+        boards = {o["extra"]["option"]: o["extra"]["labels"] for o in observations if o["stage"] == "read-poster"}
+        for index, (board, kind, title, label, day, spoken_day) in enumerate((
+            ("Jousting", "joust", "Grand Joust", "12th of Fall", 12, r"\b(?:12(?:th)?|twelfth)\b"),
+            ("Events", "festival", "All Hallows Eve", "17th of Fall", 17, r"\b(?:17(?:th)?|seventeenth)\b"),
+        )):
+            row = records[index]
+            info = row["provider"][0]["awareness"]
+            notice = info.get("nextByKind", {}).get(kind, {})
+            if title not in boards[board] or label not in boards[board] or (
+                notice.get("title"), notice.get("season"), notice.get("dayOfSeason"), notice.get("source")
+            ) != (title, "Fall", day, "public notice"):
+                raise AssertionError("The category-specific provider input differs from the opened " + board + " poster.")
+            words = row["reply"].casefold().replace("’", "").replace("'", "")
+            if not re.search(spoken_day, words) or (kind == "festival" and "all hallows" not in words):
+                raise AssertionError("Review the displayed words for the advertised " + title + " date.")
 
     def verify_group(self, work, result, observations, trace):
         guests = {g["actor"]: g["name"] for g in result["guests"]}

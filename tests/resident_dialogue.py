@@ -149,6 +149,16 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False, awa
         steam=winreg.QueryValueEx(key,"SteamExe")[0]
     real=Path(os.environ.get("MIRTHWOOD_ECHOES_STEAM_GAME",r"C:\SteamLibrary\steamapps\common\Mirthwood"))
     module=Path("BepInEx/plugins/MirthwoodEchoes/Mirthwood.Echoes.dll")
+    preloader = Path("BepInEx/core/BepInEx.Preloader.dll")
+    if installed:
+        import configparser
+        config = configparser.ConfigParser()
+        config.read(real/"doorstop_config.ini", encoding="utf-8-sig")
+        if not awareness or not config.getboolean("General","enabled") or (real/config.get("General","target_assembly")).resolve() != (real/preloader).resolve():
+            raise RuntimeError("The installed game needs the normal enabled preloader for this isolated smoke test.")
+        for rel in (module,preloader):
+            if digest(real/rel) != digest(package/"app/bundle"/rel):
+                raise RuntimeError("The installed file differs from the qualified package: " + str(rel))
     original=Path(os.environ["USERPROFILE"])/"AppData/LocalLow/Bad Ridge Games/Mirthwood/SaveData"
     files=[p for p in (original/name for name in ("Slot0.savegame","Slot0.metadata","Slot0.savegame.b","Slot0.metadata.b")) if p.exists()]
     baseline={str(p):digest(p) for p in [*files,real/module]}
@@ -165,15 +175,6 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False, awa
         write(session/"world-awareness.json",awareness.plan)
         write(work/"world-awareness-plan.json",awareness.plan)
     if installed:
-        import configparser
-        config = configparser.ConfigParser()
-        config.read(real/"doorstop_config.ini", encoding="utf-8-sig")
-        preloader = Path("BepInEx/core/BepInEx.Preloader.dll")
-        if not awareness or not config.getboolean("General","enabled") or (real/config.get("General","target_assembly")).resolve() != (real/preloader).resolve():
-            raise RuntimeError("The installed game needs the normal enabled preloader for this isolated smoke test.")
-        for rel in (module,preloader):
-            if digest(real/rel) != digest(package/"app/bundle"/rel):
-                raise RuntimeError("The installed file differs from the qualified package: " + str(rel))
         (session/"installed-loader").write_text(token)
     if resident:
         (session/"resident.txt").write_text(resident,encoding="utf-8")
@@ -345,6 +346,10 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False, awa
         write(work/"isolation.json",receipt)
         if not all(receipt[k] for k in ("unchanged","closed","databaseRemoved")):raise RuntimeError("Isolation check failed")
         if (game/"BepInEx/LogOutput.log").exists():shutil.copyfile(game/"BepInEx/LogOutput.log",work/"game-module.log")
+        if installed:
+            log=real/"BepInEx/LogOutput.log"
+            if log.is_file() and log.stat().st_mtime >= (session/"harness.json").stat().st_mtime:
+                shutil.copyfile(log,work/"installed-module.log")
         pattern="latest-group-*.png" if mode=="grouptalk" else "latest-roleplay-*.png" if resident else "latest-averil-*.png"
         patterns=("latest-native-overhead.png","latest-player-draft.png","latest-interface.png","latest-full-*.png","latest-named-player-speech.png","latest-compact-*.png") if mode=="interface" else (pattern,)
         if mode=="voices":patterns=("voice-player.png","voice-resident.png")

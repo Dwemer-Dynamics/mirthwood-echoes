@@ -31,6 +31,8 @@ namespace Mirthwood.Echoes
             readonly JObject plan;
             readonly string output;
             int sequence;
+            Vector3 initialPosition;
+            Vector3? recentVenue;
             string Snapshot => Path.Combine(IsolatedGameRun.Active.Root, "awareness-earlier-visit");
 
             AwarenessPlaytest(JObject plan, string output)
@@ -146,6 +148,7 @@ namespace Mirthwood.Echoes
 
             public IEnumerator Survey(NPCController npc)
             {
+                initialPosition=npc.transform.position;
                 var loaded = AppDomain.CurrentDomain.GetAssemblies().Where(a=>!a.IsDynamic &&
                     (a==typeof(Plugin).Assembly || a.GetName().Name=="BepInEx.Preloader" || a.GetName().Name=="BepInEx"))
                     .Select(a=>{
@@ -163,9 +166,9 @@ namespace Mirthwood.Echoes
                         }
                         string digest=null;
                         if(!string.IsNullOrEmpty(path) && File.Exists(path)){
-                        using(var file=File.OpenRead(path))
-                        using(var hash=SHA256.Create())
-                            digest=BitConverter.ToString(hash.ComputeHash(file)).Replace("-","").ToLowerInvariant();
+                            using(var file=File.OpenRead(path))
+                            using(var hash=SHA256.Create())
+                                digest=BitConverter.ToString(hash.ComputeHash(file)).Replace("-","").ToLowerInvariant();
                         }
                         return new {name=a.GetName().Name,path,sha256=digest,source};
                     }).ToArray();
@@ -287,7 +290,7 @@ namespace Mirthwood.Echoes
             public bool ChangesVisit(int index)
             {
                 var step = plan["turns"][index];
-                return step["calendar"] != null || step["doorway"] != null || step["venue"] != null ||
+                return step["calendar"] != null || step["doorway"] != null || step["venue"] != null || step["returnFromVenue"] != null ||
                     (bool?)step["newVisit"] == true || Reloads(index);
             }
 
@@ -312,23 +315,37 @@ namespace Mirthwood.Echoes
             IEnumerator Doorway(int index, NPCController npc, JObject spec)
             {
                 string building = (string)spec["building"];
-                var doors = Resources.FindObjectsOfTypeAll<DoorTrigger>().Where(d => d.gameObject.scene.isLoaded &&
-                    PathOf(d.transform).IndexOf(building, StringComparison.OrdinalIgnoreCase) >= 0);
-                var door = doors.OrderBy(d => (d.transform.position-npc.transform.position).sqrMagnitude).FirstOrDefault();
-                if (!door) throw new InvalidDataException("No authored door for " + building);
-                Vector3 center = door.transform.position, inward = Vector3.ProjectOnPlane(door.transform.forward,Vector3.up).normalized;
-                yield return Approach(center);
-                yield return Await(() => door && door.isActiveAndEnabled, "The physical doorway did not stream in.", 6);
-                Vector3 Landing(string side)
+                var doors = Resources.FindObjectsOfTypeAll<DoorTrigger>()
+                    .Where(d => d.gameObject.scene.isLoaded && PathOf(d.transform).IndexOf(building,StringComparison.OrdinalIgnoreCase)>=0)
+                    .OrderByDescending(d => PathOf(d.transform).IndexOf("Exterior",StringComparison.OrdinalIgnoreCase)>=0)
+                    .ThenBy(d => (d.transform.position-npc.transform.position).sqrMagnitude).ToArray();
+                Record("authored-doors",index,npc,doors.Select(d=>new {path=PathOf(d.transform),position=At(d.transform.position),forward=At(d.transform.forward)}).ToArray());
+                DoorTrigger door=null;
+                Vector3 center=default, inward=default, inside=default, outside=default;
+                foreach(var candidate in doors)
                 {
-                    if (side != "inside" && side != "outside") throw new InvalidDataException("Unknown side of doorway.");
-                    float sign = side == "inside" ? 1 : -1;
-                    Vector3 desired = center + inward * (1.05f*sign);
-                    if (!NavMesh.SamplePosition(desired, out var hit, 1.15f, NavMesh.AllAreas) ||
-                        Vector3.Dot(hit.position-center,inward) * sign < .3f)
-                        throw new InvalidOperationException("No walkable landing at the " + side + " of " + building);
-                    return hit.position;
+                    center=candidate.transform.position;
+                    yield return Approach(center);
+                    if(!candidate || !candidate.isActiveAndEnabled)continue;
+                    inward=Vector3.ProjectOnPlane(candidate.transform.forward,Vector3.up).normalized;
+                    Vector3 lateral=Vector3.Cross(inward,Vector3.up);
+                    var samples=new System.Collections.Generic.List<Vector3>();
+                    foreach(float depth in new[]{-.8f,.8f,-1.4f,1.4f,-2f,2f})
+                        foreach(float width in new[]{0f,.6f,-.6f,1.2f,-1.2f})
+                            if(NavMesh.SamplePosition(center+depth*inward+width*lateral,out var hit,3f,NavMesh.AllAreas))
+                                samples.Add(hit.position);
+                    var pairs=from a in samples where Vector3.Dot(a-center,inward)>.55f
+                              from z in samples where Vector3.Dot(z-center,inward)<-.55f && (a-z).sqrMagnitude<13f
+                              orderby (a-center).sqrMagnitude+(z-center).sqrMagnitude
+                              select new {inside=a,outside=z};
+                    var pair=pairs.FirstOrDefault();
+                    Record("door-navmesh",index,npc,new {path=PathOf(candidate.transform), center=At(center),forward=At(inward),
+                        samples=samples.Distinct().Select(At).ToArray(),found=pair!=null});
+                    if(pair==null)continue;
+                    door=candidate;inside=pair.inside;outside=pair.outside;break;
                 }
+                if(!door)throw new InvalidOperationException("No pair of walkable points on opposing sides of "+building);
+                Vector3 Landing(string side) => side=="inside"?inside:side=="outside"?outside:throw new InvalidDataException("Unknown side of doorway.");
                 var player = PlayerCharacterController.Instance;
                 yield return player.CoTeleport(Landing("outside"),0,0,false,false);
                 yield return new WaitForFixedUpdate();
@@ -353,8 +370,13 @@ namespace Mirthwood.Echoes
                 if (!teller.TryGetActiveStory(title,out var story)) {
                     var schedule = teller.scheduledStories.FirstOrDefault(s => s.story?.eventData?.title == title &&
                         s.season.HasFlag(DayNightCycle.Instance.CurrentSeason));
-                    if (schedule == null || !schedule.story.CanBegin()) throw new InvalidOperationException("The copied native event cannot start: " + title);
-                    teller.StartNewScheduledStory(schedule);
+                    if(schedule!=null && schedule.story.CanBegin())teller.StartNewScheduledStory(schedule);
+                    else{
+                        var random=teller.stories.SingleOrDefault(s=>s?.eventData?.title==title);
+                        if(random==null)throw new InvalidOperationException("The copied native event cannot start: " + title);
+                        teller.ForceStartStory(random);
+                    }
+                    Record("fixture-started-native-story",index,npc,new {title,scheduled=schedule!=null});
                     yield return Await(() => teller.HasActiveStory(title),"The native event did not start.");
                     teller.TryGetActiveStory(title,out story);
                 }
@@ -380,6 +402,7 @@ namespace Mirthwood.Echoes
                     break;
                 }
                 if (!staged) throw new InvalidOperationException("No walkable view of the active venue.");
+                recentVenue=spot;
                 Record("at-venue",index,npc,new {title,root=root.name,landmark=PathOf(mark.transform),position=At(spot),
                     boundsCenter=At(mark.bounds.center),render=mark.isVisible,live=teller.HasActiveStory(title)});
                 yield return Screenshot("venue-" + (index+1));
@@ -441,11 +464,25 @@ namespace Mirthwood.Echoes
                 }
                 if (step?["doorway"] is JObject door) yield return Doorway(index,npc,door);
                 if (step?["venue"] is JObject venue) yield return Venue(index,npc,venue);
+                if (step?["returnFromVenue"]?.Type==JTokenType.String) {
+                    string eventName=(string)step["returnFromVenue"];
+                    yield return Approach(initialPosition);
+                    StageGuest(npc,initialPosition);
+                    float distance=recentVenue.HasValue?Vector3.Distance(npc.transform.position,recentVenue.Value):0;
+                    if(distance<20)throw new InvalidOperationException("The subject is still within sight of the event.");
+                    Record("left-venue",index,npc,new {eventName,distance});
+                    var teller=Object.FindObjectOfType<Storyteller>();
+                    if(!teller || !teller.HasActiveStory(eventName))throw new InvalidOperationException("The remote event is already absent.");
+                    teller.EndStory(eventName);
+                    yield return Await(()=>!teller.HasActiveStory(eventName),"The remote event did not end.",8);
+                    Record("remote-event-ended",index,npc,new {eventName});
+                }
                 Record("before-visit", index, npc, step);
             }
 
             public IEnumerator OpenNativeMenu(NPCController npc, int index)
             {
+                Record("before-native-menu",index,npc);
                 var menu = ShowQuickMenu(npc);
                 var labels = QuickLabels(menu);
                 Record("native-menu", index, npc, new { labels });

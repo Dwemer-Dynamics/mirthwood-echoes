@@ -31,6 +31,31 @@
       }
     ]
   },
+  "festival-followup": {
+    "resident": "Averil",
+    "startingDesire": "eager",
+    "readPosters": true,
+    "compareFallPosters": true,
+    "turns": [
+      { "words": "When is the next joust on the notice?", "check": "On Fall 9 the opened Grand Joust poster gives Fall 12." },
+      { "words": "And what about the next festival?", "check": "In the same conversation use the seasonal poster. All Hallows Eve is on Fall 17.", "capture": true },
+      { "words": "Did you actually see me at that celebration, or is it still to come?", "check": "A future notice cannot establish anyone's attendance." }
+    ]
+  },
+  "interrupted-work": {
+    "resident": "Baldwin",
+    "turns": [
+      { "words": "Did I catch you on your way to something? I can walk with you.", "check": "Compare the last running native routine and navigation at approach with the accepted and spoken activity.", "capture": true },
+      { "words": "No need to stop on my account. I'll let you get on.", "check": "Do not invent completion of the interrupted job." }
+    ]
+  },
+  "visitor": {
+    "resident": "Anastasia",
+    "turns": [
+      { "words": "I want to find my way to Brightoak. What landmark can you point out from here?", "check": "Compare this Crossroads resident's actual position and familiar or visible landmarks before giving directions.", "capture": true },
+      { "words": "Do you know which date is on Brightoak's jousting notice, or is that still news to you?", "check": "A visitor needs a personally reached notice or an attributed public report." }
+    ]
+  },
   "spring-joust": {
     "resident": "Graham",
     "startingDesire": "eager",
@@ -124,7 +149,7 @@
         "check": "Confirm the private exchange and keep it out of every group prompt."
       },
       {
-        "words": "Averil, I saw a copper streamer by the jousting field. Could you tell Drystan what I saw?",
+        "words": "Averil, collecting jousting pennants is my favorite pastime. I saw a copper streamer by the field. Could you tell Drystan what I saw?",
         "check": "Averil heard the player's report. Graham has not joined."
       },
       {
@@ -259,6 +284,26 @@
         "words": "Which season did we wake up to this morning?",
         "check": "Refresh the speaker's date, season, time of day and next notice at native rollover.",
         "capture": true
+      }
+    ]
+  },
+  "public-and-local": {
+    "resident": "Graham",
+    "turns": [
+      {
+        "calendar": { "season": "Fall", "day": 12, "time": 0.48 },
+        "words": "I'm hoping to trade. Is there a notice that says when the traveling merchant will come?",
+        "check": "Keep an unannounced merchant schedule unknown. The local Grand Joust notice is due today."
+      },
+      {
+        "venue": { "title": "Traveling Merchant", "landmark": "Shop Character" },
+        "words": "Who have we come across? Is there also something on the public notice today?",
+        "check": "Supply both the live local merchant sighting and the simultaneous public joust notice.", "capture": true
+      },
+      {
+        "returnFromVenue": "Traveling Merchant",
+        "words": "What did you see earlier? Do you know if the merchant is still there now?",
+        "check": "Attribute the earlier encounter and avoid firsthand knowledge of the remote departure."
       }
     ]
   },
