@@ -29,10 +29,11 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release, m
 
     def native_turn(words):
         packet = dict(campaign=campaign, actor=averil, id=str(uuid4()), text=words, supportsSpokenFarewells=True)
+        first_call = len(calls)
         prepared = api("dialogue/prepare", packet)
         assert prepared["state"] == "ready", prepared
         assert api("dialogue/prepare", packet) == prepared
-        dispatches = [call for call in calls if call["messages"][1]["content"] == words]
+        dispatches = [call for call in calls[first_call:] if call["messages"][1]["content"] == words]
         assert len(dispatches) == 1, (words, len(dispatches))
         prompt = dispatches[0]["messages"][0]["content"]
         recall = json.JSONDecoder().raw_decode(prompt.split("\nRecall: ", 1)[1])[0].get("conversationRecaps", [])
@@ -747,5 +748,32 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release, m
     assert denied["correction"]["source"]==marker and "didn't cross the ford" in denied["note"], denied
     assert sql(f"SELECT count(*) FROM dialogue_recap_parts WHERE corrects_source='{hat}'")=="0"
     print("PASS a repeated explanation preserves the local withdrawal, a new subject preserves the bare correction, and an item-specific loan survives competing offers.",flush=True)
+
+    scenes = [
+        ("You may borrow my barrow.", "I take that back.", "Jo needs my barrow for the orchard.",
+         "Did you lend me your barrow?", "What does Jo need for the orchard?", "Withdrew their earlier account."),
+        ("I caught the pike by the mill.", "I was mistaken.", "Jo needs my help at the forge.",
+         "Who caught the pike by the mill?", "What does Jo need at the forge?", "Corrected their earlier account."),
+    ]
+    for i,(words,marker,following,question,next_question,amendment) in enumerate(scenes):
+        answers = []
+        for prior_visit in (False,True):
+            day = 525 + 70*i + 35*prior_visit
+            beat(day)
+            if prior_visit:
+                rope = exchange([("player",averil,"Ada needs rope.")])
+            chat,(claim,change) = exchange([("player",averil,words),("player",averil,marker+" "+following)])
+            beat(day+1)
+            original = concordance((chat,[claim]),question,day)[0]
+            revision = original["correction"]
+            assert (revision["source"],revision["sentence"],revision["note"])==(change,0,amendment), original
+            separate = concordance((chat,[change]),next_question,day)[0]
+            assert separate["sentence"]==1 and "Jo needs" in separate["note"] and "correction" not in separate, separate
+            if prior_visit:
+                unrelated = concordance(rope,"Who needs rope?",day)[0]
+                assert unrelated["note"]=="Recounted “Ada needs rope”.", unrelated
+            answers.append((original["note"],separate["note"]))
+        assert answers[0]==answers[1], answers
+    print("PASS an unrelated earlier need leaves the same local withdrawal, correction and separate follow-up in Talk and the journal.",flush=True)
     memory_model("historian")
     print("PASS Talk and journal agree on sourced roles, recipients, corrections and unresolved claims after an unavailable overnight model.", flush=True)

@@ -208,9 +208,9 @@ internal static partial class DialogueRecaps
             // proposition supplies an antecedent on the strength of the following words.
             bool reaffirms = bare && action!=null && matching.Any(a=>!ChangesAccount(action,a.Event!,row.SpeakerName));
             var continued = reaffirms ? [] : matching;
-            bool competingEvent = action!=null && (action.ActorReplacement ||
-                scopedAccounts.Any(a=>a.Event!=null && SamePredicate(action,a.Event) && ChangesAccount(action,a.Event,row.SpeakerName)));
-            bool fallback = bare && (matching.Count>0 || !competingEvent);
+            // A bare marker keeps its local scope unless the follow-up explicitly names
+            // a replacement actor. A matching, materially changed event is handled first.
+            bool fallback = bare && (action?.ActorReplacement!=true || reaffirms);
             // A named action always constrains its own antecedent. A replacement supplying
             // the action for a named object must establish that event as well.
             var grounded = reference==null || describesTopic || continued.Count>0 ? continued : scopedAccounts;
