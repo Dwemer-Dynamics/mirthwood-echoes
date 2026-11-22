@@ -1,8 +1,10 @@
 # Mirthwood: Echoes programme
 
-Record the batch outcome, date, coordinator and measurable done conditions. Record the user's actual authority for task chats, publication, merges, promotions, deployment and live testing. Update the decision here when the user changes it.
+Record the batch outcome, date, coordinator and measurable done conditions. Record current authority for publication, merges, promotions, deployment and live testing. Update the decision here when the user changes it.
 
-| Stream | Owner and chat | Base, branch and worktree | Owned paths | Dependency and release evidence | Acceptance |
+Use one separate user-visible build chat per independent substantial outcome. The coordinator owns handoffs and integration and may handle small status or management actions. Set Codex `model: gpt-6.2-astra` and `thinking: max` on both creation and follow-up assignments. Record the dispatch and actual settings when available. Claude review and the in-game dialogue model use their own settings.
+
+| Stream | Owner, chat and latest dispatch | Base, branch and worktree | Owned paths | Dependency and release evidence | Acceptance and next deliverable |
 | --- | --- | --- | --- | --- | --- |
 
 ## Shared resources
