@@ -12,7 +12,7 @@ FISH_CALLBACK = "I've got my rod out again. Remind me, whereabouts did we catch 
 REPAIR_CALLBACK = "I've got my rod out again. How did we fix the alder footbridge?"
 
 
-def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
+def check(api, beat, world, campaign, residents, sql, calls, waiting, release, memory_model):
     averil, drystan, guest = residents
     load = str(uuid4())
     world["memorySession"] = load
@@ -100,9 +100,11 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     session = str(uuid4())
     packets = []
 
-    def group(who, words, audience, to="group", **extra):
+    def group(who, words, audience, to="group", chat=None, **extra):
+        chat = chat or session
+        seq = sum(p["line"]["session"] == chat for p in packets) + 1
         packet = dict(id=str(uuid4()), parent=world.get("cueHead"), world=dict(world), kind="group", people=[],
-                      line=dict(session=session, seq=len(packets)+1, speaker=who, to=to, words=words,
+                      line=dict(session=chat, seq=seq, speaker=who, to=to, words=words,
                                 at=datetime.now(timezone.utc).isoformat(), audience=audience, **extra))
         api("module/cue", packet)
         packets.append(packet)
@@ -145,6 +147,20 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
         prompt=json.loads(next(call["messages"][1]["content"] for call in reversed(calls) if "heardInOrder" in call["messages"][1]["content"]))
         assert ("plum tart" in str(prompt["yourMemory"].get("characterKnowledge",[])))==allowed
     full_head=world["cueHead"]
+    # At the same table, the same speaker addresses two different people.
+    cart_chat = str(uuid4())
+    to_resident = group(averil, "You may use my handcart.", both, to=drystan, chat=cart_chat)
+    to_player = group(averil, "You may not use my handcart.", both, to="player", chat=cart_chat)
+    invite = "Will you come to the solstice supper?"
+    invitations = [group(averil, invite, both, to=person) for person in (drystan, "player")]
+    bell_chat = str(uuid4())
+    bell = group(averil, "I carried the pewter bell to Reed Quay.", [*both, guest], chat=bell_chat)
+    revised_bell = group(averil, "I was mistaken. Ada carried it.", both, chat=bell_chat)
+    supper_chat = str(uuid4())
+    group(averil, "You are invited to my harvest supper.", [*both, guest], to=guest, chat=supper_chat)
+    sundial = group("player", "I painted the copper sundial.", [*both, guest])
+    revised_sundial = private(guest, "I was mistaken. Rowan painted it.")
+    full_head=world["cueHead"]
     # Unseen alternatives and model annotations alone never grant knowledge.
     alternate="Do you still keep a stone from the river?"
     conditional=dict(id=str(uuid4()),campaign=campaign,actor=averil,text=alternate)
@@ -177,6 +193,21 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     craft=say("The glassblower shaped a blue goblet at the bell tower.")
     lens=say("I may have left an obsidian lens beneath Drift Hall. Did the courier find it?")
     journey=say("Nia moved amber from Willow Hall to Larch Quay.")
+    borrow_self = say("May I borrow your cart?")
+    borrow_other = say("May he borrow my cart?")
+    hearsay = say("Mara doubts he lent me his compass.")
+    denial = say("I never told him he could use my skiff.")
+    denials = [say(s, guest) for s in ("I did not say you could borrow my horse.", "I said you did not borrow my horse.")]
+    modal = [say(s, guest) for s in ("Mira might mend Elm Bridge.", "Mira did mend Elm Bridge.")]
+    nested = say('Jo reported “I was mistaken. Mira may not take my garnet.”', guest)
+    sash = say("I wove the russet sash at the guildhall.", guest)
+    condition = say("You may borrow my spyglass for the journey across the valley tomorrow unless my sister needs it "
+                    "to count the wild cranes resting behind the warm orchard wall at sunrise.", guest)
+    ring = say("Mira, said Jo, took the ring.", guest)
+    foal = say("I sold the foal.", guest)
+    trout = say("I landed a speckled trout beneath the alder footbridge. I was mistaken. Ada caught it.", guest)
+    pike = say("I caught a huge pike at the mill pond. Starlings circled the cracked granary roof. "
+               "Frost coated three empty copper buckets. Violet ribbons marked nine broken gates. Well, no, I didn’t.", guest)
     assert any(r["id"]==fish["id"] for r in view(averil,"conversations"))
     missing=str(uuid4())
     api("module/cue",dict(world=dict(world),kind="address",parent=full_head,id=missing,
@@ -222,6 +253,56 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
         prompt=next(call["messages"][0]["content"] for call in reversed(calls) if call["messages"][1]["content"]==query)
         return json.loads(prompt.split("\nRecall: ",1)[1]).get("conversationRecaps",[])
     def texts(items):return " ".join(r["note"].lower() for r in items)
+    def notes_by_source(words, expected):
+        notes = check_recall(averil, words)
+        print("Compacted roles", json.dumps(dict(query=words, recaps=notes)), flush=True)
+        assert {r["source"] for r in notes} == set(expected), notes
+        return {r["source"]: r for r in notes}
+
+    carts = notes_by_source("Who asked to borrow a cart?", [borrow_self["id"], borrow_other["id"]])
+    own_request, other_request = (carts[p["id"]] for p in (borrow_self, borrow_other))
+    assert own_request["speakerKey"] == other_request["speakerKey"] == "player"
+    assert own_request["toKey"] == other_request["toKey"] == averil
+    assert "the speaker may borrow the addressee's cart" in own_request["note"], own_request
+    assert "he may borrow the speaker's cart" in other_request["note"], other_request
+    for source in (borrow_self, borrow_other, hearsay, denial):
+        assert sql(f"""SELECT player_text='' AND reply IS NULL FROM turns WHERE id='{source["id"]}'""") == "t"
+    compass = notes_by_source("Did anybody mention a compass?", [hearsay["id"]])[hearsay["id"]]
+    assert "mara doubts" in compass["note"].lower() and "his compass" in compass["note"].lower(), compass
+    skiff = notes_by_source("What about the skiff?", [denial["id"]])[denial["id"]]
+    assert "never told him" in skiff["note"] and "could use" in skiff["note"], skiff
+    for packet, query, detail in [(trout, "Who caught the speckled trout?", "Ada caught it"),
+                                  (pike, "Who caught the huge pike at the mill pond?", "Withdrew")]:
+        recalled = check_recall(guest, query)
+        print("Corrected account", json.dumps(recalled), flush=True)
+        original = next(r for r in recalled if r["source"] == packet["id"])
+        assert "later corrected" in original["note"] and detail in original["correction"]["note"], original
+        assert original["correction"]["source"] == packet["id"] and original["correction"]["sentence"] > 0, original
+    for packet in (ring, foal):
+        until(lambda: sql(f"""SELECT highlighted AND journal_note IS NULL FROM dialogue_recap_parts
+                              WHERE source='{packet["id"]}' AND pos=1""") == "t")
+    ring_note = check_recall(guest, "Who took the ring?")[0]
+    assert ring_note["source"] == ring["id"] and "Mira, said Jo," in ring_note["note"], ring_note
+    highlighted = next(r["body"] for r in view(guest,"sessions") if r["id"]=="day-20")
+    assert ring_note["note"] in highlighted and "Reported Mira said Jo took" not in highlighted, highlighted
+    foal_note = check_recall(guest, "What became of the foal?")[0]
+    assert foal_note["source"] == foal["id"] and foal_note["note"] in highlighted and "Suggested" not in highlighted, highlighted
+    print("Protected journal highlights", json.dumps(dict(ring=ring_note,foal=foal_note,journal=highlighted)), flush=True)
+    def pair(packet_pair, query):
+        notes = {r["source"]: r["note"] for r in check_recall(guest, query)}
+        return [notes[p["id"]] for p in packet_pair]
+    refused_to_say, reported_denial = pair(denials, "Who mentioned a horse?")
+    assert "did not say" in refused_to_say and "did not borrow" in reported_denial
+    possible, asserted = pair(modal, "What happened at Elm Bridge?")
+    assert "Mira might mend" in possible and "Mira did mend" in asserted
+    reported = check_recall(guest, "What about the garnet?")[0]
+    assert reported["source"] == nested["id"] and "Jo reported" in reported["note"] and "Mira may not" in reported["note"], reported
+    assert not reported.get("correction") and sql(f"""SELECT count(*) FROM dialogue_recap_parts
+        WHERE source='{nested["id"]}' AND pos=1""") == "1"
+    partial = check_recall(guest, "Tell me about the spyglass.")[0]
+    assert partial["source"] == condition["id"] and "Partial" in partial["note"] and "unless" in partial["note"], partial
+    supper = next(r for r in view(drystan, "sessions") if r["id"] == "day-20-" + supper_chat)
+    assert "Miller to Listener — " in supper["body"] and "harvest supper" in supper["body"], supper
     def day_recap(actor):
         return next(r for r in view(actor,"sessions") if r["id"]=="day-20")
     assert sum(r["id"]=="day-20" for r in view(averil,"sessions"))==1
@@ -280,6 +361,49 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     assert "buckle" in texts(shared_recall("What became of the magpie?",both))
     assert not shared_recall("What became of the magpie?",[*both,guest])
     assert not shared_recall(ask,both)
+    permissions = shared_recall("What did you say about using the handcart?", both)
+    assert {r["source"] for r in permissions} == {to_resident, to_player}, permissions
+    grant = next(r for r in permissions if r["source"] == to_resident)
+    refusal = next(r for r in permissions if r["source"] == to_player)
+    assert grant["speakerKey"] == refusal["speakerKey"] == averil
+    assert grant["toKey"] == drystan and refusal["toKey"] == "player", permissions
+    assert "the addressee may use the speaker's handcart" in grant["note"], grant
+    assert "the addressee may not use the speaker's handcart" in refusal["note"], refusal
+    cart_journal = next(r["body"] for r in view(drystan,"sessions") if r["id"]=="day-20-"+cart_chat)
+    assert all(f"{r['speaker']} to {r['to']} — {r['note']}" in cart_journal for r in permissions), cart_journal
+    print("Compacted permissions", json.dumps(dict(recaps=permissions,journal=cart_journal)), flush=True)
+    assert not shared_recall("What did you say about using the handcart?", [*both, guest])
+    invited = shared_recall("Who was invited to the solstice supper?", both)
+    assert {(r["source"], r["toKey"]) for r in invited} == set(zip(invitations, (drystan, "player"))), invited
+    # Simulate an old receipt without a recorded target. Both witnesses stay in the audience.
+    sql(f"""UPDATE cue_events SET payload=payload #- '{{line,to}}' WHERE id='{invitations[0]}'""")
+    unaddressed = next(r for r in shared_recall("Who was invited to the solstice supper?", both) if r["source"] == invitations[0])
+    assert not unaddressed.get("to") and not unaddressed.get("toKey"), unaddressed
+    where_bell = "Who carried the pewter bell to Reed Quay?"
+    def bell_note(listeners):
+        return next(r for r in shared_recall(where_bell, listeners) if r["source"] == bell)
+    changed = bell_note(both)
+    assert changed["correction"]["source"] == revised_bell and "Ada carried it" in changed["note"], changed
+    original_bell = bell_note([*both, guest])
+    assert "correction" not in original_bell
+    def bell_journal(actor):
+        return next(r["body"] for r in view(actor,"sessions") if r["id"]=="day-20-"+bell_chat)
+    assert changed["note"] in bell_journal(averil) and "Ada" not in bell_journal(guest)
+    sundial_query = "Who painted the copper sundial?"
+    heard = next(r for r in check_recall(guest, sundial_query) if r["source"] == sundial)
+    assert heard["correction"]["source"] == revised_sundial and "Rowan painted it" in heard["note"], heard
+    public = next(r for r in shared_recall(sundial_query, [*both, guest]) if r["source"] == sundial)
+    assert "correction" not in public and "Rowan" not in public["note"], public
+    latest = full_head
+    full_head = bell
+    world["cueHead"] = bell;beat(21)
+    rewound_bell = bell_note(both)
+    assert "correction" not in rewound_bell and "Ada" not in bell_journal(averil)
+    full_head = latest
+    world["cueHead"] = latest;beat(21)
+    print("Witnesses and rewind", json.dumps(dict(revised=changed,shared=original_bell,rewound=rewound_bell,
+          journal=bell_journal(averil),absentJournal=bell_journal(guest),privateCorrection=heard,publicAccount=public)), flush=True)
+    new_sash = say("I was mistaken. Emil wove it.", guest)
     world["cueHead"]=packets[0]["id"];beat(21)
     assert group_body(drystan) and not group_body(guest)
     world["cueHead"]=full_head;beat(21)
@@ -290,6 +414,9 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
             line=dict(session=early_chat,seq=1,speaker="player",to="group",audience=both,words="I found a "+token+".",
                       at=datetime.now(timezone.utc).isoformat())))
     beat(22)
+    revised_sash = next(r for r in check_recall(guest, "Tell me about the russet sash.") if r["source"] == sash["id"])
+    assert revised_sash["correction"]["source"] == new_sash["id"] and "Emil wove it" in revised_sash["note"], revised_sash
+    print("Later day", json.dumps(revised_sash), flush=True)
     def model_batches():return [call["messages"][1]["content"] for call in calls if "Summarize one day of spoken dialogue" in call["messages"][0]["content"]]
     until(lambda:all(any(token in batch for batch in model_batches()) for token in ("spindle whorl","silver brooch")))
     assert not any("spindle whorl" in batch and "silver brooch" in batch for batch in model_batches())
@@ -314,6 +441,8 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     assert any(r["id"]==fresh["id"] for r in view(averil,"conversations"))
     beat(21)
     until(lambda:sql(f"""SELECT count(*) FROM dialogue_recap_parts WHERE source='{fish["id"]}'""")=="0")
+    assert sql(f"""SELECT count(*) FROM dialogue_recap_parts WHERE source='{sash["id"]}'""") == "0"
+    assert sql(f"""SELECT detail FROM dialogue_recap_parts WHERE source='{new_sash["id"]}' AND pos=1""").endswith("Emil wove it”.")
     assert sql(f"""SELECT count(*) FROM dialogue_recap_parts WHERE source='{fresh["id"]}'""")!="0"
     assert "speckled" not in texts(check_recall(averil,ask))
     assert "crooked" in texts(check_recall(averil,"What about the crooked limb?"))
@@ -352,3 +481,46 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     knowledge=json.loads(prompt.split("\nRecall: ",1)[1])["characterKnowledge"]
     assert any(r["value"].casefold()=="plum tart" and r["saidBy"]=="Test player" for r in knowledge),knowledge
     print("PASS 30-day physical expiry, reload clock, preserved new branch speech, group witnesses, short answers, corrections, exact/conflicting replays, durable preferences, commitments and major moments.",flush=True)
+
+    # Closed groups each have their own journal entry. Read the same evidence through
+    # private native Talk after the overnight model has actually failed.
+    beat(100)
+    memory_model("offline-night")
+    def exchange(lines):
+        chat = str(uuid4())
+        sources = [group(who, words, both, to=to, chat=chat) for who, to, words in lines]
+        return chat, sources
+    rings = exchange([("player", averil, "Mira said I stole her ring."), ("player", averil, "I said Mira stole my ring.")])
+    trout_words = "I landed a speckled trout beneath the alder footbridge. I was mistaken. Ada caught it."
+    fixed = exchange([("player", averil, trout_words)])
+    five = exchange([("player", averil, pike["text"])])
+    stool = exchange([(averil, drystan, "You moved my stool."), (averil, "group", "You moved my stool.")])
+    secondhand = exchange([("player", averil, "I repaired the flax press."), (averil,"player","Mira said she was mistaken about the flax press.")])
+    ambiguous = exchange([("player", averil, "I sold a shawl. I sold a cloak. I was mistaken.")])
+    clarified = exchange([("player", averil, "I strung the red lantern. Actually, Ada strung it.")])
+    assent_chat, _ = exchange([("player", averil, "Yes?"), (averil, "player", "No.")])
+    beat(101)
+    until(lambda: any(call["model"] == "offline-night" and "I landed a speckled trout" in call["messages"][1]["content"] for call in calls))
+    assent = next(r["body"] for r in view(averil,"sessions") if r["id"] == "day-100-"+assent_chat)
+    assert "Asked “Yes?”" in assent and "Answered no." in assent and "Answered yes." not in assent, assent
+    def concordance(scene, question):
+        chat, sources = scene
+        _, selected, reply = native_turn(question)
+        notes = [r for r in selected if r["source"] in sources]
+        body = next(r["body"] for r in view(averil,"sessions") if r["id"] == "day-100-"+chat)
+        assert {r["source"] for r in notes} == set(sources) and all(r["note"] in body for r in notes), (notes,body)
+        assert selected[0]["source"] in sources and reply == selected[0]["note"], (reply,selected)
+        print("Talk and journal", json.dumps(dict(query=question,recaps=selected,reply=reply,journal=body)), flush=True)
+        return notes
+    claims = concordance(rings, "What did we say about stealing the ring?")
+    assert "mira said i stole her ring" in texts(claims) and "i said mira stole my ring" in texts(claims), claims
+    assert "Ada caught it" in concordance(fixed, "Who landed that speckled trout?")[0]["correction"]["note"]
+    assert "Withdrew" in concordance(five, "Did anyone catch a huge pike?")[0]["correction"]["note"]
+    seats = concordance(stool, "Who moved whose stool?")
+    assert {r["toKey"] for r in seats} == {drystan, "group"} and any("You moved my stool" in r["note"] for r in seats if r["toKey"]=="group")
+    assert not any(r.get("correction") for r in concordance(secondhand, "What did we say about the flax press?"))
+    unclear = concordance(ambiguous, "Who sold the shawl?")[0]
+    assert "unclear target" in unclear["note"] and unclear["correction"]["targetUnclear"]
+    assert "Ada strung it" in concordance(clarified, "Who strung the red lantern?")[0]["correction"]["note"]
+    memory_model("historian")
+    print("PASS Talk and journal agree on sourced roles, recipients, corrections and unresolved claims after an unavailable overnight model.", flush=True)
