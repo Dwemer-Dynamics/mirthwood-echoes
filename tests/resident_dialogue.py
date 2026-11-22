@@ -59,6 +59,18 @@ def serve(token, saves, package, output):
     app = (Path(package)/"app").resolve(strict=True)
     if work.name!=uuid.UUID(hex=token).hex or not (work/"game").is_dir() or not (Path(saves)/"Slot0.savegame").is_file():
         raise ValueError("Missing private game or save")
+    installed = Path(saves).parent / "installed-loader"
+    if installed.is_file():
+        if installed.read_text() != token:
+            raise ValueError("The installed-runtime marker belongs to another test.")
+        release = Path("/opt/mirthwood-echoes/current").resolve(strict=True)
+        if release.parent != Path("/opt/mirthwood-echoes/releases"):
+            raise ValueError("The active server has no installed release directory.")
+        def inventory(directory):
+            return {p.relative_to(directory).as_posix(): digest(p) for p in directory.rglob("*") if p.is_file()}
+        if inventory(release) != inventory(app):
+            raise RuntimeError("The active server files differ from the qualified package.")
+        app = release
     free_port()
     account = pwd.getpwnam("mirthwood_echoes")
     database = "echoes_talk_"+token
@@ -76,6 +88,9 @@ def serve(token, saves, package, output):
                 process = subprocess.Popen(["/usr/bin/dotnet",str(app/"Mirthwood.Echoes.Server.dll")],cwd=app,env=env,
                                            user=account.pw_uid,group=account.pw_gid,extra_groups=[],stdout=log,stderr=log)
                 try:
+                    if installed.is_file():
+                        write(work/"installed-server.json",dict(pid=process.pid,release=str(app),uid=account.pw_uid,
+                              assembly=digest(app/"Mirthwood.Echoes.Server.dll"),copies=saves,database=database,port=17864))
                     end=time.monotonic()+(2220 if (Path(saves).parent/"resident.txt").exists() else 720)
                     while process.poll() is None and not (work/"stop-server").exists() and time.monotonic()<end:
                         time.sleep(.3)
@@ -85,6 +100,13 @@ def serve(token, saves, package, output):
                       talk->>'flow' AS flow,talk->'deliveredContinuation' AS delivered_continuation,
                       first_ms,total_ms FROM turns ORDER BY started) t"""
                     write(work/"turns.json",json.loads(postgres("psql","-XAt","-d",database,"-c",query)))
+                    if (Path(saves).parent/"world-awareness.json").is_file():
+                        clock = """SELECT jsonb_build_object(
+                          'clocks', (SELECT coalesce(jsonb_agg(to_jsonb(d)), '[]') FROM dialogue_clock d),
+                          'turns', (SELECT coalesce(jsonb_agg(jsonb_build_object('id',id,'day',day,
+                            'age',dialogue_age,'expired',dialogue_expired,'state',state,'binding',cue_binding)
+                            ORDER BY started), '[]') FROM turns))"""
+                        write(work/"private-clock.json",json.loads(postgres("psql","-XAt","-d",database,"-c",clock)))
                 finally:
                     if process.poll() is None:
                         process.send_signal(signal.SIGINT)
@@ -117,7 +139,7 @@ def send_line(token, words):
         tmp.unlink(missing_ok=True)
 
 
-def run(package, mode, resident=None, starting_desire=None, knowledge=False, awareness=None):
+def run(package, mode, resident=None, starting_desire=None, knowledge=False, awareness=None, installed=False):
     import winreg
     token=uuid.uuid4().hex
     free_port()
@@ -142,6 +164,17 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False, awa
     if awareness:
         write(session/"world-awareness.json",awareness.plan)
         write(work/"world-awareness-plan.json",awareness.plan)
+    if installed:
+        import configparser
+        config = configparser.ConfigParser()
+        config.read(real/"doorstop_config.ini", encoding="utf-8-sig")
+        preloader = Path("BepInEx/core/BepInEx.Preloader.dll")
+        if not awareness or not config.getboolean("General","enabled") or (real/config.get("General","target_assembly")).resolve() != (real/preloader).resolve():
+            raise RuntimeError("The installed game needs the normal enabled preloader for this isolated smoke test.")
+        for rel in (module,preloader):
+            if digest(real/rel) != digest(package/"app/bundle"/rel):
+                raise RuntimeError("The installed file differs from the qualified package: " + str(rel))
+        (session/"installed-loader").write_text(token)
     if resident:
         (session/"resident.txt").write_text(resident,encoding="utf-8")
         if starting_desire:
@@ -175,12 +208,18 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False, awa
         assert api("module/check",{})["status"]=="ready"
         assert digest(game/module)==digest(package/"app/bundle"/module)
         probe=api("diagnostics/probes",dict(mode=mode,run=token))
-        subprocess.Popen([steam,"-applaunch","2272900","-echoes-harness",token,"--doorstop-target-assembly",
-                          str(game/"BepInEx/core/BepInEx.Preloader.dll")])
+        command = [steam,"-applaunch","2272900","-echoes-harness",token]
+        if not installed:
+            command += ["--doorstop-target-assembly",str(game/"BepInEx/core/BepInEx.Preloader.dll")]
+        if awareness:
+            write(work/"steam-launch.json",dict(command=command,installed=installed,sourceSlot=0))
+        subprocess.Popen(command)
         launched=True;last=None;end=time.monotonic()+(2080 if resident else 590)
         seen_ready=0;seen_reply=0
         while time.monotonic()<end:
             probe=api("diagnostics/probes/"+probe["id"])
+            if awareness:
+                awareness.observe(work,session)
             if resident:
                 reply_file=session/f"reply-{seen_reply}.json"
                 if reply_file.is_file():
@@ -230,6 +269,12 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False, awa
         if probe["state"]!="passed":raise RuntimeError(mode+" check "+probe["state"])
         if awareness:
             awareness.verify(token,work,probe)
+            if installed:
+                modules = json.loads((session/"awareness-evidence/loaded-module.json").read_bytes())
+                for name, rel in (("Mirthwood.Echoes",module),("BepInEx.Preloader",preloader)):
+                    item, = [m for m in modules if m["name"] == name]
+                    if Path(item["path"]).resolve() != (real/rel).resolve() or item["sha256"] != digest(real/rel):
+                        raise RuntimeError("The running game loaded a different " + name)
             return
         if mode in ("interface","voices"):return
         if mode=="grouptalk":

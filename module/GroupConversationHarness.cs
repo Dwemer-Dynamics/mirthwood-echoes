@@ -45,10 +45,23 @@ namespace Mirthwood.Echoes
             var playerStart=player.transform.position;
             var seen=new JArray();NativeCues.Trace=seen;
             var stages=new JArray();report["setupStages"]=stages;groupProbe=s=>stages.Add(s);
+            var awareness=AwarenessPlaytest.Read();
+            Coroutine circleObserver=null;
             try{
                 yield return DismissGroupTestCards();
                 GameState.SetCurrentGeneralState(GameState.State.Gameplay);GameState.SetCurrentState(1,GameState.State.Gameplay);
                 GameState.AllowInput=true;GameState.UnPause();
+                if(awareness!=null){
+                    yield return awareness.Survey(two[0]);
+                    yield return awareness.SetScene(0,two[0]);
+                    yield return awareness.AllowScheduledStart(two[0]);
+                    var aside=new JObject { ["turns"]=new JArray() };
+                    yield return AwarenessPlaytest.Approach(two[0].transform.position);
+                    awareness.Record("private-aside-before",0,two[0]);
+                    yield return ReadCue(aside,two[0],awareness.Words(0));
+                    awareness.Record("private-aside-bubble",0,two[0],aside["turns"][0]);
+                    foreach(var person in two.Concat(new[]{late}))awareness.Record("original-routine",0,person);
+                }
                 NavMeshHit center=default,left=default,right=default;bool found=false;
                 var anchors=new[]{new Vector3(-145,.08f,-76),previous[0],previous[1],playerStart};
                 foreach(var pivot in anchors.SelectMany(anchor=>Enumerable.Range(-4,9).SelectMany(x=>Enumerable.Range(-4,9)
@@ -109,6 +122,10 @@ namespace Mirthwood.Echoes
                 Require(!GroupActive&&!Visible&&!GameState.IsPaused&&GameState.GetCurrentState(1)==GameState.State.Gameplay,
                     "Escape from the circle also opened a game menu or left its controls captured.");
                 report["escape"]=true;
+                if(awareness!=null){
+                    foreach(var person in two)awareness.Record("before-invite",0,person);
+                    circleObserver=host.StartCoroutine(awareness.ObserveCircle(this,seen));
+                }
                 Require(IsolatedGameRun.PostGroupKey(true),"The copied game could not receive the group key.");
                 yield return new WaitForSecondsRealtime(.18f);IsolatedGameRun.PostGroupKey(false);
                 float gatherUntil=Time.unscaledTime+14;
@@ -138,11 +155,16 @@ namespace Mirthwood.Echoes
                 if(desire=="eager")foreach(var g in seated)g.Npc.CharacterInfo.personality.values[5]=1f;
                 nextGroupReply=0;
                 first.Npc.AddToHiringItemList("Flour",2);
-                string opening="Averil, what did you collect for work today? Could you tell Drystan too?";
+                string opening=awareness?.Words(1)??"Averil, what did you collect for work today? Could you tell Drystan too?";
                 playerBubble.Input.text=opening;float started=Time.unscaledTime;
                 Require(IsolatedGameRun.PostReturn(),"Could not post the player's Enter.");
                 float until=Time.unscaledTime+92;
                 while(GroupActive&&groupSequence<2&&(groupTyping||busy||phase!=Phase.Reading)&&Time.unscaledTime<until)yield return null;
+                if(awareness!=null&&groupSequence<2)awareness.Record("circle-interrupted",0,two[0],new {
+                    storyCard=StoryCardOpen,state=GameState.GetCurrentState(1).ToString(),GameState.IsPaused,
+                    combat=player.DataContainer.data.InCombat,position=Vector3.Distance(player.transform.position,center.position),
+                    groupActive=GroupActive,session=NativeCues.Session,stages
+                });
                 Require(groupSequence>=2,"Group reply failed. Sequence "+groupSequence+", phase "+phase+", waiting "+busy+", typing "+groupTyping+", queued "+NativeCues.Pending+
                     ". "+stages.ToString(Newtonsoft.Json.Formatting.None));
                 report["firstMs"]=Mathf.RoundToInt((Time.unscaledTime-started)*1000);
@@ -153,6 +175,7 @@ namespace Mirthwood.Echoes
                 NavMeshHit lateSpot;
                 Require(NavMesh.SamplePosition(center.position+Vector3.forward*3f,out lateSpot,.65f,NavMesh.AllAreas),"No third approach in the clearing.");
                 StageGuest(late,lateSpot.position);
+                awareness?.Record("before-invite",groupSequence,late);
                 Require(IsolatedGameRun.PostGroupKey(true),"Could not invite a late arrival.");
                 yield return new WaitForSecondsRealtime(.15f);IsolatedGameRun.PostGroupKey(false);
                 float lateUntil=Time.unscaledTime+14;
@@ -161,10 +184,10 @@ namespace Mirthwood.Echoes
                 var lateGuest=Participants().Single(g=>g.Npc==late);
                 ((JArray)report["guests"]).Add(new JObject{["name"]=late.CharacterInfo.name,["actor"]=lateGuest.Actor});
                 int joinedAfter=groupSequence;
-                yield return GroupQuestion("Drystan, who told you about the flour?",other.Actor);
+                yield return GroupQuestion(awareness?.Words(2)??"Drystan, who told you about the flour?",other.Actor);
                 if(desire=="eager"){
                     late.CharacterInfo.personality.values[5]=-1f;
-                    yield return GroupQuestion("Graham, have you had much time to yourself today?",lateGuest.Actor);
+                    yield return GroupQuestion(awareness?.Words(3)??"Graham, have you had much time to yourself today?",lateGuest.Actor);
                     Require(!groupParting,"One resident taking leave ended a gathering of three.");
                 }else StageGuest(late,lateStart);
                 int departedAfter=groupSequence;
@@ -174,11 +197,15 @@ namespace Mirthwood.Echoes
                     foreach(var g in Participants())g.Npc.CharacterInfo.personality.values[5]=desire=="eager"?1f:-1f;
                     report["startingDesire"]=desire;
                 }
-                if(File.Exists(Path.Combine(IsolatedGameRun.Active.Root,"resident.txt"))){
+                if(awareness!=null){
+                    for(int i=4;i<awareness.TurnCount&&GroupActive&&!groupParting;i++)
+                        yield return GroupQuestion(awareness.Words(i),null);
+                }else if(File.Exists(Path.Combine(IsolatedGameRun.Active.Root,"resident.txt"))){
                     for(int turn=0;turn<8&&GroupActive&&!groupParting;turn++)
                         yield return GroupQuestion(null,null,turn,seen,(JArray)report["guests"]);
                 }
                 if(!groupParting)yield return GroupQuestion("I should head home. Thank you both, and good night.",null);
+                if(awareness!=null)yield return new WaitForEndOfFrame();
                 Require(groupParting,"The group missed the spoken goodbye.");
                 report["totalMs"]=Mathf.RoundToInt((Time.unscaledTime-started)*1000);
                 if(desire=="tired"){
@@ -202,6 +229,7 @@ namespace Mirthwood.Echoes
                     report["reload"]=true;
                 }finally{RemoveSnapshot(IsolatedGameRun.Active.Root,snapshot);}
             }finally{
+                if(circleObserver!=null)host.StopCoroutine(circleObserver);
                 Close();NativeCues.Trace=null;groupProbe=null;
                 for(int i=0;i<two.Length;i++)if(two[i])two[i].GetComponent<NavMeshAgent>()?.Warp(previous[i]);
                 if(late&&late.GetComponent<NavMeshAgent>().isOnNavMesh)late.GetComponent<NavMeshAgent>().Warp(lateStart);

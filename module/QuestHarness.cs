@@ -128,5 +128,80 @@ namespace Mirthwood.Echoes
             }finally{RemoveSnapshot(root,snapshot);}
             report["verifiedQuests"]=true;
         }
+
+        IEnumerator DiscussWorldDuringOffer(AwarenessPlaytest play, NPCController npc, string words)
+        {
+            var player = MirthwoodPlayer.Instance;
+            var chat = npc.GetComponent<NPCChatController>();
+            yield return AwarenessPlaytest.Approach(npc.transform.position);
+            var generated = player.QuestGenerator.GeneratePantryQuest(QuestType.helping,npc);
+            var quest = generated.quest;
+            var start = generated.dialogueStart;
+            string terms = start.Dialogue;
+            float friendship = Friendship(npc);
+            RequireQuest(ReferenceEquals(chat.GetDialogueData(),start) && player.QuestList.Get(quest)==null,
+                "The native game did not offer this generated quest.");
+            var menu = ShowQuickMenu(npc);
+            var labels = QuickLabels(menu);
+            play.Record("quest-before",0,npc,new {terms,words,key=quest.Uid(),labels,friendship,
+                nativeChoices=start.Choices.Select(s=>s.choiceText).ToArray()});
+            SelectQuickAction(menu,"Speak");
+            yield return null;
+            var view = UnityEngine.Object.FindObjectOfType<DialogueView>();
+            RequireQuest(view && view.isActiveAndEnabled,"Native Speak did not open the quest portrait.");
+            view.Continue();
+            yield return Await(()=>QuestPanel.Current?.Ready==true,"The offer did not reach the quest editor.",85);
+            var panel = QuestPanel.Current;
+            play.Record("quest-offer",0,npc,new {request=panel.LastRequest,result=panel.Last,nativeTerms=panel.NativeTerms});
+            string opening = (string)panel.LastRequest["id"];
+            float started = Time.realtimeSinceStartup;
+            panel.Editor.text=words;
+            panel.Editor.onSubmit.Invoke(words);
+            yield return Await(()=>QuestPanel.Current!=panel || panel.Ready && (string)panel.LastRequest["id"]!=opening,
+                "The incidental world question did not return.",85);
+            RequireQuest(QuestPanel.Current==panel && (string)panel.Last["action"]=="continue" &&
+                (string)panel.Last["intent"]=="question" && panel.NativeTerms==terms && start.Dialogue==terms &&
+                ReferenceEquals(chat.GetDialogueData(),start) && player.QuestList.Get(quest)==null && Friendship(npc)==friendship,
+                "An incidental question changed the native offer, eligibility or effects.");
+            string reply = (string)panel.Last["reply"];
+            string rendered = null;
+            yield return Await(()=>{
+                panel.Portrait.ForceMeshUpdate();
+                rendered=panel.Portrait.GetParsedText().Trim();
+                return rendered==new BubbleText(reply,false).Plain.Trim();
+            },"The portrait did not display the incidental answer.",24);
+            play.Record("quest-portrait",0,npc,new {request=panel.LastRequest,result=panel.Last,rendered,terms,
+                elapsedMs=Mathf.RoundToInt((Time.realtimeSinceStartup-started)*1000)});
+            yield return play.Screenshot("quest-world-answer");
+            string earlier=(string)panel.LastRequest["id"];
+            panel.Editor.text="I'll attend the Grand Joust.";
+            panel.Editor.onSubmit.Invoke(panel.Editor.text);
+            yield return Await(()=>QuestPanel.Current!=panel || panel.Ready && (string)panel.LastRequest["id"]!=earlier,
+                "No answer to the player's intention to attend the joust.",85);
+            string eventWords=(string)panel.Last?["reply"];
+            string onScreen=null;
+            if(QuestPanel.Current==panel && eventWords!=null){
+                yield return Await(()=>{
+                    panel.Portrait.ForceMeshUpdate();
+                    onScreen=panel.Portrait.GetParsedText().Trim();
+                    return onScreen==new BubbleText(eventWords,false).Plain.Trim();
+                },"No visible answer to the attendance statement.",24);
+            }
+            play.Record("quest-attendance-intention",0,npc,new {request=panel.LastRequest,result=panel.Last,
+                rendered=onScreen,journal=player.QuestList.CountQuestsInProgress(quest),originalOffer=ReferenceEquals(chat.GetDialogueData(),start)});
+            RequireQuest(QuestPanel.Current==panel && (string)panel.Last["action"]=="continue" && player.QuestList.Get(quest)==null &&
+                ReferenceEquals(chat.GetDialogueData(),start) && panel.NativeTerms==terms && Friendship(npc)==friendship,
+                "Agreeing to attend the joust resolved or altered the unrelated job.");
+            panel.Editor.text=play.DeclineQuest?"No thank you. I won't take this job.":"Yes, I'll do the work on the original terms.";
+            panel.Editor.onSubmit.Invoke(panel.Editor.text);
+            yield return Await(()=>QuestPanel.Current==null,"The native decision did not close the offer.",85);
+            int count=player.QuestList.CountQuestsInProgress(quest);
+            play.Record("quest-outcome",0,npc,new {count,key=quest.Uid(),request=panel.LastRequest,result=panel.Last,
+                friendshipDelta=Friendship(npc)-friendship,terms=start.Dialogue,
+                removed=!chat.ConditionalDialogues.Any(x=>ReferenceEquals(x.dialogueData,start))});
+            bool correct=play.DeclineQuest ? count==0 && (string)panel.Last["action"]=="decline" &&
+                !chat.ConditionalDialogues.Any(x=>ReferenceEquals(x.dialogueData,start)) : count==1 && (string)panel.Last["action"]=="accept";
+            RequireQuest(correct,"The native journal and the player's explicit decision differ.");
+        }
     }
 }
