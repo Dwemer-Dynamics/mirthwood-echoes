@@ -53,6 +53,9 @@ namespace Mirthwood.Echoes
             yield return new WaitForSecondsRealtime(3);
             bool topicFlow=mode=="dialogueflow",interactive=mode=="roleplay";
             string folder=IsolatedGameRun.Active.Root;
+            bool memoryTest=interactive&&File.Exists(Path.Combine(folder,"memory-clock-test"));
+            var cycle=_Mirthwood.Scripts.Demo.Weather.DayNightCycle.Instance;
+            int firstDay=Mathf.FloorToInt(cycle.Now);
             string name=interactive?File.ReadAllText(Path.Combine(folder,"resident.txt")).Trim():"Averil";
             var player=PlayerCharacterController.Instance;
             var npcs=UnityEngine.Object.FindObjectsOfType<NPCController>();
@@ -98,6 +101,21 @@ namespace Mirthwood.Echoes
                     "Let's talk about something lighter. Tell me a joke about the tavern cook."
                 };
                 for(int i=0;interactive||i<messages.Length;i++){
+                    if(memoryTest&&i>=2){
+                        if(i>4)break;
+                        Close();
+                        int offset=i==2?1:i==3?29:30;
+                        int absolute=firstDay+offset;
+                        var calendar=JObject.Parse(cycle.OnSave());
+                        calendar["yearNumber"]=absolute/cycle.YearLength;calendar["dayNumber"]=absolute%cycle.YearLength;
+                        cycle.OnLoad(calendar.ToString());
+                        if(Mathf.FloorToInt(cycle.Now)!=absolute)throw new InvalidOperationException("The copied game's calendar did not reach the requested day.");
+                        using(var beat=Post(Address+"module/heartbeat",new{version=ModIdentity.Version,world=Plugin.World()})){
+                            yield return beat.SendWebRequest();
+                            if(beat.responseCode!=200&&beat.responseCode!=204)throw new InvalidOperationException("The private server did not accept the copied clock.");
+                        }
+                        npc.CharacterInfo.personality.values[5]=1f;
+                    }
                     string words=interactive?null:messages[i];
                     if(topicFlow){
                         switch(turns.Count){
@@ -170,7 +188,7 @@ namespace Mirthwood.Echoes
                         yield return new WaitForEndOfFrame();
                         if(!IsolatedGameRun.PostReturn())throw new IOException("Could not accept the resident's reply.");
                         yield return Await(()=>ended?!Visible:Visible&&phase==Phase.Draft,"Enter did not reach the expected state after the reply.",6);
-                        if(ended)break;
+                        if(ended&&!memoryTest)break;
                     }else Advance();
                 }
                 Close();

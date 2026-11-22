@@ -106,7 +106,7 @@ def send_line(token, words):
         tmp.unlink(missing_ok=True)
 
 
-def run(package, mode, resident=None, starting_desire=None):
+def run(package, mode, resident=None, starting_desire=None, knowledge=False):
     import winreg
     token=uuid.uuid4().hex
     free_port()
@@ -127,6 +127,7 @@ def run(package, mode, resident=None, starting_desire=None):
         shutil.copyfile(p,saves/p.name)
         assert digest(saves/p.name)==baseline[str(p)]
     write(session/"harness.json",dict(id=token,sourceSlot=0,sha256=digest(saves/"Slot0.savegame"),talkPort=17864,privateDiagnostics=True))
+    if knowledge:(session/"memory-clock-test").touch()
     if resident:
         (session/"resident.txt").write_text(resident,encoding="utf-8")
         if starting_desire:
@@ -170,6 +171,29 @@ def run(package, mode, resident=None, starting_desire=None):
                     row=json.loads(reply_file.read_text(encoding="utf-8-sig"))
                     print(f"{resident}: {row['reply']}",flush=True);seen_reply+=1
                 if (session/f"ready-{seen_ready}").is_file():
+                    if knowledge:
+                        words=[
+                            "The gate hinge squeaks again. I like fishing. Plum tart is my favorite food.",
+                            "My favorite color is green. Do you have one you like to wear?",
+                            "I'm packing a lunch for a day by the river. Any thought what I might bring?",
+                            "Good to see you again. I've a free afternoon coming. What do you reckon I should do with it?",
+                            "I'm off to the baker. Do you remember which treat I like best?"
+                        ]
+                        if seen_ready:
+                            first=json.loads((session/"reply-0.json").read_text(encoding="utf-8-sig"))
+                            path=f"saves/{first['campaign']}/characters/{first['actor']}/history/"
+                            until=time.monotonic()+50
+                            while True:
+                                full=api(path+"conversations")["items"]
+                                found=any(x["id"]==first["id"] for x in full)
+                                if found==(seen_ready<4) or time.monotonic()>=until:break
+                                time.sleep(.4)
+                            assert found==(seen_ready<4),(seen_ready,found)
+                            facts=api(path+"knowledge")["items"]
+                            assert {"fishing","plum tart"}<={x["value"].lower() for x in facts},facts
+                            if seen_ready>=2:assert "green" in {x["value"].lower() for x in facts},facts
+                            write(work/f"memory-day-{seen_ready}.json",dict(ordinaryPresent=found,knowledge=facts,sessions=api(path+"sessions")["items"]))
+                        send_line(token,words[seen_ready])
                     print(f"Ready for player line {seen_ready+1}.",flush=True);seen_ready+=1
             if probe["state"]!=last:
                 last=probe["state"];print(last,flush=True)
@@ -199,7 +223,11 @@ def run(package, mode, resident=None, starting_desire=None):
         result=probe["result"]
         first=result["turns"][0]
         path="saves/"+first["campaign"]+"/characters/"+first["actor"]+"/history/conversations"
-        expected={r["id"]:r["reply"] for r in result["turns"]}
+        if knowledge:
+            assert len(result["turns"])==5 and "plum" in result["turns"][-1]["reply"].lower(),result["turns"][-1]
+            subprocess.run(["node","tests/journal_browser.cjs",str(work),"--knowledge"],check=True,timeout=90)
+            print("PASS Averil recalled the favorite after 30 elapsed game days; the original words were visible through day 30 and removed on day 31.",flush=True)
+        expected={r["id"]:r["reply"] for r in (result["turns"][2:] if knowledge else result["turns"])}
         for r in result["openers"]:
             source=hashlib.md5((r["id"]+"/"+r["actor"]).encode(),usedforsecurity=False).hexdigest()
             expected[str(uuid.UUID(hex=source))]=r["line"]
@@ -243,6 +271,8 @@ def run(package, mode, resident=None, starting_desire=None):
 if __name__=="__main__":
     modes={"--live-averil":"residentdialogue","--interface-fixture":"interface","--live-topic-flow":"dialogueflow","--group":"grouptalk","--voices":"voices"}
     if len(sys.argv)==3 and sys.argv[1] in modes:run(Path(sys.argv[2]).resolve(strict=True),modes[sys.argv[1]])
+    elif len(sys.argv)==3 and sys.argv[1]=="--knowledge" and os.name=="nt":
+        run(Path(sys.argv[2]).resolve(strict=True),"roleplay","Averil","eager",True)
     elif sys.argv[1:2]==["--play-group"] and os.name=="nt" and (len(sys.argv)==3 or len(sys.argv)==4 and sys.argv[3] in ("tired","eager")):
         run(Path(sys.argv[2]).resolve(strict=True),"grouptalk","Group",sys.argv[3] if len(sys.argv)==4 else None)
     elif sys.argv[1:2]==["--play"] and os.name=="nt" and (len(sys.argv)==4 or len(sys.argv)==5 and sys.argv[4] in ("tired","eager")):

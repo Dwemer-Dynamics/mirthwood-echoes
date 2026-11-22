@@ -50,22 +50,22 @@ public static class CueHistory
             WHERE e.campaign=@c AND e.id=CASE WHEN @explicit THEN @head::uuid
                 WHEN c.cue_seen>now()-interval '35 seconds' THEN c.cue_live ELSE c.cue_saved END
             UNION ALL SELECT e.id,e.parent FROM cue_events e JOIN ancestry t ON e.id=t.parent WHERE e.campaign=@c
-        ), turns AS (
+        ), turn_receipts AS (
             SELECT * FROM public.turns WHERE campaign=@c AND (cue_anchor IS NULL OR cue_anchor IN (SELECT id FROM ancestry))
-        ), daily_events AS (
+        ), turns AS (SELECT * FROM turn_receipts WHERE NOT dialogue_expired), event_receipts AS (
             SELECT * FROM public.daily_events WHERE campaign=@c AND (cue_anchor IS NULL OR cue_anchor IN (SELECT id FROM ancestry))
-        ), commitments AS (
+        ), daily_events AS (SELECT * FROM event_receipts WHERE kind<>'address' OR description<>''), commitments AS (
             SELECT p.id,p.campaign,p.actor,p.day,p.due,p.speaker,p.statement,
                 CASE WHEN f.day IS NULL THEN p.status ELSE 'fulfilled' END AS status,p.recorded,coalesce(f.day,p.resolved_day) AS resolved_day,
                 CASE WHEN f.day IS NULL THEN p.resolution_source ELSE 'player_report' END AS resolution_source,
                 p.turn_id,p.proposal,p.proposal_turn_id,p.provider,p.model,p.group_anchor,p.source_line,p.proposal_line,p.speaker_label,p.addressed_to
             FROM public.commitments p LEFT JOIN LATERAL
                 (SELECT min(r.day) AS day FROM cue_fulfillments r JOIN ancestry h ON h.id=r.anchor WHERE r.commitment=p.id AND r.campaign=@c) f ON true
-            WHERE p.campaign=@c AND (p.turn_id IS NULL OR EXISTS(SELECT FROM turns t WHERE t.id=p.turn_id))
+            WHERE p.campaign=@c AND (p.turn_id IS NULL OR EXISTS(SELECT FROM turn_receipts t WHERE t.id=p.turn_id))
                 AND (p.group_anchor IS NULL OR p.group_anchor IN (SELECT id FROM ancestry))
         ), personality_turning_points AS (
             SELECT p.* FROM public.personality_turning_points p WHERE campaign=@c AND
-                (EXISTS(SELECT FROM turns WHERE id=p.source_id) OR EXISTS(SELECT FROM daily_events WHERE id=p.source_id))
+                (EXISTS(SELECT FROM turn_receipts WHERE id=p.source_id) OR EXISTS(SELECT FROM event_receipts WHERE id=p.source_id))
         ), cue_notes AS (
             SELECT campaign,actor,day,kind,id,observed AS at,left(description,190) AS note FROM daily_events WHERE actor=@a AND cue_anchor IS NOT NULL
             UNION ALL SELECT campaign,actor,day,'conversation',id,started,'Player: “'||left(player_text,105)||'” · Reply: “'||left(reply,125)||'”'
@@ -108,6 +108,15 @@ public sealed partial class Conversation
         await using var conn=await db.Source.OpenConnectionAsync();
         await using var tx=await conn.BeginTransactionAsync();
         await using(var gate=Database.Command(conn,"SELECT pg_advisory_xact_lock(hashtextextended(@c,17))",("c",c)))await gate.ExecuteNonQueryAsync();
+        await using(var receipt=Database.Command(conn,"""
+            SELECT CASE WHEN packet_digest IS NOT NULL THEN parent IS NOT DISTINCT FROM @p::uuid AND packet_digest=sha256(convert_to(@j::jsonb::text,'UTF8')) END
+            FROM cue_events WHERE campaign=@c AND id=@id FOR UPDATE
+            """,("c",c),("id",id),("p",parent),("j",canonical.ToJsonString()))){
+            if(await receipt.ExecuteScalarAsync() is bool same){
+                if(!same)throw new UserError("The native event ID already has different evidence.",409);
+                await tx.CommitAsync();return;
+            }
+        }
         if(canonical["line"] is JsonObject line){
             var audience=line["audience"]!.AsArray();
             await using var known=Database.Command(conn,"SELECT count(*) FROM actors WHERE campaign=@c AND key IN (SELECT jsonb_array_elements_text(@audience::jsonb))",
@@ -116,7 +125,7 @@ public sealed partial class Conversation
         }
         if(parent.HasValue&&n["parentNotQueued"] is JsonValue flag&&flag.TryGetValue<bool>(out var missing)&&missing){
             // A copied game can bring a marker from a different Echoes database. Its missing past grants no knowledge.
-            await using var root=Database.Command(conn,"INSERT INTO cue_events SELECT @c,@p,NULL,'{\"unresolved\":true}'::jsonb FROM campaigns WHERE id=@c ON CONFLICT DO NOTHING",("c",c),("p",parent));
+            await using var root=Database.Command(conn,"INSERT INTO cue_events(campaign,id,parent,payload) SELECT @c,@p,NULL,'{\"unresolved\":true}'::jsonb FROM campaigns WHERE id=@c ON CONFLICT DO NOTHING",("c",c),("p",parent));
             await root.ExecuteNonQueryAsync();
         }
         await using(var check=Database.Command(conn,"SELECT EXISTS(SELECT FROM campaigns WHERE id=@c) AND (@p::uuid IS NULL OR EXISTS(SELECT FROM cue_events WHERE campaign=@c AND id=@p))",("c",c),("p",parent)))
@@ -133,7 +142,7 @@ public sealed partial class Conversation
             if(!Equals(await order.ExecuteScalarAsync(),true))throw new UserError("This group line does not follow the saved conversation.",409);
         }
         await using(var insert=Database.Command(conn,"""
-            INSERT INTO cue_events VALUES(@c,@id,@p::uuid,@j::jsonb) ON CONFLICT(campaign,id) DO NOTHING
+            INSERT INTO cue_events(campaign,id,parent,payload) VALUES(@c,@id,@p::uuid,@j::jsonb) ON CONFLICT(campaign,id) DO NOTHING
             """,("c",c),("id",id),("p",parent),("j",canonical.ToJsonString())))await insert.ExecuteNonQueryAsync();
         await using(var fill=Database.Command(conn,"""
             WITH RECURSIVE path(id,parent) AS (SELECT id,parent FROM cue_events WHERE campaign=@c AND id=@p::uuid
@@ -156,7 +165,12 @@ public sealed partial class Conversation
             await project.ExecuteNonQueryAsync();
         }
         await using(var project=Database.Command(conn,CueHistory.ProjectResidents,("campaign",c)))await project.ExecuteNonQueryAsync();
-        if(canonical["line"] is JsonObject spoken)await ConversationSessions.RecordPromises(conn,c,id,parent,world.I("day"),spoken);
+        if(canonical["line"] is JsonObject spoken){
+            await ConversationSessions.RecordPromises(conn,c,id,parent,world.I("day"),spoken);
+            await CharacterKnowledge.Group(conn,c,id,parent,world.I("day"),spoken);
+            await using var reviewed=Database.Command(conn,"UPDATE cue_events SET knowledge_reviewed=true WHERE campaign=@c AND id=@id",("c",c),("id",id));
+            await reviewed.ExecuteNonQueryAsync();
+        }
         await tx.CommitAsync();
     }
 

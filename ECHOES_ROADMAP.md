@@ -6,6 +6,8 @@
 
 ## Completed
 
+- [x] Keep 30 in-game days of ordinary dialogue, compact closed days by listener and preserve character knowledge, promises and major moments. On 2026-11-21 the copied slot kept Michael’s words through day 30. On day 31 Averil remembered plum tart after the original exchange expired. The journal and database checks covered who heard a disclosure, corrected preferences, replay and save rewinds.
+
 - [x] Keep complete player drafts, submitted lines and resident speech in one overhead bubble. On 2026-11-21 the copied game compared the native bark with 85% lettering and verified a complete 1,200-character draft, its submitted text, a long italicized reply and all four screen edges. Enter responds or dismisses a farewell directly.
   On 2026-11-21, the copied game also checked the player's lines to Averil and Drystan, the group goodbye and all three waiting dots. The parchment now fits the rendered letters with a small margin, and names wrap as whole words.
 

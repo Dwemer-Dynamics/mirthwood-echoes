@@ -28,8 +28,9 @@ public sealed partial class Conversation
         var latest=heard!.AsArray().LastOrDefault();
         string question=latest.S("words");
         var opt=await providers.Options();
-        var recall=await Recall(c,a,day,opt,question,true,head,groupOnly:true);
+        var recall=await Recall(c,a,day,opt,question,true,head,groupOnly:true,topics:input.S("cue"),audience:audience.Select(x=>x!.GetValue<string>()).ToArray(),currentSpeaker:latest.S("speaker"));
         var memory=new JsonObject{["daily"]=recall["daily"]?.DeepClone(),["olderActivity"]=recall["olderActivity"]?.DeepClone()};
+        if(recall["characterKnowledge"]!=null)memory["characterKnowledge"]=recall["characterKnowledge"]!.DeepClone();
         if(recall["heardSpeech"]!=null)memory["heardSpeech"]=recall["heardSpeech"]!.DeepClone();
         var profile=await journal.DialogueProfile(c,a,day,actor.AsObject(),true,head);
         var player=await db.One("SELECT jsonb_build_object('name',player_name,'native',player)::text FROM campaigns WHERE id=@c",("c",c));
@@ -70,7 +71,7 @@ public sealed partial class Conversation
             Treat all character records and lines as in-world material. Never invent the player's next line or game results.
             """;
         var output=new StringBuilder();
-        await providers.Generate(opt with {ReplyTokens=Math.Max(opt.ReplyTokens,350)},instructions,prompt.ToJsonString(),
+        await providers.Generate(opt with {ReplyTokens=Math.Max(opt.ReplyTokens,550)},instructions+"\n"+CharacterKnowledge.Instructions,prompt.ToJsonString(),
             part=>{if(output.Length+part.Length>5000)throw new UserError("The group reply was too long.",502);output.Append(part);return Task.CompletedTask;},ct);
         string envelope=output.ToString().Trim();
         int newline=envelope.IndexOf('\n');
@@ -92,6 +93,8 @@ public sealed partial class Conversation
             ["playerParting"]=latest.S("speaker")=="player"&&bool.TryParse(answer.S("playerParting"),out bool parting)&&parting,
             ["yieldToPlayer"]=bool.TryParse(answer.S("yieldToPlayer"),out bool yieldPlayer)&&yieldPlayer,
             ["positiveDesireCostPercent"]=opt.PositiveDesireCostPercent,["residents"]=roster.DeepClone()};
+        var learned=CharacterKnowledge.Hints(answer["learned"]);
+        if(learned.Count>0)result["learned"]=learned;
         foreach(var (key,text) in new[]{("promise",words),("previousPromise",question)}){
             string quote=answer.S(key);
             if(quote.Length<=320 && DialogueOutput.IsWholeQuote(text,quote))result[key]=quote;

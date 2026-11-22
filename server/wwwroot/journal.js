@@ -2,7 +2,7 @@
 
 const characterViews = [
   ['profile','Profile'], ['interactions','Interactions'], ['sessions','Conversations'],
-  ['daily','Daily history'], ['commitments','Commitments'], ['personality','Dynamic personality']
+  ['daily','Daily history'], ['knowledge','Character Knowledge'], ['commitments','Promises & Commitments'], ['personality','Dynamic personality']
 ];
 const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
 const pretty = s => cap(String(s).replace(/[_-]/g,' ').replace(/([a-z])([A-Z])/g,'$1 $2'));
@@ -118,8 +118,9 @@ function entryView(view,e,person,openTurningPoint,path) {
   const entry=el('article','journal-entry');const speaker=e.speakerLabel||(e.speaker==='player'?'Player':person);
   if(view==='daily'||view==='sessions'){
     const daily=view==='daily';
-    const label=daily?'Daily activity':e.kind==='group'?'Group conversation':e.knownStart===false?'Recorded private exchange':'Private conversation';
+    const label=e.compacted?(e.kind==='group'?'Group conversation recap':'Private conversation recap'):daily?'Daily activity':e.kind==='group'?'Group conversation':e.knownStart===false?'Recorded private exchange':'Private conversation';
     entry.append(attach(el('div','entry-head'),el('strong','',label),el('span','','Day '+e.day)));
+    if(e.visits>1)entry.append(el('small','source',e.visits+' visits'));
     if(e.participants?.length)entry.append(el('p','hint',e.participants.join(', ')));
     entry.append(daily?el('p','journal-prose',e.body):roleplayLine(e.body,'journal-prose'));
     const detail=el('details','memory-originals'),body=el('div');
@@ -130,7 +131,9 @@ function entryView(view,e,person,openTurningPoint,path) {
       loading=true;body.replaceChildren();
       try{
         const lines=await api(path+'/history/'+view+'/'+encodeURIComponent(e.id));
+        let lastVisit=null,visit=0;
         for(const line of lines){
+          if(e.visits>1&&line.visit!==lastVisit){lastVisit=line.visit;body.append(el('strong','source','Visit '+(++visit)));}
           const row=el('div','transcript-line');
           if(line.speaker)row.append(el('strong','',line.speaker));
           row.append(daily?el('p','',line.text):roleplayLine(line.text));
@@ -151,6 +154,22 @@ function entryView(view,e,person,openTurningPoint,path) {
       }catch(error){body.textContent=error.message;}finally{loading=false;}
     };
     entry.append(detail);return entry;
+  }
+  if(view==='knowledge'||e.kind==='moment'||e.kind==='marked'){
+    const title=e.kind==='marked'?'Player-marked turning point':e.kind==='moment'?'Major moment':e.subject+' · '+pretty(e.facet);
+    entry.append(attach(el('div','entry-head'),el('strong','',title),el('span','','Day '+e.day)));
+    if(e.kind==='marked'){
+      entry.append(el('p','journal-prose',e.value));
+      for(const [key,words] of Object.entries(e.evidence||{})){
+        if(words)entry.append(roleplayLine((key==='player'?'Player · ':key==='reply'?person+' · ':'')+words,'source'));
+      }
+      return entry;
+    }
+    if(view==='knowledge')entry.append(el('p','journal-prose',e.value));
+    entry.append(el('p','hint',(e.earlier?'Earlier belief · ':'')+(e.stance==='retracted'?'Retracted · ':e.stance==='former'?'Past preference · ':'')+
+      (e.firsthand?'Said by ':'Reported by ')+e.speakerLabel+' · '+(e.mode==='group'?'Group conversation':'Private conversation')));
+    if(e.question)entry.append(el('p','source',e.question));
+    entry.append(roleplayLine('“'+e.quote+'”','journal-prose'));return entry;
   }
   const header=attach(el('div','entry-head'),el('strong','',view==='commitments'?(e.status==='fulfilled'?'Fulfilled':'Open promise'):activityNames[e.kind]||pretty(e.kind)),el('span','','Day '+e.day));
   entry.append(header);
@@ -208,7 +227,7 @@ function characterJournal(person,profile,raw,roster,path,alive) {
     body.tabIndex=0;body.setAttribute('role','region');body.setAttribute('aria-label',text+' for '+person.name);
     panel.append(heading,body);
     if(view==='personality'){try{const d=await api(path+'/personality');if(valid())body.append(growthView(d));}catch(e){if(valid())body.append(el('p','error',e.message));}return;}
-    const messages={interactions:'Recorded encounters and work will appear here.',sessions:'Conversations will appear here after someone speaks.',daily:'Observed daily activities will appear here.',commitments:'No promises recorded for this character.'};
+    const messages={interactions:'Recorded encounters and work will appear here.',sessions:'Conversations will appear here after someone speaks.',daily:'Observed daily activities will appear here.',knowledge:'Personal details this resident has learned will appear here.',commitments:'Promises and major moments will appear here.'};
     let cursor=null,loading=false,more=null;
     async function appendPage(){
       if(loading)return;loading=true;if(more)more.disabled=true;

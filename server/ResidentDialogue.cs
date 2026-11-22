@@ -119,10 +119,10 @@ public sealed partial class Conversation
         var opt=await providers.Options();
         var head=CueHistory.OptionalId(input["head"]);
         var profile=await journal.DialogueProfile(c,a,day,actor.AsObject(),true,head);
-        var recall=await Recall(c,a,day,opt,cue,true,head,recentTurns:4);
+        var recall=await Recall(c,a,day,opt,cue,true,head,recentTurns:4,topics:card);
         var context=new JsonObject{["resident"]=profile,["recall"]=recall,["card"]=card,["cue"]=cue};
         var line=new StringBuilder();
-        await providers.Generate(opt,SpokenStyle+"\n"+ConversationFlow+"\nYou are addressing the player first. Express the supplied native cue in one brief original line. An earlier exchange may have finished. Open with the card's specific new subject, or offer a fresh detail if the subject is familiar. A genuinely physical card can be a gesture. Never invent a player response, a promise, a quest or a change to game state. Return plain dialogue only.",
+        await providers.Generate(opt,SpokenStyle+"\n"+ConversationFlow+"\nA suitable characterKnowledge entry can help you open naturally. Speak about a personal detail only when it belongs here.\nYou are addressing the player first. Express the supplied native cue in one brief original line. An earlier exchange may have finished. Open with the card's specific new subject, or offer a fresh detail if the subject is familiar. A genuinely physical card can be a gesture. Never invent a player response, a promise, a quest or a change to game state. Return plain dialogue only.",
             context.ToJsonString(),part=>{if(line.Length+part.Length>460)throw new UserError("The remark was too long.",502);line.Append(part);return Task.CompletedTask;},ct,residentOpener:true);
         string spoken=CharacterLine(line.ToString(),actor.S("name"),cue);
         if(spoken.Length==0)throw new UserError("The resident returned no words or gesture.",502);

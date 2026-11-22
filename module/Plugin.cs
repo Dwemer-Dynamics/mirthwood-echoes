@@ -105,7 +105,7 @@ namespace Mirthwood.Echoes
             return new {
                 slot = IsolatedGameRun.Active?.SourceSlot ?? SaveMaster.GetActiveSlot(),
                 created = SaveMaster.GetSaveCreationTime().ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture),
-                player = player.CharacterInfo.id, cueHead=string.IsNullOrEmpty(NativeCues.Head)?null:NativeCues.Head, day = Mathf.FloorToInt(DayNightCycle.Instance.Now), yearLength = DayNightCycle.Instance.YearLength
+                player = player.CharacterInfo.id, memorySession=NativeCues.Session, cueHead=string.IsNullOrEmpty(NativeCues.Head)?null:NativeCues.Head, day = Mathf.FloorToInt(DayNightCycle.Instance.Now), yearLength = DayNightCycle.Instance.YearLength
             };
         }
 

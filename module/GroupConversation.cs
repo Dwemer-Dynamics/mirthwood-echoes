@@ -187,7 +187,7 @@ namespace Mirthwood.Echoes
             groupProbe?.Invoke("Submitted player line "+groupSequence);
             playerBubble.Note("");playerBubble.Show(words.Trim());PlayerLine(id,words.Trim());groupReplies=0;BeginGroupReply();
         }
-        string RecordGroupLine(string speaker,string to,string words,string promise,JObject priorPromise,JToken proposal=null)
+        string RecordGroupLine(string speaker,string to,string words,string promise,JObject priorPromise,JToken proposal=null,JToken learned=null)
         {
             var heard=Participants();
             if(heard.Length<2||speaker!="player"&&!heard.Any(g=>g.Actor==speaker)||
@@ -196,6 +196,7 @@ namespace Mirthwood.Echoes
                 ["words"]=words,["at"]=DateTime.UtcNow.ToString("O"),["audience"]=new JArray(heard.Select(g=>g.Actor))};
             if(promise!=null)line["promise"]=promise;
             if(proposal!=null)line["proposal"]=proposal;
+            if(learned!=null)line["learned"]=learned;
             if(priorPromise!=null)line["priorPromise"]=priorPromise;
             string id=NativeCues.Record("group",new JArray(),line:line);
             if(id!=null){groupSequence++;groupLastId=id;groupLastSpeaker=speaker;groupTo=to;}
@@ -265,7 +266,7 @@ namespace Mirthwood.Echoes
             JObject prior=answer["previousPromise"]!=null&&groupLastId==(string)answer["previous"]?
                 new JObject{["source"]=groupLastId,["quote"]=(string)answer["previousPromise"]}:null;
             if(prior!=null&&answer["previousProposal"]!=null)prior["proposal"]=answer["previousProposal"];
-            string id=RecordGroupLine(guest.Actor,addressed,words,leaves?null:(string)answer["promise"],prior,leaves?null:answer["proposal"]);
+            string id=RecordGroupLine(guest.Actor,addressed,words,leaves?null:(string)answer["promise"],prior,leaves?null:answer["proposal"],answer["learned"]);
             if(id==null){GroupRetry("The conversation could not be saved.");yield break;}
             groupParting=playerParting||leaves&&seated.Length==2;
             groupCues.Remove(guest.Actor);

@@ -79,6 +79,11 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
           'resolvedDay',CASE WHEN resolved_day<=@day THEN resolved_day END,'resolutionSource',CASE WHEN resolved_day<=@day THEN resolution_source END) AS doc
         FROM commitments WHERE campaign=@c AND actor=@a AND day<=@day
         """;
+    const string MarkedMoments="""
+        SELECT 'marked-'||source_id AS id,day,recorded AS at,jsonb_build_object('kind','marked','value',reason,
+            'source',source_id,'sourceType',source_type,'evidence',evidence) AS doc
+        FROM personality_turning_points WHERE campaign=@c AND actor=@a AND day<=@day
+        """;
     const string Memories="""
         SELECT kind||'/'||part AS id,day,recorded AS at,jsonb_build_object('kind',kind,'body',body,'entries',entries,'sources',sources) AS doc
         FROM memory_summaries WHERE campaign=@c AND actor=@a AND day<=@day-@window
@@ -97,7 +102,8 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
         var actor=await Actor(c,a);
         int day=liveDay??actor.I("day");
         int window=(await providers.Options()).DailyDays;
-        var sql=view switch {"interactions"=>Interactions,"conversations"=>Dialogues,"memories"=>Memories,"commitments"=>Promises,
+        var sql=view switch {"interactions"=>Interactions,"conversations"=>Dialogues,"memories"=>Memories,"knowledge"=>CharacterKnowledge.Entries(false),
+            "commitments"=>Promises+" UNION ALL "+CharacterKnowledge.Entries(true)+" UNION ALL "+MarkedMoments,
             "sessions"=>ConversationSessions.WithRecaps(false),"daily"=>ConversationSessions.WithRecaps(true),_=>throw new UserError("Unknown journal section.",404)};
         if(view=="memories" && day>=0)await compactor.Compact(c,a,day,window);
         int? priorDay=null;string? priorTime=null,priorId=null;
@@ -141,13 +147,14 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
         int axis=form.I("axis"),direction=form.I("direction");
         if(axis is <0 or >4 || direction is not (-1 or 1))throw new UserError("Choose a temperament direction.");
         var reason=form.Required("reason",320);var source=form.Required("sourceType",10);var id=form.Id();
-        string table=source switch{"turn"=>"SELECT day FROM turns WHERE state='complete' AND", "event"=>"SELECT day FROM daily_events WHERE",_=>throw new UserError("Choose a recorded interaction.")};
-        var valid=await db.ScopedOne("SELECT to_jsonb(s.day)::text FROM ("+table+" campaign=@c AND actor=@a AND id=@id AND day<=@day) s",false,null,("c",c),("a",a),("id",id),("day",day));
+        string table=source switch{"turn"=>"SELECT day,echoes_marked_evidence(id,@reason) AS evidence FROM turns WHERE state='complete' AND",
+            "event"=>"SELECT day,echoes_marked_observation(id,@reason) AS evidence FROM daily_events WHERE",_=>throw new UserError("Choose a recorded interaction.")};
+        var valid=await db.ScopedOne("SELECT to_jsonb(s)::text FROM ("+table+" campaign=@c AND actor=@a AND id=@id AND day<=@day) s",false,null,("c",c),("a",a),("id",id),("day",day),("reason",reason));
         if(valid==null)throw new UserError("This interaction is unavailable for this character and date.",404);
         int inserted=await db.Run("""
-          INSERT INTO personality_turning_points(campaign,actor,source_type,source_id,day,axis,direction,reason)
-          VALUES(@c,@a,@source,@id,@day,@axis,@direction,@reason) ON CONFLICT DO NOTHING
-          """,("c",c),("a",a),("source",source),("id",id),("day",valid.GetValue<int>()),("axis",axis),("direction",direction),("reason",reason));
+          INSERT INTO personality_turning_points(campaign,actor,source_type,source_id,day,axis,direction,reason,evidence)
+          VALUES(@c,@a,@source,@id,@day,@axis,@direction,@reason,@evidence::jsonb) ON CONFLICT DO NOTHING
+          """,("c",c),("a",a),("source",source),("id",id),("day",valid.I("day")),("evidence",valid["evidence"]!.ToJsonString()),("axis",axis),("direction",direction),("reason",reason));
         if(inserted==0)throw new UserError("This interaction already has a turning point.",409);
     }
 
@@ -170,7 +177,7 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
               (SELECT axis,sum(step) AS steps FROM by_day GROUP BY axis)s),'{}'),
             'changes',coalesce((SELECT jsonb_agg(to_jsonb(m) ORDER BY day DESC,axis,reason) FROM
               (SELECT * FROM changes ORDER BY day DESC,axis,reason LIMIT 30)m),'[]'),
-            'daysTogether',(SELECT count(DISTINCT day) FROM turns WHERE campaign=@c AND actor=@a AND day<=@day AND state='complete'))::text
+            'daysTogether',(SELECT count(DISTINCT day) FROM turn_receipts WHERE campaign=@c AND actor=@a AND day<=@day AND state='complete'))::text
           """,scoped,head,("c",c),("a",a),("day",day)))!;
         var axes=new JsonArray();
         foreach(var (axis,i) in profile["axes"]!.AsArray().Select((x,i)=>(x!,i))){
