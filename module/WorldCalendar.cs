@@ -168,7 +168,6 @@ namespace Mirthwood.Echoes
             internal readonly string Title;
             readonly Transform[] landmarks;
             readonly JoustingMiniGame tournament;
-            readonly NPCChatController starter;
             internal readonly Component Incident;
             readonly FieldInfo active;
 
@@ -182,7 +181,6 @@ namespace Mirthwood.Echoes
                 {
                     publicJugglers = root.transform.Find("JOUSTING ARENA/Brightoak Decor/Jugglers");
                     tournament = root.GetComponent<JoustingMiniGame>();
-                    if (tournament) starter = JoustStarter?.GetValue(tournament) as NPCChatController;
                 }
                 landmarks = root.GetComponentsInChildren<Renderer>(true).Select(r => r.transform)
                     .Where(t => IsEventLandmark(t, title, publicJugglers)).Distinct().ToArray();
@@ -210,12 +208,15 @@ namespace Mirthwood.Echoes
 
             Transform VisibleStarter(NPCController resident)
             {
-                if (!tournament || !tournament.isActiveAndEnabled || !starter || !starter.isActiveAndEnabled ||
-                    !(starter.Character is NPCController herald) || herald == resident) return null;
-                // Stock Mirthwood returns the player beside the starter at the public entrance.
-                // Check that the herald is still there whenever recording attendance.
+                if (!tournament || !tournament.gameObject.activeInHierarchy) return null;
+                // The public herald's NPCChatController can be disabled on a drawn character.
+                // Use the live tournament's own starter and the body at its public entrance.
+                var starter = JoustStarter?.GetValue(tournament) as NPCChatController;
+                if (!starter || !starter.gameObject.activeInHierarchy) return null;
+                var herald = starter.GetComponent<NPCController>();
+                if (!herald || herald == resident || herald.IsDead) return null;
                 var spot = herald.transform;
-                if (spot != starter.transform || spot.parent != tournament.transform ||
+                if (!spot.IsChildOf(tournament.transform) ||
                     (spot.position - tournament.transform.position).sqrMagnitude > SightRangeSquared ||
                     (spot.position - resident.transform.position).sqrMagnitude > SightRangeSquared) return null;
                 return SpeakerPerception.CanSee(resident, spot) ? spot : null;
