@@ -86,7 +86,7 @@ def shared_level(resident, subject, first, second):
                    for column, start, end in ((resident, first, second), (subject, second, first)) for other in column["hits"])
 
 
-def local_view(rows, accepted, geometry):
+def local_view(rows, accepted, geometry, left_before_talk):
     venue = one([o for o in rows if o["stage"] == "at-venue"], "live venue")["extra"]
     path = venue["landmark"]
     require(venue["title"] == SHIP and venue["live"] and venue["root"] == "Trade Ship Merchant(Clone)" and
@@ -95,16 +95,18 @@ def local_view(rows, accepted, geometry):
     require(any(m["path"] == path and math.dist(m["position"], venue["position"]) < .05 for m in marks), "trader missing from spawned landmarks")
     sight = one([o for o in rows if o["stage"] == "spectator-sightlines" and o["extra"]["phase"] == "before departure"], "final sightline")
     e = sight["extra"]
-    resident, player = accepted["resident"], accepted["player"]
     require(anchored(sight, accepted) and sight["unityFrame"] <= accepted["unityFrame"] and
             e["root"] == venue["spawnedInstance"] and e["landmark"] == path and e["title"] == SHIP, "unrelated sightline")
+    # A player can ask at the ship, or take the witness back to town before opening Talk.
+    observation = sight if left_before_talk else accepted
+    resident, player = observation["resident"], observation["player"]
     point = resident["position"]
-    require(any(s["title"] == SHIP for s in accepted["activeStories"]), "Trade Ship absent from native active stories at Talk")
+    require(any(s["title"] == SHIP for s in observation["activeStories"]), "Trade Ship absent at the measured sighting")
     grounded = any(BOARDING.fullmatch(hit) for hit in resident["ground"])
     def measure(stage, frame):
         return one([g for g in geometry if g["stage"] == "geometry" and g["at"] == stage and
                     g["turn"] == accepted["turn"] and g["frame"] == frame], f"physical deck sample at {stage}")
-    measurement = measure("accepted", accepted["unityFrame"])
+    measurement = measure(observation["stage"], observation["unityFrame"])
     trader = one([t for t in measurement["traders"] if t["path"] == path and t["root"] == e["root"] and
                   t["id"] == venue["landmarkInstance"]], "same drawn trader")
     require(math.dist(point, measurement["resident"]["point"]) < .05 and
@@ -119,7 +121,7 @@ def local_view(rows, accepted, geometry):
     if "playerRay" in measurement:
         eye = dict(facing=measurement["facing"], performer=trader["sight"], player=measurement["playerRay"])
         require(math.dist(eye["player"]["position"], player["position"]) < .01 and
-                math.dist(eye["performer"]["target"], trader["boundsCenter"]) < .01, "accepted eye ray sampled another target")
+                math.dist(eye["performer"]["target"], trader["boundsCenter"]) < .01, "eye ray sampled another target")
         identified = identified and (not capsule or
                      capsule["name"] == player["name"] and capsule["id"] == accepted["world"]["player"])
     else:
@@ -127,7 +129,8 @@ def local_view(rows, accepted, geometry):
                 math.dist(player["position"], sight["player"]["position"]) < .05 and
                 math.dist(e["performer"]["target"], trader["boundsCenter"]) < .05,
                 "positions changed after the last independent sightline")
-        previous_player = measure("spectator-sightlines", sight["unityFrame"])["player"]
+        if not left_before_talk:
+            previous_player = measure("spectator-sightlines", sight["unityFrame"])["player"]
         eye = e
     player_plank = support(measurement["player"], previous_player, resident_plank, capsule=capsule)
     trader_level = shared_level(measurement["resident"], trader["support"], resident_plank, trader_plank)
@@ -136,7 +139,7 @@ def local_view(rows, accepted, geometry):
     company = bool(clear and identified and player_level and
                    ray(eye, point, "player") and math.dist(point, venue["position"]) <= 4 and
                    math.dist(player["position"], venue["position"]) <= 4)
-    return clear, company, path, math.dist(point, venue["position"])
+    return clear, company, path, venue["position"], math.dist(point, venue["position"])
 
 
 def ship_event(scene):
@@ -165,6 +168,12 @@ def literal(call):
     return call["awareness"]
 
 
+def named_witness(call, player, day):
+    recall = json.JSONDecoder().raw_decode(call["system"].split("Recall: ", 1)[1])[0]
+    return any(w["day"] == day and SHIP in w["description"] and f"I saw {player} there." in w["description"]
+               for w in recall.get("eventWitnesses", []))
+
+
 def run(directory):
     read = lambda name: json.loads((directory / name).read_bytes())
     observations = lines(directory / "awareness-evidence/observations.jsonl")
@@ -175,7 +184,8 @@ def run(directory):
              (directory / "server.log").read_text(encoding="utf-8", errors="replace").splitlines() if s.startswith("Echoes world awareness ")]
     journal = read("journal-observed.json") if (directory / "journal-observed.json").is_file() else []
     commits = read("turns.json") if (directory / "turns.json").is_file() else []
-    seen = set()
+    sighting_places = {}
+    named_attendance = set()
     failures = []
     require(any(t.get("venue", {}).get("title") == SHIP for t in plan), "run has no Trade Ship venue test")
     for index, step in enumerate(plan):
@@ -203,24 +213,37 @@ def run(directory):
                     sum(j["id"] == key and j["player"] == intent["text"] and j["reply"] == reply for j in journal) == 1,
                     "displayed reply lacks a unique completed database turn or journal entry")
             print(f'Turn {index+1} · {actor["name"]} · {key} · {reply}')
-            prior = stamp in seen
             when, company = None, False
-            if step.get("venue", {}).get("title") == SHIP:
-                current, company, path, distance = local_view(rows, source, geometry)
-                print(f"  {path} at {distance:.2f} m; clear trader={current}, independently visible player at venue={company}")
-                if current:
-                    when = "in sight now"
-                    seen.add(stamp)
-                elif prior:
-                    when = "earlier today"
-            elif step.get("returnFromVenue") == SHIP:
+            left = step.get("returnFromVenue") == SHIP
+            if left:
                 require(any(o["stage"] == "left-venue" and o["extra"]["eventName"] == SHIP and
-                            o["extra"]["distance"] > 9 and anchored(o, source) for o in rows), "missing independent departure")
-                when = "earlier today" if prior else None
-            else:
+                            o["extra"]["distance"] > 9 and anchored(o, source) and o["unityFrame"] <= source["unityFrame"]
+                            for o in rows), "missing independent departure")
+            if step.get("venue", {}).get("title") == SHIP:
+                current, company, path, spot, distance = local_view(rows, source, geometry, left)
+                print(f"  {path} at {distance:.2f} m; clear trader={current}, independently visible player at venue={company}")
+                view = step["venue"].get("view", "shared")
+                expected = {"shared": (True, True), "event-only": (True, False), "blocked": (False, False)}
+                require((current, company) == expected[view], f"the game never established the requested {view} view")
+                if current:
+                    sighting_places[stamp] = spot
+                    if company:
+                        named_attendance.add(stamp)
+                    when = "earlier today" if left else "in sight now"
+                elif stamp in sighting_places:
+                    when = "earlier today"
+            elif stamp in sighting_places:
+                when = "earlier today"
+            elif not left:
                 require(not any(e["title"] == SHIP for e in source["activeStories"]), "baseline already has a live Trade Ship")
+            if stamp in sighting_places and (left or not step.get("venue")):
+                spot = sighting_places[stamp]
+                require(math.dist(source["resident"]["position"], spot) > 9 and
+                        math.dist(source["player"]["position"], spot) > 9, "remote Talk is still at the measured venue")
             check_scene(frozen, when, company, "accepted snapshot")
             check_scene(projected, when, company, "literal provider input")
+            require(named_witness(call, source["player"]["name"], source["world"]["day"]) == (stamp in named_attendance),
+                    "named attendance in recall differs from the observed company")
         except (ValueError, TypeError, KeyError, IndexError) as exc:
             failures.append(f"Turn {index + 1}: {exc}")
     require(not failures, "\n".join(failures))
@@ -266,6 +289,12 @@ def self_test():
         except ValueError:
             continue
         raise AssertionError("unwitnessed current company passed")
+    account = {"day": 58, "description": "I saw Trade Ship underway. I saw Michael there. I saw a trader."}
+    call = {"system": "Recall: " + json.dumps({"eventWitnesses": [account]})}
+    assert named_witness(call, "Michael", 58) and not named_witness(call, "Michael", 59)
+    assert not named_witness(call, "Graham", 58)
+    account["description"] = "I saw Trade Ship underway. I saw a trader."
+    assert not named_witness({"system": "Recall: " + json.dumps({"eventWitnesses": [account]})}, "Michael", 58)
     print("Harbor footing, ray, upper-floor, shared, unknown and dated-company controls passed.")
 
 
