@@ -104,14 +104,18 @@ internal static partial class DialogueRecaps
 
     // Consume quoted speech before looking for a sentence break. A question inside
     // somebody's reported words belongs to the quoted person.
-    static readonly Regex SpeechBoundary = new("""“[^”]*”|"[^"]*"|‘[^’]*’|(?<!\w)'[^'\n]+'(?!\w)|(?<end>(?<=[.!?…])\s+|(?<=[.!?…]["”’)])\s+(?!said\b|asked\b)|[\r\n]+)""", RegexOptions.Compiled);
+    static readonly Regex SpeechBoundary = new("""“[^”]*”|"[^"]*"|‘[^’]*’|(?<!\w)'[^'\n]+'(?!\w)|(?<end>(?<=[.!?…])\s+|(?<=[.!?…]["”’'])(?<afterQuote>\s+)|(?<=[.!?…]\))\s+|[\r\n]+)""", RegexOptions.Compiled);
+    const string ReportingVerb = @"(?:asked|said|answered|replied|added|whispered|murmured|called|cried|shouted|exclaimed|explained|remarked|insisted|warned|wondered|promised)";
+    const string ReportingRecipient = @"(?:(?:to|of)\s+)?(?:me|him|her|them|us|you|(?-i:\p{Lu})[\p{L}’'-]*)";
+    static readonly Regex ReportingClause = new(@"\G(?:" + ReportingVerb + @"\b|(?:[\p{L}’'-]+\s+){1,4}" + ReportingVerb +
+        @"(?:\s+(?:[\p{L}]+ly|" + ReportingRecipient + @")){0,2}\s*(?=[,;.!?…—]|$))",RegexOptions.IgnoreCase|RegexOptions.Compiled);
     static bool IsQuestion(string sentence) => sentence.TrimEnd(')').EndsWith('?');
 
     static IEnumerable<string> Sentences(string text)
     {
         int start = 0;
         foreach(Match match in SpeechBoundary.Matches(text)){
-            if(!match.Groups["end"].Success) continue;
+            if(!match.Groups["end"].Success || match.Groups["afterQuote"].Success && ReportingClause.IsMatch(text,match.Index+match.Length)) continue;
             if(match.Index>start) yield return text[start..match.Index];
             start = match.Index + match.Length;
         }
@@ -287,9 +291,9 @@ internal static partial class DialogueRecaps
           contact.key AS to_key,CASE contact.key WHEN 'player' THEN coalesce(nullif(c.player_name,''),'Player') WHEN 'group' THEN 'the group' ELSE recipient.name END AS to_name
         FROM dialogue_recap_parts p JOIN dialogue_clock clock ON clock.campaign=p.campaign
         JOIN campaigns c ON c.id=p.campaign LEFT JOIN actors speaker ON speaker.campaign=p.campaign AND speaker.key=p.speaker
-        LEFT JOIN cue_events g ON p.mode='group' AND (g.campaign,g.id)=(p.campaign,p.source)
-        CROSS JOIN LATERAL (SELECT CASE WHEN p.mode='group' THEN CASE WHEN g.payload->'line'->>'to'='group'
-            OR g.payload->'line'->>'to'=ANY(p.audience) THEN g.payload->'line'->>'to' END
+        CROSS JOIN LATERAL (SELECT CASE WHEN p.mode='group' THEN
+            (SELECT CASE WHEN g.payload->'line'->>'to'='group' OR g.payload->'line'->>'to'=ANY(p.audience)
+              THEN g.payload->'line'->>'to' END FROM cue_events g WHERE (g.campaign,g.id)=(p.campaign,p.source))
           WHEN p.speaker='player' THEN (array_remove(p.audience,'player'))[1] ELSE 'player' END AS key) contact
         LEFT JOIN actors recipient ON recipient.campaign=p.campaign AND recipient.key=contact.key
         WHERE p.campaign=@c AND p.audience @> ARRAY[@a]::text[] AND p.day<=@day AND p.age>clock.elapsed-30
@@ -357,10 +361,17 @@ internal static partial class DialogueRecaps
               FROM eligible p WHERE p.search @@ to_tsquery('english',@terms) OR p.concepts && @concepts
             ), ranked AS (
               SELECT *,dense_rank() OVER(ORDER BY (subject>0 OR words>0) DESC,subject DESC,meaning DESC,named_target DESC,event_words DESC,(question=@requests) DESC,(words>0) DESC) AS tier FROM matches
+            ), best AS MATERIALIZED (
+              SELECT source,pos,sentence,corrects_source,corrects_pos,corrects_sentence,day,mode,detail,speaker,name,to_key,to_name,
+                question,words,addressed,specificity,said_at,seq FROM ranked WHERE tier=1
             ), accounts AS (
-              SELECT DISTINCT ON(coalesce(corrects_source,source),coalesce(corrects_pos,pos),coalesce(corrects_sentence,sentence)) *
-              FROM ranked WHERE tier=1 ORDER BY coalesce(corrects_source,source),coalesce(corrects_pos,pos),coalesce(corrects_sentence,sentence),
-                (corrects_source IS NULL) DESC,words DESC,said_at DESC,seq DESC,source,pos,sentence
+              -- Originals are already unique by source position. Only linked amendments can share a root.
+              SELECT * FROM best WHERE corrects_source IS NULL
+              UNION ALL
+              (SELECT DISTINCT ON(r.corrects_source,r.corrects_pos,r.corrects_sentence) r.* FROM best r
+                WHERE r.corrects_source IS NOT NULL AND NOT EXISTS (SELECT FROM best b WHERE
+                  (b.source,b.pos,b.sentence)=(r.corrects_source,r.corrects_pos,r.corrects_sentence))
+                ORDER BY r.corrects_source,r.corrects_pos,r.corrects_sentence,r.words DESC,r.said_at DESC,r.seq DESC,r.source,r.pos,r.sentence)
             ), relevant AS (
               SELECT DISTINCT ON(detail,speaker,to_key) * FROM accounts
               ORDER BY detail,speaker,to_key,question,words DESC,said_at DESC,source,pos,sentence

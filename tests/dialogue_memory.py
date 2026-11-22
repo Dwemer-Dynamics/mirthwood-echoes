@@ -503,11 +503,11 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release, m
     until(lambda: any(call["model"] == "offline-night" and "I landed a speckled trout" in call["messages"][1]["content"] for call in calls))
     assent = next(r["body"] for r in view(averil,"sessions") if r["id"] == "day-100-"+assent_chat)
     assert "Asked “Yes?”" in assent and "Answered no." in assent and "Answered yes." not in assent, assent
-    def concordance(scene, question):
+    def concordance(scene, question, day=100):
         chat, sources = scene
         _, selected, reply = native_turn(question)
         notes = [r for r in selected if r["source"] in sources]
-        body = next(r["body"] for r in view(averil,"sessions") if r["id"] == "day-100-"+chat)
+        body = next(r["body"] for r in view(averil,"sessions") if r["id"] == f"day-{day}-{chat}")
         assert {r["source"] for r in notes} == set(sources) and all(r["note"] in body for r in notes), (notes,body)
         assert selected[0]["source"] in sources and reply == selected[0]["note"], (reply,selected)
         print("Talk and journal", json.dumps(dict(query=question,recaps=selected,reply=reply,journal=body)), flush=True)
@@ -522,5 +522,80 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release, m
     unclear = concordance(ambiguous, "Who sold the shawl?")[0]
     assert "unclear target" in unclear["note"] and unclear["correction"]["targetUnclear"]
     assert "Ada strung it" in concordance(clarified, "Who strung the red lantern?")[0]["correction"]["note"]
+
+    beat(140)
+    single = exchange([("player", averil, "You may borrow my cart. I was mistaken about the harvest.")])
+    separate, (sled, _) = exchange([("player", averil, "You may borrow my sled."),
+                                     ("player", averil, "I was mistaken about the orchard.")])
+    harvest = exchange([(averil, "player", "I counted three harvest wagons. You may borrow my kettle. "
+                                          "I was mistaken about the harvest. The owls were loud.")])
+    sacks, (weighed, basket, amended) = exchange([(averil, "player", "I weighed the harvest sacks."),
+        (averil, "player", "You may borrow my basket."), (averil, "player", "I was mistaken about the harvest sacks.")])
+    hamper, (carried, withdrew) = exchange([("player", averil, "I carried the wicker hamper."),
+                                             ("player", averil, "I take that back.")])
+    unrelated = exchange([("player", averil, "I lent Ada my chest. Bo lost his purse. I was wrong about the barley.")])
+    corrected = exchange([("player", averil, "I landed a speckled trout beneath the alder footbridge. "
+                                            "I was mistaken about who caught it. Ada caught it.")])
+    paint_chat = str(uuid4())
+    painted = group(averil,"I painted the red handcart.",[*both,guest],chat=paint_chat)
+    first_painter = group(averil,"I was mistaken. Nia painted it.",[*both,guest],chat=paint_chat)
+    last_painter = group(averil,"I was mistaken. Bram painted it.",both,chat=paint_chat)
+    stamps, (brass, silver, uncertain) = exchange([("player", averil, "I stamped the brass seal."),
+        ("player", averil, "I stamped the silver coin."), ("player", averil, "I was mistaken. Finn stamped it.")])
+    beat(141)
+    for scene, noun in [(single,"cart"), ((separate,[sled]),"sled"), (harvest,"kettle"), ((sacks,[basket]),"basket")]:
+        notes = concordance(scene, f"What permission was given to borrow the {noun}?", 140)
+        grant = next(r for r in notes if "may borrow" in r["note"])
+        assert "correction" not in grant and grant["note"] == f"Said the addressee may borrow the speaker's {noun}.", grant
+    wagons = concordance(harvest, "Who counted the three harvest wagons?", 140)[0]
+    assert wagons["sentence"]==0 and wagons["correction"]["sentence"]==2 and "owls" not in wagons["note"], wagons
+    assert "owls" in concordance(harvest, "What did you hear from the owls?",140)[0]["note"]
+    weighed_note = concordance((sacks,[weighed]), "Who weighed the harvest sacks?", 140)[0]
+    assert weighed_note["correction"]["source"]==amended, weighed_note
+    hamper_note = concordance((hamper,[carried]), "Who carried the wicker hamper?", 140)[0]
+    assert hamper_note["correction"]["source"]==withdrew, hamper_note
+    chest = concordance(unrelated, "Who lent Ada a chest?", 140)[0]
+    assert "correction" not in chest and "lent Ada" in chest["note"], chest
+    catch = concordance(corrected, "Who actually landed the speckled trout at the footbridge?", 140)[0]
+    assert "Ada caught it" in catch["correction"]["note"], catch
+    for source,item in [(brass,"brass seal"),(silver,"silver coin")]:
+        stamped = concordance((stamps,[source]),f"What did I say about the {item}?",140)[0]
+        assert "correction" not in stamped, stamped
+    assert sql(f"SELECT corrects_source IS NULL FROM dialogue_recap_parts WHERE source='{uncertain}'")=="t"
+    paint_query = "Who painted the red handcart?"
+    last = concordance((paint_chat,[painted]), paint_query, 140)[0]
+    assert last["correction"]["source"]==last_painter and "Bram painted it" in last["note"] and "Nia" not in last["note"], last
+    def paint_journal(actor):
+        return next(r["body"] for r in view(actor,"sessions") if r["id"]=="day-140-"+paint_chat)
+    previous = next(r for r in check_recall(guest, paint_query+" I missed the end.") if r["source"]==painted)
+    assert previous["correction"]["source"]==first_painter and "Nia painted it" in previous["note"], previous
+    assert previous["note"] in paint_journal(guest) and "Bram" not in paint_journal(guest)
+    latest_head=world["cueHead"]
+    world["cueHead"]=first_painter; beat(141)
+    rewound = next(r for r in check_recall(averil, paint_query+" Remind me.") if r["source"]==painted)
+    assert rewound["correction"]["source"]==first_painter and rewound["note"] in paint_journal(averil) and "Bram" not in paint_journal(averil)
+    print("Successive corrections",json.dumps(dict(latest=last,partialWitness=previous,rewound=rewound,
+          partialJournal=paint_journal(guest),rewoundJournal=paint_journal(averil))),flush=True)
+    world["cueHead"]=latest_head; beat(141)
+
+    beat(175)
+    quotes = ["“May I borrow your cart?” Jo asked.", "Jo asked, “May I borrow your cart?”"]
+    speakers = exchange([("player",averil,words) for words in quotes])
+    _, (distinct,) = exchange([("player",averil,"“The well is dry.” Jo opened the gate.")])
+    beat(176)
+    tagged = concordance(speakers, "Who asked about borrowing a cart?", 175)
+    for words, source in zip(quotes, speakers[1]):
+        note = next(r["note"] for r in tagged if r["source"]==source)
+        assert words.rstrip(".") in note, note
+        assert sql(f"SELECT count(*) FROM dialogue_recap_parts WHERE source='{source}'")=="1"
+    assert sql(f"SELECT count(*) FROM dialogue_recap_parts WHERE source='{distinct}'")=="2"
+    beat(210)
+    busy = exchange([("player",averil,quotes[0]+" Ravens circled the red quarry. Miners carried copper ore. Pine martens crossed the stream.")])
+    warning = "“Don't lend him my cart!” Jo warned."
+    refusal = exchange([("player",averil,warning)])
+    beat(211)
+    assert quotes[0].rstrip(".") in concordance(busy,"What was Jo asking to borrow?",210)[0]["note"]
+    assert warning.rstrip(".") in concordance(refusal,"Who warned me against lending him the cart?",210)[0]["note"]
+    print("PASS named corrections qualify only their evidenced subject, and quoted questions retain their reporting clause.", flush=True)
     memory_model("historian")
     print("PASS Talk and journal agree on sourced roles, recipients, corrections and unresolved claims after an unavailable overnight model.", flush=True)

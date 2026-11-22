@@ -6,14 +6,22 @@ internal static partial class DialogueRecaps
     // The marker must retract an account. "I was wrong to lend it" expresses regret,
     // and a bare "no" can simply answer someone else's question.
     static readonly Regex Retraction = new(
-        @"^(?:(?:well|sorry|actually)[,\s]+)*(?:I (?:was mistaken|was wrong|misspoke|got that wrong|take that back|stand corrected)|we (?:were mistaken|were wrong|take that back)|scratch that|let me correct that|correction|(?:no,\s*)(?:I|we) (?:did not|didn['’]t|never did))(?=$|[\s]*[.!?,:;—–-]|\s+about\b)",
+        @"^(?:(?:well|sorry|actually)[,\s]+)*(?:I (?:was mistaken|was wrong|misspoke|got that wrong|take that back|stand corrected)|we (?:were mistaken|were wrong|take that back)|scratch that|let me correct that|correction|(?:no,\s*)(?:I|we) (?:did not|didn['’]t|never did))(?=$|[\s]*[.!?,:;—–-]|\s+(?:about|regarding|concerning)\b)",
         RegexOptions.IgnoreCase);
     static readonly Regex Clarification = new(@"^(?:(?:actually|rather|on second thought)\s*[,—:]\s*|I (?:meant to say|should have said)\s+)",RegexOptions.IgnoreCase);
+    static readonly Regex NamedSubject = new(@"^(?:about|regarding|concerning)\s+([^,;:.!?…—–]+)",RegexOptions.IgnoreCase);
+    static readonly Regex Ellipsis = new(@"^(?:(?:about\s+)?(?:it|that|this|what (?:I|we) (?:just )?said))?[.!…]*$",RegexOptions.IgnoreCase);
 
     sealed record Part(int Index,string Text,bool Gesture,bool Question,string[] Terms,string Note,
-        string[]? Reference=null,int? Earlier=null,bool NeedsMatch=false)
+        string[]? Reference=null,int? Earlier=null,bool NeedsMatch=false,bool MatchAll=false)
     {
         public bool Correction => Reference != null;
+    }
+
+    static bool MatchesReference(string[] reference,string[] evidence,bool requireAll)
+    {
+        bool Heard(string word) => evidence.Contains(word) || EventWords.Any(forms=>forms.Contains(word) && forms.Any(evidence.Contains));
+        return reference.Length>0 && (requireAll ? reference.All(Heard) : reference.Any(Heard));
     }
 
     static List<Part> Notes(Source row)
@@ -37,28 +45,38 @@ internal static partial class DialogueRecaps
                 continue;
             }
             string rest = words[marker.Length..].Trim(' ','.','!',',',':',';','—','–','-');
-            if(rest.Length==0 && i+1<parts.Length && !parts[i+1].Gesture && !IsQuestion(parts[i+1].Text) &&
-                !Retraction.IsMatch(parts[i+1].Text))
-                rest = parts[++i].Text;
+            bool elliptical = Ellipsis.IsMatch(rest);
+            var subject = NamedSubject.Match(rest);
+            bool named = subject.Success && !elliptical;
+            var reference = Terms(named ? subject.Groups[1].Value : rest);
             string detail = clarify ? "Clarified their account." : denial || marker.Value.Contains("take that back",StringComparison.OrdinalIgnoreCase)
                 ? "Withdrew their earlier account." : "Corrected their earlier account.";
-            var reference = Terms(rest);
-            if(rest.Length>0) detail += " " + Describe(rest,false,false,reference);
+            if(named) detail = Describe(words,false,false,terms);
+            var explanation = named ? "" : rest;
+            if(i+1<parts.Length && !parts[i+1].Gesture && !IsQuestion(parts[i+1].Text) && !Retraction.IsMatch(parts[i+1].Text) &&
+                (elliptical || named && MatchesReference(reference,Terms(parts[i+1].Text),true))){
+                explanation = parts[++i].Text;
+                words += " " + explanation;
+                if(!named) reference = Terms(explanation);
+            }
+            if(explanation.Length>0) detail += " " + Describe(explanation,false,false,Terms(explanation));
+            bool needsMatch = clarify || named || !Ellipsis.IsMatch(explanation);
 
             // Use matching event words, then an unambiguous first-person antecedent
             // for an elliptical self-correction. Never select by sentence length.
             var prior = notes.Where(p=>!p.Gesture && !p.Question && !p.Correction && p.Terms.Length>0 &&
                 !p.Note.StartsWith("Answered ",StringComparison.Ordinal)).ToArray();
-            var vocabulary = reference.Concat(EventWords.Where(forms=>forms.Intersect(reference).Any()).SelectMany(forms=>forms)).ToHashSet();
-            var related = prior.Where(p=>p.Terms.Any(vocabulary.Contains)).ToArray();
+            var related = prior.Where(p=>MatchesReference(reference,p.Terms,named)).ToArray();
             var personal = prior.Where(p=>FirstPerson.IsMatch(p.Text)).ToArray();
             Part? target = related.Length==1 ? related[0] : null;
-            if(!clarify && related.Length==0)
-                target = prior.Length==1 ? prior[0] : personal.Length==1 ? personal[0] : null;
+            if(!needsMatch && related.Length==0)
+                target = prior.Length==1 ? prior[0] : denial && personal.Length==1 ? personal[0] : null;
             // A marker with several possible antecedents qualifies the account as a whole.
             // -1 denotes the preceding statements of this one speaker line, never another turn.
-            int? earlier = target?.Index ?? (prior.Length>0 && (!clarify || related.Length>0) ? -1 : null);
-            notes.Add(new(index,words,false,false,terms.Concat(reference).Distinct().ToArray(),detail,reference,earlier,clarify));
+            int? earlier = target?.Index ?? (prior.Length>1 && !needsMatch ? -1 : null);
+            // An explicit but ambiguous local subject cannot pick an older turn by proximity.
+            var lookup = needsMatch && related.Length>1 ? [] : reference;
+            notes.Add(new(index,words,false,false,Terms(words),detail,lookup,earlier,needsMatch,named));
         }
         // A short withdrawal and its antecedent enter or leave the budget together.
         var accounts = notes.GroupBy(p=>p.Earlier is >=0 ? p.Earlier.Value : p.Index)
@@ -79,12 +97,15 @@ internal static partial class DialogueRecaps
     static async Task<PartKey?> EarlierAccount(NpgsqlConnection conn,Source row,Part part,CancellationToken ct)
     {
         if(part.Earlier is int sentence) return new(row.Id,row.Position,sentence);
+        var reference = part.Reference!;
+        if(part.NeedsMatch && reference.Length==0) return null;
+        string query = part.MatchAll ? string.Join(" & ",reference.Select(word=>"("+Query([word])+")")) : Query(reference);
         await using var select = Database.Command(conn,"""
             WITH RECURSIVE past(id,parent) AS (
               SELECT id,parent FROM cue_events WHERE campaign=@c AND id=@anchor
               UNION ALL SELECT e.id,e.parent FROM cue_events e JOIN past ON e.id=past.parent WHERE e.campaign=@c
-            )
-            SELECT coalesce(p.corrects_source,p.source),coalesce(p.corrects_pos,p.pos),coalesce(p.corrects_sentence,p.sentence),
+            ), candidates AS (
+            SELECT coalesce(p.corrects_source,p.source) AS root,coalesce(p.corrects_pos,p.pos) AS pos,coalesce(p.corrects_sentence,p.sentence) AS sentence,
               (p.mode=@mode AND p.session=@session) AS same_visit,ts_rank(to_tsvector('english',p.keywords),to_tsquery('english',@terms)) AS score
             FROM dialogue_recap_parts p
             WHERE p.campaign=@c AND p.speaker=@who AND p.source<>@source AND NOT p.question
@@ -93,9 +114,12 @@ internal static partial class DialogueRecaps
               AND ((NOT @needs_match AND p.mode=@mode AND p.session=@session) OR to_tsvector('english',p.keywords) @@ to_tsquery('english',@terms))
               AND coalesce(p.corrects_sentence,0)>=0
               AND p.detail !~ '^(Gestured|Made a gesture|Exchanged a few words|Answered (yes|no)\.)'
-            ORDER BY score DESC,same_visit DESC,p.age DESC,p.said_at DESC,p.seq DESC,p.source,p.pos,p.sentence DESC LIMIT 2
+            ), accounts AS (
+              SELECT DISTINCT ON(root,pos,sentence) * FROM candidates ORDER BY root,pos,sentence,score DESC,same_visit DESC
+            )
+            SELECT root,pos,sentence,same_visit,score FROM accounts ORDER BY score DESC,same_visit DESC,root,pos,sentence LIMIT 2
             """,("c",row.Campaign),("anchor",row.Anchor),("who",row.Speaker),("mode",row.Mode),("source",row.Id),
-            ("age",row.Age),("day",row.Day),("at",row.At),("session",row.Session),("audience",row.Audience),("terms",Query(part.Reference!)),("needs_match",part.NeedsMatch));
+            ("age",row.Age),("day",row.Day),("at",row.At),("session",row.Session),("audience",row.Audience),("terms",query),("needs_match",part.NeedsMatch));
         await using var reader = await select.ExecuteReaderAsync(ct);
         if(!await reader.ReadAsync(ct)) return null;
         var key = new PartKey(reader.GetGuid(0),reader.GetInt32(1),reader.GetInt32(2));
