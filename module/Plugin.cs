@@ -120,9 +120,9 @@ namespace Mirthwood.Echoes
                 nextBeat = Time.realtimeSinceStartup + (isolated==null?12:3);
                 isolated?.CheckQuit();
                 var currentWorld=World();
-                if(isolated?.TalkAddress!=null && currentWorld!=null)StartCoroutine(TestClock(currentWorld));
+                if(isolated?.TalkAddress!=null && !isolated.PrivateDiagnostics && currentWorld!=null)StartCoroutine(TestClock(currentWorld));
                 StartCoroutine(Post("heartbeat", JsonConvert.SerializeObject(new {
-                    session, version = ModIdentity.Version, hooks = hookCount+InteractionHooks.Installed.Count, dropped=dropped+NativeCues.Rejected, world = isolated==null?currentWorld:null,
+                    session, version = ModIdentity.Version, hooks = hookCount+InteractionHooks.Installed.Count, dropped=dropped+NativeCues.Rejected, world = isolated==null||isolated.PrivateDiagnostics?currentWorld:null,
                     probeWorld = isolated!=null && _Mirthwood.Scripts.Demo.GameState.GetCurrentState(1)==_Mirthwood.Scripts.Demo.GameState.State.Gameplay?currentWorld:null,
                     isolatedRun=isolated?.Id
                 }), null, OnHeartbeat));

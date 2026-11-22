@@ -184,11 +184,14 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
                             path=f"saves/{first['campaign']}/characters/{first['actor']}/history/"
                             until=time.monotonic()+50
                             while True:
-                                full=api(path+"conversations")["items"]
+                                page=api(path+"conversations")
+                                full=page["items"]
                                 found=any(x["id"]==first["id"] for x in full)
                                 if found==(seen_ready<2) or time.monotonic()>=until:break
                                 time.sleep(.4)
                             assert found==(seen_ready<2),(seen_ready,found)
+                            if seen_ready==1:first_day=page["day"]
+                            assert page["day"]==first_day+(0,0,1,29,30)[seen_ready],(seen_ready,page["day"],first_day)
                             sessions=api(path+"sessions")["items"]
                             if seen_ready>=2:
                                 source_day=next(x["day"] for x in api(path+"knowledge")["items"] if x["value"].lower()=="plum tart")

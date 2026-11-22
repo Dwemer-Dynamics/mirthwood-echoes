@@ -192,6 +192,8 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release):
     assert api("dialogue/finish",dict(delayed,reaction="neutral"))["state"]=="complete"
     assert sql(f"""SELECT count(*) FROM commitments WHERE turn_id='{delayed["id"]}'""")=="0"
     assert "copper thimble" not in sql(f"""SELECT talk FROM turns WHERE id='{delayed["id"]}'""")
+    beat(21)
+    assert sql(f"""SELECT dialogue_expired FROM turns WHERE id='{delayed["id"]}'""")=="t"
     print("PASS a proposal retired during generation cannot return through a pending reply.",flush=True)
     def check_recall(actor,query):
         say(query,actor)

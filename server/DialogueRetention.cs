@@ -78,7 +78,10 @@ internal static class DialogueRetention
         SELECT CASE WHEN EXISTS(SELECT FROM advanced) THEN 'true'
           WHEN EXISTS(SELECT FROM dialogue_clock WHERE campaign=@c AND
             (@session=ANY(retired_loads) OR load_id=@session AND day>@day)) THEN NULL
-          WHEN EXISTS(SELECT FROM dialogue_clock WHERE campaign=@c AND load_id=@session AND published_elapsed IS DISTINCT FROM elapsed)
+          WHEN EXISTS(SELECT FROM dialogue_clock d WHERE campaign=@c AND load_id=@session AND
+            (published_elapsed IS DISTINCT FROM elapsed OR EXISTS(SELECT FROM turns t WHERE t.campaign=@c AND t.state='complete'
+              AND NOT t.dialogue_expired AND t.dialogue_age<d.elapsed) OR EXISTS(SELECT FROM cue_events e WHERE e.campaign=@c
+              AND NOT e.dialogue_expired AND e.payload->>'kind' IN ('address','group') AND e.dialogue_age<d.elapsed)))
             THEN 'true' ELSE 'false' END
         """,("c",campaign),("day",day),("session",session));
 
@@ -98,7 +101,7 @@ internal static class DialogueRetention
             """);
         await using var conn=await db.Source.OpenConnectionAsync(ct);
         // Backfill before aging. Small transactions allow ongoing game writes and restart safely.
-        for(int batch=0;batch<12;batch++){
+        while(true){
             ct.ThrowIfCancellationRequested();
             await using var tx=await conn.BeginTransactionAsync(ct);
             var items=new List<(string Campaign,string Actor,Guid Id,int Day,Guid? Parent,JsonNode? Payload)>();
@@ -147,19 +150,26 @@ internal static class DialogueRetention
             SELECT campaign FROM dialogue_clock ORDER BY campaign FOR UPDATE;
             UPDATE personality_turning_points p SET evidence=echoes_marked_evidence(t.id,p.reason)
               FROM turns t WHERE p.source_type='turn' AND t.id=p.source_id AND p.evidence IS NULL AND t.knowledge_reviewed;
+            -- Keep a whole day's original sources readable if a concurrently locked delivery still needs review.
+            CREATE TEMP TABLE closing_days ON COMMIT DROP AS SELECT d.* FROM dialogue_clock d WHERE d.load_id<>''
+              AND NOT EXISTS(SELECT FROM turns t WHERE t.campaign=d.campaign AND t.state='complete' AND NOT t.knowledge_reviewed
+                AND NOT t.dialogue_expired AND t.dialogue_age<d.elapsed)
+              AND NOT EXISTS(SELECT FROM cue_events e WHERE e.campaign=d.campaign AND NOT e.knowledge_reviewed
+                AND NOT e.dialogue_expired AND e.dialogue_age<d.elapsed AND (e.payload->>'kind'='group' OR
+                e.payload->>'kind'='address' AND EXISTS(SELECT FROM daily_events a WHERE a.campaign=e.campaign AND a.cue_anchor=e.id)));
             CREATE TEMP TABLE old_turns ON COMMIT DROP AS
-              SELECT t.id,t.campaign,t.actor,t.day,t.dialogue_age>d.elapsed-@days AS keep,coalesce(t.cue_binding->>'conversation',t.id::text) AS session FROM turns t JOIN dialogue_clock d ON d.campaign=t.campaign
-              WHERE d.load_id<>'' AND NOT t.dialogue_expired AND t.dialogue_age<d.elapsed AND
+              SELECT t.id,t.campaign,t.actor,t.day,t.dialogue_age>d.elapsed-@days AS keep,coalesce(t.cue_binding->>'conversation',t.id::text) AS session FROM turns t JOIN closing_days d ON d.campaign=t.campaign
+              WHERE NOT t.dialogue_expired AND t.dialogue_age<d.elapsed AND
                  (t.state IN ('failed','interrupted') OR t.state IN ('pending','ready') AND t.started<now()-interval '3 minutes' OR t.state='complete' AND t.knowledge_reviewed) FOR UPDATE OF t;
             CREATE TEMP TABLE old_cues ON COMMIT DROP AS
-              SELECT e.id,e.campaign,(e.payload->>'day')::int AS day,e.dialogue_age>d.elapsed-@days AS keep,coalesce(e.payload->'line'->>'session',e.payload->'people'->0->'details'->>'conversation',e.id::text) AS session FROM cue_events e JOIN dialogue_clock d ON d.campaign=e.campaign
-              WHERE d.load_id<>'' AND NOT e.dialogue_expired AND e.dialogue_age<d.elapsed AND e.payload->>'kind' IN ('group','address')
+              SELECT e.id,e.campaign,(e.payload->>'day')::int AS day,e.dialogue_age>d.elapsed-@days AS keep,coalesce(e.payload->'line'->>'session',e.payload->'people'->0->'details'->>'conversation',e.id::text) AS session FROM cue_events e JOIN closing_days d ON d.campaign=e.campaign
+              WHERE NOT e.dialogue_expired AND e.dialogue_age<d.elapsed AND e.payload->>'kind' IN ('group','address')
                 AND (e.knowledge_reviewed OR e.payload->>'kind'='address' AND NOT EXISTS(
                    SELECT FROM daily_events r WHERE r.campaign=e.campaign AND r.cue_anchor=e.id)) FOR UPDATE OF e;
             CREATE TEMP TABLE old_addresses ON COMMIT DROP AS
               SELECT a.id,a.campaign,a.actor,a.day,coalesce(x.session,a.id::text) AS session,coalesce(e.dialogue_age,a.dialogue_age) AS age,
                 coalesce(e.dialogue_age,a.dialogue_age)>d.elapsed-@days AS keep
-              FROM daily_events a JOIN dialogue_clock d ON d.campaign=a.campaign
+              FROM daily_events a JOIN closing_days d ON d.campaign=a.campaign
                 LEFT JOIN old_cues x ON (x.campaign,x.id)=(a.campaign,a.cue_anchor)
                 LEFT JOIN cue_events e ON (e.campaign,e.id)=(x.campaign,x.id)
               WHERE a.kind='address' AND a.description<>'' AND d.load_id<>'' AND
@@ -218,11 +228,8 @@ internal static class DialogueRetention
               payload=CASE WHEN e.payload->>'kind'='group' THEN jsonb_set(e.payload,'{line}',
                 (e.payload->'line')-'words'-'learned'-'promise'-'proposal'-'priorPromise'-'priorProposal')
                 ELSE jsonb_set(e.payload,'{people}','[]'::jsonb) END FROM old_cues x WHERE (x.campaign,x.id)=(e.campaign,e.id);
-            UPDATE dialogue_clock d SET published_elapsed=elapsed WHERE load_id<>'' AND published_elapsed IS DISTINCT FROM elapsed
-              AND NOT EXISTS(SELECT FROM turns t WHERE t.campaign=d.campaign AND t.state='complete' AND NOT t.knowledge_reviewed
-                AND NOT t.dialogue_expired AND t.dialogue_age<d.elapsed)
-              AND NOT EXISTS(SELECT FROM cue_events e WHERE e.campaign=d.campaign AND e.payload->>'kind'='group' AND NOT e.knowledge_reviewed
-                AND NOT e.dialogue_expired AND e.dialogue_age<d.elapsed);
+            UPDATE dialogue_clock d SET published_elapsed=x.elapsed FROM closing_days x
+              WHERE x.campaign=d.campaign AND d.published_elapsed IS DISTINCT FROM x.elapsed;
             """,("days",Days));
         await prune.ExecuteNonQueryAsync(ct);
         await expire.CommitAsync(ct);
