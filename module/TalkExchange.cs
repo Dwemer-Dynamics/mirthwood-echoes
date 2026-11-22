@@ -56,6 +56,7 @@ namespace Mirthwood.Echoes
             using(Lock()){
                 var data=Current();if(data!=null)return data;
                 data=new JObject{["id"]=Guid.NewGuid().ToString(),["text"]=text,["stage"]="new",["previousRun"]=previousRun,["context"]=context};
+                if(resident)data["returnCues"]=NativeSocialTurn.ReturnCues(resident,(string)data["id"]);
                 if(resident && PlayerImpression.Observe(resident,LastClothing()) is JObject impression)
                     data["playerImpression"]=impression;
                 Write(data);return data;
@@ -110,7 +111,7 @@ namespace Mirthwood.Echoes
                         throw new InvalidDataException("The resident's native social desire has not been initialized.");
                     data["stage"]="applying";Write(data);
                     float previousRun=TalkResult.ReadRun(data["previousRun"]);
-                    result=topic=="None"?new TalkResult("neutral",positiveRun:previousRun):NativeSocialTurn.Play(player,brain,action,previousRun,minimumCostPercent);
+                    result=topic=="None"?new TalkResult("neutral",positiveRun:previousRun):NativeSocialTurn.Play(player,brain,action,previousRun,minimumCostPercent,data["returnCues"] as JObject);
                     if(data["context"] is JObject)NativeCues.Record("talk",new JArray(),id);
                     var saved=result.Record();
                     var clothes=LastClothing()??new JObject();

@@ -20,27 +20,33 @@ namespace Mirthwood.Echoes
         public readonly int SourceSlot;
         public readonly string Preference;
         public string TalkAddress {get;private set;}
+        public bool PrivateDiagnostics {get;private set;}
         IsolatedGameRun(string root,string id,int source){Root=root;Id=id;SourceSlot=source;Preference="Mirthwood.Echoes.Harness."+id;}
         public static bool Requested=>Environment.GetCommandLineArgs().Contains("-echoes-harness");
         [System.Runtime.InteropServices.DllImport("user32.dll",EntryPoint="PostMessageW")]
         static extern bool PostMessage(IntPtr window,uint message,IntPtr key,IntPtr detail);
-        public static bool PostReturn()
+        public static bool PostReturn()=>PostTextKey(13,0x1c);
+        public static bool PostLetterF()=>PostTextKey('F',0x21);
+        static bool PostTextKey(int key,int scan)
         {
             if(Active==null||!Active.PathsMatch()||Application.platform!=RuntimePlatform.WindowsPlayer)return false;
             using(var process=System.Diagnostics.Process.GetCurrentProcess()){
                 var window=process.MainWindowHandle;if(window==IntPtr.Zero)return false;
-                return PostMessage(window,0x100,(IntPtr)13,(IntPtr)0x001c0001)
-                    &&PostMessage(window,0x102,(IntPtr)13,(IntPtr)0x001c0001)
-                    &&PostMessage(window,0x101,(IntPtr)13,(IntPtr)unchecked((int)0xc01c0001));
+                int flags=(scan<<16)|1;
+                return PostMessage(window,0x100,(IntPtr)key,(IntPtr)flags)
+                    &&PostMessage(window,0x101,(IntPtr)key,(IntPtr)(flags|unchecked((int)0xc0000000)));
             }
         }
-        public static bool PostTalkOrEscape(bool talk,bool down)
+        public static bool PostTalkOrEscape(bool talk,bool down)=>PostNavigationKey(talk?0x77:0x1b,talk?0x42:1,down);
+        internal static bool PostGroupKey(bool down)=>PostNavigationKey('T',0x14,down);
+        internal static bool PostListenKey()=>PostTextKey(9,0x0f);
+        static bool PostNavigationKey(int key,int scan,bool down)
         {
             if(Active==null||!Active.PathsMatch()||Application.platform!=RuntimePlatform.WindowsPlayer)return false;
             using(var process=System.Diagnostics.Process.GetCurrentProcess()){
-                int scan=talk?0x42:1;int flags=(scan<<16)|1;
+                int flags=(scan<<16)|1;
                 if(!down)flags|=unchecked((int)0xc0000000);
-                return process.MainWindowHandle!=IntPtr.Zero&&PostMessage(process.MainWindowHandle,down?0x100u:0x101u,(IntPtr)(talk?0x77:0x1b),(IntPtr)flags);
+                return process.MainWindowHandle!=IntPtr.Zero&&PostMessage(process.MainWindowHandle,down?0x100u:0x101u,(IntPtr)key,(IntPtr)flags);
             }
         }
         public static IsolatedGameRun Attach(Harmony harmony)
@@ -61,6 +67,7 @@ namespace Mirthwood.Echoes
             int slot=(int)manifest["sourceSlot"];if(slot<0||slot>299)throw new InvalidDataException("Invalid source slot.");
             Active=new IsolatedGameRun(root,id,slot);
             if((int?)manifest["talkPort"]==17864)Active.TalkAddress="http://127.0.0.1:17864/api/";
+            Active.PrivateDiagnostics=Active.TalkAddress!=null&&(bool?)manifest["privateDiagnostics"]==true;
             harmony.Patch(AccessTools.PropertyGetter(typeof(TestSaveFolder),nameof(TestSaveFolder.Root)),prefix:new HarmonyMethod(typeof(IsolatedGameRun),nameof(RootForTest)));
             harmony.Patch(AccessTools.PropertyGetter(typeof(TestSaveFolder),nameof(TestSaveFolder.LastUsedSlotKey)),prefix:new HarmonyMethod(typeof(IsolatedGameRun),nameof(PrefForTest)));
             if(!Active.PathsMatch())throw new InvalidDataException("The native save paths did not switch to the test copy.");

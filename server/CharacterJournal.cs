@@ -57,24 +57,32 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
         """;
     const string Dialogues="""
         SELECT id::text AS id,day,started AS at,jsonb_build_object('kind','conversation','player',player_text,'reply',reply,'sourceType','turn','sourceId',id,
-          'nativeHandoff',talk->'handoff'->>'cue','questTerms',quest_offer->'offer'->>'terms','questOutcome',CASE quest_offer->>'action' WHEN 'accept' THEN 'Quest accepted' WHEN 'decline' THEN 'Quest declined' END,
+          'nativeHandoff',CASE WHEN talk->>'spokenReturn' IS DISTINCT FROM 'true' THEN talk->'handoff'->>'cue' END,'questTerms',quest_offer->'offer'->>'terms','questOutcome',CASE quest_offer->>'action' WHEN 'accept' THEN 'Quest accepted' WHEN 'decline' THEN 'Quest declined' END,
           'commitmentReview',commitment_review,'promises',(SELECT coalesce(jsonb_agg(jsonb_build_object('speaker',p.speaker,'quote',p.statement,'proposal',p.proposal) ORDER BY p.recorded,p.id),'[]')
           FROM commitments p WHERE p.turn_id=turns.id)) AS doc
         FROM turns WHERE campaign=@c AND actor=@a AND state='complete' AND day<=@day
+        UNION ALL SELECT id::text,day,observed,jsonb_build_object('kind','conversation','reply',description,'sourceType','event','sourceId',id)
+        FROM daily_events WHERE campaign=@c AND actor=@a AND kind='address' AND day<=@day
         """;
     const string Interactions=Events+" UNION ALL "+"""
         SELECT 'turn/'||id,day,started,jsonb_build_object('kind','conversation','description','Spoke with the player.','sourceType','turn','sourceId',id)
         FROM turns WHERE campaign=@c AND actor=@a AND state='complete' AND day<=@day
-        UNION ALL SELECT 'promise/'||id,day,recorded,jsonb_build_object('kind','promise','description',statement,'speaker',speaker) FROM commitments
+        UNION ALL SELECT 'promise/'||id,day,recorded,jsonb_build_object('kind','promise','description',statement,'speaker',speaker,'speakerLabel',speaker_label) FROM commitments
           WHERE campaign=@c AND actor=@a AND day<=@day
-        UNION ALL SELECT 'fulfilled/'||id,resolved_day,recorded,jsonb_build_object('kind','fulfillment','description',statement,'speaker',speaker) FROM commitments
+        UNION ALL SELECT 'fulfilled/'||id,resolved_day,recorded,jsonb_build_object('kind','fulfillment','description',statement,'speaker',speaker,'speakerLabel',speaker_label) FROM commitments
           WHERE campaign=@c AND actor=@a AND resolved_day<=@day AND status='fulfilled'
         """;
     const string Promises="""
         SELECT id::text AS id,day,recorded AS at,jsonb_build_object('kind','promise','speaker',speaker,'statement',statement,'due',due,
-          'proposal',proposal,'sourceTurn',turn_id,'model',model,'provider',provider,'status',CASE WHEN resolved_day<=@day THEN status ELSE 'open' END,
+          'proposal',proposal,'sourceTurn',turn_id,'sourceLine',source_line,'proposalLine',proposal_line,'speakerLabel',speaker_label,'addressedTo',addressed_to,
+          'model',model,'provider',provider,'status',CASE WHEN resolved_day<=@day THEN status ELSE 'open' END,
           'resolvedDay',CASE WHEN resolved_day<=@day THEN resolved_day END,'resolutionSource',CASE WHEN resolved_day<=@day THEN resolution_source END) AS doc
         FROM commitments WHERE campaign=@c AND actor=@a AND day<=@day
+        """;
+    const string MarkedMoments="""
+        SELECT 'marked-'||source_id AS id,day,recorded AS at,jsonb_build_object('kind','marked','value',reason,
+            'source',source_id,'sourceType',source_type,'evidence',evidence) AS doc
+        FROM personality_turning_points WHERE campaign=@c AND actor=@a AND day<=@day
         """;
     const string Memories="""
         SELECT kind||'/'||part AS id,day,recorded AS at,jsonb_build_object('kind',kind,'body',body,'entries',entries,'sources',sources) AS doc
@@ -94,7 +102,9 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
         var actor=await Actor(c,a);
         int day=liveDay??actor.I("day");
         int window=(await providers.Options()).DailyDays;
-        var sql=view switch {"interactions"=>Interactions,"conversations"=>Dialogues,"memories"=>Memories,"commitments"=>Promises,_=>throw new UserError("Unknown journal section.",404)};
+        var sql=view switch {"interactions"=>Interactions,"conversations"=>Dialogues,"memories"=>Memories,"knowledge"=>CharacterKnowledge.Entries(false),
+            "commitments"=>Promises+" UNION ALL "+CharacterKnowledge.Entries(true)+" UNION ALL "+MarkedMoments,
+            "sessions"=>ConversationSessions.WithRecaps(false),"daily"=>ConversationSessions.WithRecaps(true),_=>throw new UserError("Unknown journal section.",404)};
         if(view=="memories" && day>=0)await compactor.Compact(c,a,day,window);
         int? priorDay=null;string? priorTime=null,priorId=null;
         if(before!=null){
@@ -121,19 +131,30 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
         return new JsonObject{["items"]=page,["next"]=next,["day"]=day<0?null:day};
     }
 
+    public async Task<JsonNode> HistoryDetail(string c,string a,string view,string entry,int? liveDay)
+    {
+        if(view is not ("daily" or "sessions") || entry.Length>64)throw new UserError("Unknown journal record.",404);
+        var actor=await Actor(c,a);
+        var rows=await db.ScopedOne(ConversationSessions.Details(view=="daily"),false,null,("c",c),("a",a),
+            ("day",liveDay??actor.I("day")),("entry",entry));
+        if(rows is not JsonArray {Count:>0})throw new UserError("This record is unavailable for this resident.",404);
+        return rows;
+    }
+
     public async Task AddTurningPoint(string c,string a,JsonNode form,int? liveDay)
     {
         var actor=await Actor(c,a);int day=liveDay??actor.I("day");
         int axis=form.I("axis"),direction=form.I("direction");
         if(axis is <0 or >4 || direction is not (-1 or 1))throw new UserError("Choose a temperament direction.");
         var reason=form.Required("reason",320);var source=form.Required("sourceType",10);var id=form.Id();
-        string table=source switch{"turn"=>"SELECT day FROM turns WHERE state='complete' AND", "event"=>"SELECT day FROM daily_events WHERE",_=>throw new UserError("Choose a recorded interaction.")};
-        var valid=await db.ScopedOne("SELECT to_jsonb(s.day)::text FROM ("+table+" campaign=@c AND actor=@a AND id=@id AND day<=@day) s",false,null,("c",c),("a",a),("id",id),("day",day));
+        string table=source switch{"turn"=>"SELECT day,echoes_marked_evidence(id,@reason) AS evidence FROM turns WHERE state='complete' AND",
+            "event"=>"SELECT day,echoes_marked_observation(id,@reason) AS evidence FROM daily_events WHERE",_=>throw new UserError("Choose a recorded interaction.")};
+        var valid=await db.ScopedOne("SELECT to_jsonb(s)::text FROM ("+table+" campaign=@c AND actor=@a AND id=@id AND day<=@day) s",false,null,("c",c),("a",a),("id",id),("day",day),("reason",reason));
         if(valid==null)throw new UserError("This interaction is unavailable for this character and date.",404);
         int inserted=await db.Run("""
-          INSERT INTO personality_turning_points(campaign,actor,source_type,source_id,day,axis,direction,reason)
-          VALUES(@c,@a,@source,@id,@day,@axis,@direction,@reason) ON CONFLICT DO NOTHING
-          """,("c",c),("a",a),("source",source),("id",id),("day",valid.GetValue<int>()),("axis",axis),("direction",direction),("reason",reason));
+          INSERT INTO personality_turning_points(campaign,actor,source_type,source_id,day,axis,direction,reason,evidence)
+          VALUES(@c,@a,@source,@id,@day,@axis,@direction,@reason,@evidence::jsonb) ON CONFLICT DO NOTHING
+          """,("c",c),("a",a),("source",source),("id",id),("day",valid.I("day")),("evidence",valid["evidence"]!.ToJsonString()),("axis",axis),("direction",direction),("reason",reason));
         if(inserted==0)throw new UserError("This interaction already has a turning point.",409);
     }
 
@@ -156,7 +177,7 @@ public sealed class CharacterJournal(Database db, NativeProfile native, Provider
               (SELECT axis,sum(step) AS steps FROM by_day GROUP BY axis)s),'{}'),
             'changes',coalesce((SELECT jsonb_agg(to_jsonb(m) ORDER BY day DESC,axis,reason) FROM
               (SELECT * FROM changes ORDER BY day DESC,axis,reason LIMIT 30)m),'[]'),
-            'daysTogether',(SELECT count(DISTINCT day) FROM turns WHERE campaign=@c AND actor=@a AND day<=@day AND state='complete'))::text
+            'daysTogether',(SELECT count(DISTINCT day) FROM turn_receipts WHERE campaign=@c AND actor=@a AND day<=@day AND state='complete'))::text
           """,scoped,head,("c",c),("a",a),("day",day)))!;
         var axes=new JsonArray();
         foreach(var (axis,i) in profile["axes"]!.AsArray().Select((x,i)=>(x!,i))){

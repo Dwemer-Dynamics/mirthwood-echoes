@@ -73,12 +73,11 @@ namespace Mirthwood.Echoes
                 using (var req = Post(Address + "dialogue/prepare", new { id, campaign = c, actor = a, text = words, context = intent["context"] })) {
                     yield return req.SendWebRequest();
                     var packet = JObject.Parse(req.downloadHandler.text);
-                    string reply = (string)packet["reply"], cue = (string)packet["handoff"]?["cue"];
-                    string bubble = string.IsNullOrEmpty(cue) ? reply : reply + "\n*" + cue.Replace("*", "") + "*";
+                    string reply = (string)packet["reply"];
                     var row = JObject.FromObject(new { scenario, id, campaign = c, actor = a, text = words, resident = npc.CharacterInfo.name,
                         context = intent["context"], observation = intent["playerImpression"], topic = packet["topic"], branch = packet["reaction"],
                         handoff = packet["handoff"], reply, firstVisibleMs = firstMs, finishedMs });
-                    row["passed"] = (string)packet["state"] == "complete" && outbox.Pending() == null && npcBubble.VisibleText == new BubbleText(bubble, false).Plain;
+                    row["passed"] = (string)packet["state"] == "complete" && outbox.Pending() == null && npcBubble.VisibleText == new BubbleText(reply, false).Plain;
                     dialogue.Add(row);
                     if (!(bool)row["passed"]) throw new InvalidOperationException("The displayed and journaled replies differ for " + scenario + ".");
                     if (scenario == "underlayers" || scenario == "introducedInfamous")

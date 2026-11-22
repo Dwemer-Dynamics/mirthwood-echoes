@@ -48,7 +48,7 @@ namespace Mirthwood.Echoes
             if(id!=null&&fresh)Recent(n,id,null,null);
             return id;
         }
-        internal static string Record(string kind,JArray people,string fixedId=null)
+        internal static string Record(string kind,JArray people,string fixedId=null,JObject line=null)
         {
             try{
                 if(folder==null||Plugin.World()==null||pending.Count>=512)return null;
@@ -57,6 +57,7 @@ namespace Mirthwood.Echoes
                 if(parent==id)return id;
                 var packet=new JObject{["id"]=id,["parent"]=string.IsNullOrEmpty(parent)?null:parent,
                     ["kind"]=kind,["people"]=people,["world"]=JObject.FromObject(Plugin.World())};
+                if(line!=null)packet["line"]=line.DeepClone();
                 var file=Path.Combine(folder,id+".json");
                 if(File.Exists(file))return null;
                 string tmp=file+".tmp";
@@ -94,10 +95,11 @@ namespace Mirthwood.Echoes
             if(cue.Remark!=null&&Time.time<=cue.RemarkUntil)value["remark"]=cue.Remark;
             return value.HasValues?value:null;
         }
-        internal static JObject Binding(JObject fresh,NPCController resident=null)
+        internal static JObject Binding(JObject fresh,NPCController resident=null,string conversation=null)
         {
             if(!InteractionHooks.Compatible)return null;
             var b=fresh==null?new JObject():(JObject)fresh.DeepClone();
+            if(conversation!=null)b["conversation"]=conversation;
             if(resident)b["cards"]=new JArray(InteractionHooks.Cards(resident).Select(x=>x.name).Distinct().OrderBy(s=>s,StringComparer.Ordinal));
             b["session"]=session;string h=Head;b["head"]=string.IsNullOrEmpty(h)?null:h;return b;
         }

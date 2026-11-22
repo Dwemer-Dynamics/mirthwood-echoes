@@ -131,8 +131,9 @@ def check_bundle(package, inventory):
     compiled = ROOT / "module/bin/Release/net472/Mirthwood.Echoes.dll"
     if declared[MODULE] != sha256(compiled):
         raise ValueError("The server contains a different module from the one just built.")
-    required = {"Update-Server.ps1", "install-service.sh", "Test-Game.ps1", "app/Mirthwood.Echoes.Server.dll",
-                "app/web-control.py", "app/libpocketsphinx.so", "launcher/Mirthwood.Echoes.Play.exe"}
+    required = {"Update-Server.ps1", "install-service.sh", "upgrade-identity.py", "Test-Game.ps1", "README.md",
+                "app/Mirthwood.Echoes.Server.dll", "app/web-control.py", "app/libpocketsphinx.so",
+                "launcher/Mirthwood.Echoes.Play.exe", "launcher/mirthwood-echoes.ico"}
     if missing := required.difference(inventory):
         raise ValueError("Missing package files: " + ", ".join(sorted(missing)))
     return {"version": version, "moduleSha256": declared[MODULE], "files": inventory}
@@ -198,9 +199,14 @@ def run_gate(args, base, head, paths, tier):
             subprocess.run(command, cwd=ROOT, check=True)
             result["package"] = check_bundle(package, package_inventory(package))
             result["checks"].append("Release server, companion, compiled module and complete package inventory")
-            for project in ("tests/native_talk/NativeTalkProbe.csproj", "tests/provider_paste/ProviderPaste.csproj",
-                            "tests/talk_model/TalkModel.csproj"):
-                if (ROOT / project).is_file() and any(p.startswith(project.rsplit("/", 1)[0] + "/") for p in paths):
+            dependencies = {
+                "tests/native_talk/NativeTalkProbe.csproj": ("tests/native_talk/",),
+                "tests/provider_paste/ProviderPaste.csproj": ("tests/provider_paste/", "launcher/ProviderClipboard.cs"),
+                "tests/talk_model/TalkModel.csproj": ("tests/talk_model/", "server/", "shared/"),
+            }
+            shared_build_change = bool(PROJECT_FILES.intersection(paths))
+            for project, inputs in dependencies.items():
+                if (ROOT / project).is_file() and (shared_build_change or any(p.startswith(inputs) for p in paths)):
                     command = ["dotnet", "build", project, "-c", "Release", "--nologo"]
                     if args.game_dir:
                         command.append("-p:GameDir=" + args.game_dir)

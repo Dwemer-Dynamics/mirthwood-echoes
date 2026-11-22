@@ -60,7 +60,7 @@ def check_talk_retries(api, model, say, twin, checked, legacy_packet):
     turn=current_turn("Hmm.");model.samples[turn["text"]]=json.dumps(dict(answer,topic="None",commitments=[]))
     prepared=api(prepare,dict(turn,socialDesire=-.85))
     prompt=model.calls[-1]["messages"][0]["content"]
-    assert 'very low' in prompt and card["cue"] in prompt and 'say goodbye' in prompt and 'otherwise briefly acknowledge' in prompt
+    assert 'very low' in prompt and card["cue"] not in prompt and answer["cool"] in prompt
     assert prepared["state"]=="ready" and prepared["topic"]=="Small Talk" and prepared["positiveDesireCostPercent"]==70
     ending={"kind":"ended","cue":"The resident has had enough conversation."}
     completed=api(finish,dict(turn,reaction="warm",handoff=ending))
@@ -93,11 +93,154 @@ def check_talk_retries(api, model, say, twin, checked, legacy_packet):
     assert api(finish,dict(old_client,reaction="cool",handoff=ending))["reply"]==answer["cool"]
     check_endings(api,model,current_turn,path,ending)
     check_impressions(api,model,current_turn,answer,coat)
+    check_resident_speech(api,model,current_turn,path,answer)
+    check_topic_flow(api,model,current_turn,answer)
     api("/api/options",settings,"PUT",204)
     checked("social desire settings, older clients, legacy prepared turns and stable per-exchange cost across settings changes")
     checked("parallel Talk retries, scoped UUIDs, grounded promises, Small Talk fallback, silent actions, direct trade and malformed replies")
     checked("spoken farewells on confirmed endings, open and uncertain replies, duplicate farewells, trailing questions and promises")
     checked("resident knowledge, spoken introductions, visible clothing and frozen first impressions on retries")
+    checked("selected native card as spoken dialogue, physical gestures, sensitive subjects, immutable replay and unspoken promises")
+    checked("eight recent exchanges, player-led follow-ups, voluntary farewells and stable native outcomes on recovery")
+
+
+def check_resident_speech(api, model, say, path, common):
+    cues={"Funny Joke":"Averil jokes about the tavern cook","Flirt":"Averil flirts nervously","Deep":"Averil asks about loss"}
+    opening="*I smile at the lad who jokes about his bread.* The bread would keep a cartwheel turning."
+    joke="The cook asked for a second opinion. The millstone chipped a tooth."
+    promise="I will bring the cart tomorrow."
+    for card,beat in (("Funny Joke",joke),("Flirt","*I smooth my sleeve.* I rather hoped you'd stay."),("Deep","")):
+        turn=dict(say("Do you remember mending the wagon with me?"),returnCues=cues)
+        choices={"Funny Joke":joke+" *Averil jokes about the tavern cook.*","Flirt":"*I smooth my sleeve.* I rather hoped you'd stay.",
+                 "Deep":cues["Deep"]}
+        sample=dict(common,warm=opening,neutral=opening,cool=promise,continuations=choices,
+                    commitments=[{"speaker":"npc","quote":promise}])
+        model.samples[turn["text"]]=json.dumps(sample)
+        before=len(model.calls)
+        ready=api("/api/dialogue/prepare",turn)
+        expected=opening+(" "+beat if beat else "")
+        assert ready["cardChoices"][card]["neutral"]==expected
+        event=dict(kind="followup",action=card,cue=cues[card])
+        api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=dict(event,cue="Changed variant")),status=409)
+        done=api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=event))
+        assert done["reply"]==expected and done["handoff"]==event
+        assert api("/api/dialogue/prepare",turn)==done and api("/api/dialogue/finish",dict(turn,reaction="cool"))==done
+        entry=next(item for item in api(path+"conversations")["items"] if item["id"]==turn["id"])
+        assert entry["reply"]==expected and not entry.get("nativeHandoff") and not entry["promises"]
+        assert len(model.calls)==before+1
+    turn=dict(say("I'd like to sit quietly with his old fishing net."),returnCues=cues)
+    line="*I sit beside you.* We can stay here a while."
+    model.samples[turn["text"]]=json.dumps(dict(common,neutral=line,continuations={},commitments=[]))
+    ready=api("/api/dialogue/prepare",turn)
+    assert ready["cardChoices"]=={} and ready["choices"]["neutral"]==line
+    end={"kind":"ended","cue":"Averil is done talking."}
+    assert api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=end))["reply"]==line+" Be well."
+
+
+def check_topic_flow(api, model, say, common):
+    first=say("I found a copper rivet tucked inside an empty cream jug.")
+    model.samples[first["text"]]=json.dumps(dict(common,flow="follow",neutral="A curious place to put it.",commitments=[]))
+    api("/api/dialogue/prepare",first)
+    api("/api/dialogue/finish",dict(first,reaction="neutral"))
+    history=[]
+    for words,cue,base,beat,fresh in (
+        ("How do you spend a quiet evening?","playing chess","I set out the board.","The carved knights are my favourites.",True),
+        ("What draws you to it?","playing chess","Finding a way out with one piece left.","I do enjoy chess.",False),
+        ("I enjoy a game too.","exploring old ruins","Then I'd fancy a match.","I'd also love to see inside the old ruins.",True),
+        ("What would you look for inside?","talking about hobbies","A mark left by the mason.","",True),
+        ("Do the fields need rain?","playing chess","The soil could use a soaking.","Wet days suit the chessboard.",False),
+        ("Would you take a free rook?","talking about hobbies","Only after looking for the trap.","",True),
+    ):
+        turn=dict(say(words),returnCues={"Leisure":cue,"Deep":"asking a question"})
+        model.samples[words]=json.dumps(dict(common,warm=base,neutral=base,cool=base,
+            continuations={"Leisure":beat,"Deep":"Who carved the little birds?"},commitments=[]))
+        before=len(model.calls)
+        ready=api("/api/dialogue/prepare",turn)
+        assert ready["state"]=="ready"
+        prompt=model.calls[-1]["messages"][0]["content"]
+        recall=json.JSONDecoder().raw_decode(prompt.split("\nRecall: ",1)[1])[0]["recentSpeech"]
+        expected_history=history[-8:]
+        if expected_history:
+            assert [(r["player"],r["npc"]) for r in recall[-len(expected_history):]]==expected_history
+        assert len(recall)<=8
+        offered=json.loads(prompt.split("\nReturn cards: ",1)[1])
+        assert ("Leisure" in offered)==fresh and ("Leisure" in ready["cardChoices"])==fresh
+        assert all("voicedCue" not in row for row in recall)
+        event=dict(kind="followup",action="Leisure",cue=cue)
+        done=api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=event))
+        assert done["reply"]==(base+" "+(beat if fresh else "")).strip() and api("/api/dialogue/prepare",turn)==done
+        assert len(model.calls)==before+1
+        history.append((words,done["reply"]))
+
+    card={"kind":"followup","action":"Leisure","cue":"a day at the fair"}
+    for flow,words,line in (
+        ("follow","I love a good game too.","I lose my head when someone offers me a rook."),
+        ("leave","Aye. I'd best be going. Take care.","Mind the mud on your way home."),
+        ("follow","She said goodbye before the fair. Why did she leave?","I never heard her reason."),
+    ):
+        turn=dict(say(words),returnCues={"Leisure":card["cue"]})
+        model.samples[words]=json.dumps(dict(common,flow=flow,warm=line,neutral=line,cool=line,
+            continuations={"Leisure":"The fair is in town."},commitments=[]))
+        ready=api("/api/dialogue/prepare",turn)
+        assert ready["cardChoices"]=={} and ready.get("playerLeaves",False)==(flow=="leave")
+        if flow=="leave":
+            assert ready["endingChoices"]==ready["choices"]
+        done=api("/api/dialogue/finish",dict(turn,reaction="cool",handoff=card))
+        assert done["reply"]==line and done["handoff"]==card and done.get("playerLeaves",False)==(flow=="leave")
+        assert api("/api/dialogue/prepare",turn)==done
+        assert api("/api/dialogue/finish",dict(turn,reaction="warm"))==done
+
+    variants={"warm":"You'd enjoy the fair. The woodcarvers are my favourite.",
+              "cool":"I might have a look at the carving."}
+    for reaction,expected in (("warm",variants["warm"]),("cool",variants["cool"]),("neutral",common["neutral"])):
+        words="What would you like to do on a free afternoon?"
+        turn=dict(say(words),returnCues={"Leisure":card["cue"]+" "+reaction})
+        model.samples[words]=json.dumps(dict(common,flow="invite",continuations={"Leisure":variants},commitments=[]))
+        ready=api("/api/dialogue/prepare",turn)
+        assert ready["cardChoices"]["Leisure"][reaction]==expected
+        event=dict(card,cue=turn["returnCues"]["Leisure"])
+        done=api("/api/dialogue/finish",dict(turn,reaction=reaction,handoff=event))
+        assert done["reply"]==expected and done["handoff"]==event and api("/api/dialogue/prepare",turn)==done
+
+    words="You choose, what shall we talk about?"
+    turn=dict(say(words),returnCues={"Leisure":"playing bowls"})
+    model.samples[words]=json.dumps(dict(common,flow="invite",neutral="I'd like to discuss the fair.",
+        closingAnswers={"neutral":"I've only a moment, but it was good to see you."},
+        continuations={"Leisure":variants},commitments=[]))
+    ready=api("/api/dialogue/prepare",turn)
+    goodbye="I've only a moment, but it was good to see you. Be well."
+    assert ready["endingChoices"]["neutral"]==goodbye
+    done=api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff={"kind":"ended","cue":"The resident leaves."}))
+    assert done["reply"]==goodbye and "playerLeaves" not in done and api("/api/dialogue/prepare",turn)==done
+
+    for words,base,leaving,marks,expected in (
+        ("Could you sit with me?","I can stay here.","*I pause beside you for a moment.*",[],"*I pause beside you for a moment.*"),
+        ("Will you bring the rake?","I will bring the rake.","I have to go.",["I will bring the rake."],"I will bring the rake."),
+        ("How is the garden?","It's doing well.","I will bring a rake.",["I will bring a rake."],"It's doing well."),
+    ):
+        turn=say(words)
+        model.samples[words]=json.dumps(dict(common,flow="follow",neutral=base,closingAnswers={"neutral":leaving},
+            commitments=[{"speaker":"npc","quote":p} for p in marks]))
+        ready=api("/api/dialogue/prepare",turn)
+        assert ready["endingChoices"]["neutral"]==expected+" Be well."
+        done=api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff={"kind":"ended","cue":"The resident leaves."}))
+        assert done["reply"]==ready["endingChoices"]["neutral"] and api("/api/dialogue/prepare",turn)==done
+
+    recall_turn=say("Where did I say I found the copper rivet?")
+    model.samples[recall_turn["text"]]=json.dumps(dict(common,flow="follow",commitments=[]))
+    api("/api/dialogue/prepare",recall_turn)
+    prompt=model.calls[-1]["messages"][0]["content"]
+    recall=json.JSONDecoder().raw_decode(prompt.split("\nRecall: ",1)[1])[0]
+    assert first["id"] not in [r["turn"] for r in recall["recentSpeech"]]
+    earlier=recall["earlierSpeech"]
+    assert len(earlier)<=2 and any(r["turn"]==first["id"] and r["player"]==first["text"] for r in earlier)
+    api("/api/dialogue/finish",dict(recall_turn,reaction="neutral"))
+
+    turn=dict(say("That's fair enough."),returnCues={"Leisure":"an unfamiliar pastime"})
+    model.samples[turn["text"]]=json.dumps(dict(common,flow="open",continuations={"Leisure":[]},commitments=[]))
+    assert api("/api/dialogue/prepare",turn)["cardChoices"]=={}
+    event=dict(card,cue="an unfamiliar pastime")
+    assert api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=event))["reply"]==common["neutral"]
 
 
 def check_impressions(api, model, say, answer, coat):
@@ -162,3 +305,21 @@ def check_endings(api, model, say, path, ending):
     entry=next(item for item in api(path+"conversations")["items"] if item["id"]==turn["id"])
     assert [(p["speaker"],p["quote"]) for p in entry["promises"]]==[("player",player_promise)]
     assert len(model.calls)==calls+len(cases)+1
+
+    aside="(I say he cheated.)"
+    long_answer=" ".join(["I can show you as far as the bridge."]*10)
+    for base,closing,continuing,departed in [
+        ("I'll see to it. Goodbye, Rowan.","I should get home. Goodbye, Rowan.","I'll see to it.","I should get home. Goodbye, Rowan."),
+        ("Farewell. Mind the river.","Farewell. Mind the river. *I lift my hand.*","Mind the river.","Mind the river. *I lift my hand.* Farewell."),
+        ("Good day. The bridge is sound.",aside+" The bridge is sound.","Good day. The bridge is sound.",aside+" The bridge is sound. Be well."),
+        ("Take care, the boards are loose.","Take care, the boards are loose.","Take care, the boards are loose.","Take care, the boards are loose. Be well."),
+        ("I can draw you a map.",long_answer,"I can draw you a map.",long_answer+" Be well."),
+        ("I can draw you a map.","x"*901,"I can draw you a map.","I can draw you a map. Be well."),
+    ]:
+        turn=dict(say("Where is the bridge?"),playerImpression={"familiarity":"Friend","name":"Rowan"},returnCues={})
+        model.samples[turn["text"]]=json.dumps(dict(answer,flow="follow",neutral=base,
+            closingAnswers={"neutral":closing},farewells={"neutral":"Be well."},commitments=[]))
+        ready=api("/api/dialogue/prepare",turn)
+        assert ready["choices"]["neutral"]==continuing and ready["endingChoices"]["neutral"]==departed
+        assert api("/api/dialogue/finish",dict(turn,reaction="neutral",handoff=ending))["reply"]==departed
+        assert api("/api/dialogue/prepare",turn)["reply"]==departed

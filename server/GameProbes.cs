@@ -16,17 +16,18 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
     readonly object gate=new();
     readonly List<Probe> recent=[];
     static string State(Probe p)=>p.Result!=null?(p.Result["passed"]?.GetValue<bool>()==true?"passed":"failed"):
-        DateTime.UtcNow-p.Created>TimeSpan.FromMinutes(p.Mode is "relationships" or "socialbalance" or "interactions" or "quests" or "voices"?10:3)?"expired":p.Session==""?"waiting":"running";
+        DateTime.UtcNow-p.Created>TimeSpan.FromMinutes(p.Mode=="roleplay"?35:p.Mode is "relationships" or "socialbalance" or "interactions" or "quests" or "voices" or "residentdialogue" or "dialogueflow" or "grouptalk"?10:3)?"expired":p.Session==""?"waiting":"running";
     static JsonNode View(Probe p)=>JsonSerializer.SerializeToNode(new{id=p.Id,mode=p.Mode,state=State(p),created=p.Created,result=p.Result},Database.Json)!;
     public JsonNode Start(JsonObject input)
     {
-        var mode=input.Required("mode",15);
-        if(mode is not ("runtime" or "world" or "interface" or "provider" or "relationships" or "socialbalance" or "interactions" or "quests" or "voices"))throw new UserError("Unknown game check.");
+        var mode=input.Required("mode",16);
+        if(mode is not ("runtime" or "world" or "interface" or "provider" or "relationships" or "socialbalance" or "interactions" or "quests" or "voices" or "residentdialogue" or "dialogueflow" or "roleplay" or "grouptalk"))throw new UserError("Unknown game check.");
         lock(gate){
             if(recent.LastOrDefault() is { } active&&State(active) is "waiting" or "running")throw new UserError("A game check is already waiting.",409);
             var run=input.S("run");if(run!=""&&!Guid.TryParseExact(run,"N",out _))throw new UserError("Invalid isolated run.");
-            if(mode is "provider" or "relationships" or "interactions" or "quests"&&run=="")throw new UserError("The live provider test needs an isolated save.");
+            if(mode is "provider" or "relationships" or "interactions" or "quests" or "residentdialogue" or "dialogueflow" or "roleplay"&&run=="")throw new UserError("The live provider test needs an isolated save.");
             if(mode=="socialbalance"&&run=="")throw new UserError("The native balance comparison needs an isolated save.");
+            if(mode=="grouptalk"&&run=="")throw new UserError("Group Talk needs an isolated save.");
             if(mode=="voices"&&run=="")throw new UserError("Voice playback needs an isolated save.");
             var p=new Probe(mode,run);recent.Add(p);if(recent.Count>8)recent.RemoveAt(0);return View(p);
         }
@@ -37,7 +38,7 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
         if(!Guid.TryParse(heartbeat.S("session"),out _))return null;
         lock(gate){
             var p=recent.LastOrDefault();
-            if(p==null||State(p) is not ("waiting" or "running")||(p.Mode is "world" or "interface" or "provider" or "relationships" or "socialbalance" or "interactions" or "quests" or "voices")&&heartbeat["world"]==null&&heartbeat["probeWorld"]==null)return null;
+            if(p==null||State(p) is not ("waiting" or "running")||p.Mode!="runtime"&&heartbeat["world"]==null&&heartbeat["probeWorld"]==null)return null;
             if(p.Run!=""&&p.Run!=heartbeat.S("isolatedRun"))return null;
             if(p.Session!=""&&p.Session!=heartbeat.S("session"))return null;
             p.Session=heartbeat.S("session");return new JsonObject{["id"]=p.Id.ToString(),["mode"]=p.Mode};
@@ -75,13 +76,19 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
     }
     public async Task Fixture(Guid id,string session,JsonObject turn,HttpContext ctx)
     {
-        if(Issued(id,session).Mode!="interface")throw new UserError("This check has no fixture stream.",409);
+        var probe=Issued(id,session);
+        if(probe.Mode!="interface")throw new UserError("This check has no fixture stream.",409);
+        if(probe.Run!=""&&turn["voice"]!=null&&turn.S("text")=="I am ready."){
+            await Task.Delay(1200,ctx.RequestAborted);
+            throw new UserError("The test voice is unavailable.",503);
+        }
         if(turn.S("campaign")!="fixture"||turn.S("actor")!="resident"||turn.S("text")!="*I lift my hat.* I’ll collect the flour. Is the mill open?"
             ||turn.ContainsKey("commitment"))throw new UserError("The fixture expected ordinary player speech.");
         ctx.Response.ContentType="application/x-ndjson";
         var stream=new DialogueOutput(async part=>{
             await ctx.Response.WriteAsync(JsonSerializer.Serialize(new{type="delta",text=part})+"\n",ctx.RequestAborted);await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
         });
+        if(probe.Run!="")await Task.Delay(2400,ctx.RequestAborted);
         await stream.Push("{\"reply\":\"*I nod");
         await Task.Delay(180,ctx.RequestAborted);
         await stream.Push(".* The mill is open.\",\"commitments\":[{\"speaker\":\"player\",\"quote\":\"I’ll collect the flour.\"}]}");
@@ -141,7 +148,7 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
                 string.Join(", ",clips.Select(c=>c.S("voice")+" "+c.S("mixPeak"))));
             Check("Captions follow playback in the character bubbles",input["playerPartial"]?.GetValue<bool>()==true&&
                 input["npcPartial"]?.GetValue<bool>()==true&&input["speakerAnchor"]?.GetValue<bool>()==true&&
-                input["speechComplete"]?.GetValue<bool>()==true,"Read text in both live bubble components while the game audio channel advanced.");
+                input["speechComplete"]?.GetValue<bool>()==true,"Both bubbles showed the complete line and marked the word reached by the game audio channel.");
             Check("Repeated presentation speaks the reply once",clips.Length==3&&clips.Select(x=>x.S("waveSha256")).Distinct().Count()==3,"Two spoken lines and one narrated action.");
             Check("Complete text when speech is unreachable",input["audioFallback"]?.GetValue<bool>()==true,"The native bubble retained speech and italic action after the audio request failed.");
         }
@@ -180,9 +187,20 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
             Check("Player and NPC action lettering",Yes("draftItalic")&&Yes("acceptedItalic")&&Yes("streamItalic")&&Yes("replyItalic"),"Read the actual TMP styles during drafting, after acceptance, mid-stream and after the reply.");
             Check("Streamed speech on screen",input.S("reply")=="*I nod.* The mill is open."&&input.S("displayed")=="I nod. The mill is open."&&input.I("deltas")==2&&Yes("done"),input.S("displayed"));
             if(p.Run!=""){
+                if(input.S("probeError")!="")Check("Interface probe reached its reply",false,input.S("probeError"));
+                Check("F types into the draft",Yes("typedInteractionKey"),"Sent menu Submit and typed F in mid-word. The complete draft stayed focused until Return.");
                 Check("Enter accepts the typed draft",Yes("windowEnter"),"Sent Return to the isolated game window through Windows.");
-                Check("Growing, wrapping player bubble",Yes("grows")&&Yes("wrapped")&&Yes("editAfterWrap")&&Yes("literalTags")&&Yes("editorEdges"),"Measured width and height, a 36-character hard wrap, caret deletion, literal tags and four screen corners.");
-                Check("Extended draft editing",Yes("longDraftCaret")&&Yes("middleEdit")&&Yes("shortDraftVisible"),"The caret remains visible in a long draft; shortening it brings every fitting line back into view. Mid-action edits preserve the raw position.");
+                Check("Rolling periods above the selected resident",Yes("waitCycle")&&Yes("waitAnchored")&&Yes("waitSelectedOnly")&&Yes("waitCapture"),input.S("waitStages"));
+                Check("Resident waits while the world advances",Yes("waitStationary")&&Yes("waitReleased"),"Checked the resident's position and native navigation agent during the delay and after the reply.");
+                Check("Closing or retrying clears the wait",Yes("waitCancelled")&&Yes("waitRetry"),"Closed an outstanding request, reopened Talk, and recovered the draft after a rejected request.");
+                string voiceSetting=Yes("waitVoiceMuted")?"muted":"enabled";
+                Check("Selected reply replaces the waiting dots",Yes("waitVoiceQueued")&&Yes("waitVoiceReply"),
+                    Yes("waitVoiceQueued")?$"Tested the delayed local speech failure with game voices {voiceSetting}.":"The local speech fixture did not queue a reply.");
+                Check("Growing, wrapping player bubble",Yes("grows")&&Yes("wrapped")&&Yes("editAfterWrap")&&Yes("literalTags")&&Yes("editorEdges"),$"Growth {Yes("grows")}, measured wrap {Yes("wrapped")}, caret deletion {Yes("editAfterWrap")}, literal tags {Yes("literalTags")}, all corners {Yes("editorEdges")}.");
+                Check("Names stay together as the bubble grows right",Yes("horizontalGrowth")&&Yes("namedWords")&&Yes("namedCapture"),input.S("wordLayout"));
+                Check("Paper fits the words and waiting dots",Yes("compactPaper")&&Yes("flourCapture")&&Yes("goodbyeCapture"),input.S("paperMargins"));
+                Check("Extended draft editing",Yes("longDraftCaret")&&Yes("middleEdit")&&Yes("shortDraftVisible")&&Yes("wholeLongDraft")&&Yes("fullDraftCapture"),
+                    $"Long caret {Yes("longDraftCaret")}, middle edit {Yes("middleEdit")}, short draft {Yes("shortDraftVisible")}, 1,200 characters {Yes("wholeLongDraft")}. "+input.S("draftBounds")+". "+input.S("shortDraftBounds"));
                 Check("Player clock pause and restoration",Yes("clockPaused")&&Yes("resumeSpeed")&&Yes("nextDraftPaused")&&Yes("closeRestoresClock"),"Measured the scaled simulation and campaign calendar across typing, submission, the next draft and closing.");
                 Check("Player anchor and draft capture",Yes("playerTracks")&&Yes("draftCapture"),"Player motion and the visible writing bubble were checked in the copied world.");
                 Check("Native context prompts",Yes("contextSuppressed")&&Yes("contextRestored"),"The player’s stock interaction prompts yield to the speech bubble and return on closing.");
@@ -190,8 +208,9 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
                 Check("Native Talk and Escape",Yes("talkKey")&&Yes("escapeRestored"),"Invoked the resident’s native Talk option, sent Escape and restored half-speed gameplay.");
                 Check("Independent native pause",Yes("otherPausePreserved")&&Yes("alreadyPaused"),"The closing editor preserved an existing native pause and a pause requested while typing.");
                 Check("Speech follows the resident",input["tracksSpeaker"]?.GetValue<bool>()==true,"Moved and restored the native overhead anchor in the test copy.");
-                Check("Long replies and screen edges",input.I("pages")>1&&input.I("nextPage")==2&&input.I("backPage")==1&&input["edgeFit"]?.GetValue<bool>()==true,input.I("pages")+" pages, previous and next controls, four screen corners.");
-                Check("Player draft leaves the resident's reply visible",Yes("separateBubbles"),"Long draft and paged resident response both fit on screen with separate bounds.");
+                Check("Complete speech in one bubble",Yes("wholeSubmitted")&&Yes("wholeLongReply")&&Yes("fullPlayerCapture")&&Yes("fullResidentCapture")&&Yes("edgeFit")&&
+                    input["relativeTypeSize"]?.GetValue<float>() is >.83f and <.87f,"Checked the entire submitted player line, a long marked reply, native type at 85% and four screen corners.");
+                Check("Player draft leaves the resident's reply visible",Yes("separateBubbles"),input.S("pairBounds"));
                 Check("Native reference capture",input["referenceCapture"]?.GetValue<bool>()==true,"The game’s own bark on the same resident with matching words.");
             }
             Check("Game capture",input["capture"]?.GetValue<bool>()==true,"Latest interface image in the local Echoes Diagnostics folder.");
@@ -228,11 +247,47 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
             foreach(var item in input["cases"] as JsonArray??[])Check(item.S("name"),item?["passed"]?.GetValue<bool>()==true,item.S("detail"));
             Check("Completed copied-save interactions",input["interactionsComplete"]?.GetValue<bool>()==true,input.S("probeError"));
         }
+        if(p.Mode=="grouptalk"){
+            Check("Residents gathered and held their own spots",input["gathered"]?.GetValue<bool>()==true,input.S("probeError"));
+            Check("Delivered group lines and safe release",input["released"]?.GetValue<bool>()==true&&input["groupLines"] is JsonArray {Count:>=3},input.S("probeError"));
+            Check("Group shortcut remains a letter in drafts",input["typedT"]?.GetValue<bool>()==true,input.S("probeError"));
+            Check("Escape cancels a draft and leaves the circle",input["escape"]?.GetValue<bool>()==true,input.S("probeError"));
+            Check("Late arrival and departure",input["attendance"]!=null,input.S("probeError"));
+            Check("Native scores and saved receipt",input["pair"]?["spouse"]!=null&&input["reload"]?.GetValue<bool>()==true,input.S("probeError"));
+        }
+        if(p.Mode=="roleplay"){
+            var turns=input["turns"] as JsonArray??[];
+            Check("Player-entered lines and resident replies in ordinary Talk",input.S("probeError")==""&&turns.Count>0&&
+                turns.All(t=>t?["matched"]?.GetValue<bool>()==true&&t["visiblePages"] is JsonArray {Count:>0}),input.S("probeError"));
+        }
+        if(p.Mode=="residentdialogue"){
+            var turns=input["turns"] as JsonArray??[];
+            Check("Averil’s native Talk and recovered words",input.S("resident")=="Averil"&&turns.Count==3&&
+                turns.All(t=>t?["matched"]?.GetValue<bool>()==true),input.S("probeError"));
+            var openers=input["openers"] as JsonArray??[];
+            Check("Player-directed native joke and flirt",openers.Count==2&&openers.All(t=>t?["matched"]?.GetValue<bool>()==true),input.S("probeError"));
+            Check("Background interaction stays native",input["backgroundNative"]?.GetValue<bool>()==true,input.S("probeError"));
+        }
+        if(p.Mode=="dialogueflow"){
+            var turns=input["turns"] as JsonArray??[];
+            Check("Six spoken and recovered turns with Averil",input.S("resident")=="Averil"&&turns.Count==6&&
+                turns.All(t=>t?["matched"]?.GetValue<bool>()==true),input.S("probeError"));
+            const string chess="Averil talks about playing chess";
+            string?[] replay=[chess,chess,"Averil talks about exploring old ruins",null,chess,null];
+            Check("Replayed and unrestricted native draws",turns.Select(t=>(string?)t?["replayedCue"]).SequenceEqual(replay)&&
+                turns.All(t=>t?["replayedCue"]==null||t.S("replayedCue")==t?["handoff"].S("cue")),input.S("probeError"));
+            string rain=turns.Count>4?turns[4].S("reply"):"";
+            Check("A repeated chess draw lets the rain answer stand",rain.Length>0&&!rain.Contains("chess",StringComparison.OrdinalIgnoreCase),rain);
+        }
         if(p.Mode=="quests"){
             Check("Talk recovery and native Speak through a backend outage",input["outage"]?["passed"]?.GetValue<bool>()==true,input.S("probeError"));
             Check("Native quest choices, terms, callbacks and reload",input["verifiedQuests"]?.GetValue<bool>()==true,input.S("probeError"));
         }
         var result=JsonSerializer.SerializeToNode(new{passed=pass,checks},Database.Json)!;
+        if(p.Mode=="grouptalk")
+            foreach(var key in new[]{"gathered","released","groupLines","guests","campaign","groupSession","probeError","pair","spacing","firstMs","totalMs","capture","setup","setupStages","typedT","escape","gBindings","attendance","reload","startingDesire","heldFarewell"})result[key]=input[key]?.DeepClone();
+        if(p.Mode is "residentdialogue" or "dialogueflow" or "roleplay")
+            foreach(var key in new[]{"resident","turns","openers","backgroundNative","probeError","startingDesire"})result[key]=input[key]?.DeepClone();
         if(p.Mode=="voices"){
             result["reactions"]=input["voiceRows"]?.DeepClone();result["speech"]=input["speech"]?.DeepClone();result["error"]=input["probeError"]?.DeepClone();
             foreach(string key in new[]{"playerPartial","npcPartial","speechComplete","speakerAnchor","actionItalic","playerCaptions","npcCaptions","playerCapture","residentCapture","audioFallback"})
