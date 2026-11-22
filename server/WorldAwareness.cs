@@ -9,9 +9,11 @@ internal static class SpeakerWorld
     internal const string NewsSubjects=@"\m(joust|merchant|market|trade ship|festival of blossoms|summer solstice|all hallows eve|yuletide|town raid|bandit raid|vermin plague|dust storm|werewolf|full moon)\M";
     internal const string Instructions = """
         worldAwareness is what this resident can know at this moment. Answer the player's last point first. Follow an ongoing personal subject, especially grief or a disclosure. When invited, one fitting local detail is enough. Once mentioned, let it rest until asked, a detail changes, or there is a fresh angle. Answer direct follow-ups in your own words.
-        Use place for where you are now (town in the profile is home). Describe only listed sights, weather, people and directions. A visible person has disclosed nothing. interruptedActivity was what you were doing before this conversation. Its outcome is unknown.
+        Use place for where you are now (town in the profile is home). When asked what you see or saw at a gathering, lead with your own firsthand observation in today or eventWitnesses and its time. Use the actual detail in seen when available. Carry that answer through every reply alternative, including a farewell. "In sight now" describes what you can see. "Earlier today" describes what you saw then. If that was your last sighting, leave its present state open. Landmarks give directions when someone asks the way.
+        Answer a question about company separately. nearbyPeople identifies people near you now. Put someone at a particular event only if your own observation places them there. If the record identifies only the event, describe what you saw and leave its other attendees unknown. A visible person has disclosed nothing. interruptedActivity was what you were doing before this conversation. Its outcome is unknown.
+        Weather, company, place and event status can change between turns. When supplied, previousObservation describes your earlier private visit. Use worldAwareness for the present. Describe a change when both observations support it. From indoors you can remember the rain you saw outside and say whether you can see it now. Retract an earlier statement only if evidence shows it was mistaken at the time.
         heardToday identifies named people you heard discussing an event. With a quote, keep the speaker's actual claim, question or uncertainty. With only a subject, you know they mentioned it. Neither proves the event happened. Discuss dates naturally by season and day.
-        When asked what's on, cover the relevant today entries. A public notice gives an advertised date. It cannot prove attendance or a start. Report status from its source. "Earlier today" gives the time of the report or sighting. Its present status is unknown. An ended event is over. A cancellation needs confirmation. nextNotice is the nearest advertised event overall. For a question about the next festival or joust, use its entry in nextByKind. previousNotice gives a past posted date. Keep unannounced timing unknown. Attribute heardSpeech and dated accounts to their speakers. A plan or promise is a reason to ask whether it happened. Say "I saw you" only with your own recorded observation of that person there. Keep personal follow-ups for privacy when others are nearby.
+        When asked what's on, cover the relevant today entries. A public notice gives an advertised date. Describe a posted gathering as planned until a start is witnessed or announced. A firsthand entry can also be advertised. Use the observation for what happened and the notice for the published date. An ended event is over. A cancellation needs confirmation. nextNotice is the nearest advertised event overall. For a question about the next festival or joust, use its entry in nextByKind. previousNotice gives a past posted date. Keep unannounced timing unknown. Attribute heardSpeech and dated accounts to their speakers. A plan or promise is a reason to ask whether it happened. Keep personal follow-ups for privacy when others are nearby.
         """;
 
     static string? Label(JsonNode? node,int limit=120) =>
@@ -41,9 +43,14 @@ internal static class SpeakerWorld
            source is not ("public notice" or "public announcement" or "firsthand"))return null;
         if((status=="posted")!=(source=="public notice") || next && status!="posted")return null;
         var result=new JsonObject{["title"]=title,["status"]=status,["source"]=source};
-        if(status!="posted" && item.S("when")=="earlier today")result["when"]="earlier today";
+        string when=item.S("when");
+        if((status!="posted" && when=="earlier today") || (status=="active" && source=="firsthand" && when=="in sight now"))
+            result["when"]=when;
+        if(source=="firsthand" && status is ("active" or "ended") && result["when"]!=null)AddText(result,item,"seen");
         AddText(result,item,"place");
         AddDate(result,item);
+        if(source=="firsthand" && result["season"]!=null && result["dayOfSeason"]!=null &&
+           item["advertised"] is JsonValue notice && notice.TryGetValue<bool>(out var advertised) && advertised)result["advertised"]=true;
         return status=="posted" && (result["season"]==null || result["dayOfSeason"]==null) ? null : result;
     }
 
@@ -96,10 +103,9 @@ internal static class SpeakerWorld
         if(data["bystandersPresent"] is JsonValue nearby && nearby.TryGetValue<bool>(out var present) && present)result["bystandersPresent"]=true;
         AddText(result,data,"weather");
         AddText(result,data,"interruptedActivity",220);
-        foreach(string field in new[]{"sights","nearbyPeople"}){
-            var values=Names(data[field],12);
-            if(values.Count>0)result[field]=values;
-        }
+        var sights=Names(data["sights"],12);
+        var people=Names(data["nearbyPeople"],12);
+        if(people.Count>0)result["nearbyPeople"]=people;
         var landmarks=new JsonArray();
         if(data["landmarks"] is JsonArray points)
             foreach(var point in points.OfType<JsonObject>().Take(12))
@@ -108,10 +114,14 @@ internal static class SpeakerWorld
         if(landmarks.Count>0)result["landmarks"]=landmarks;
         var today=new JsonArray();
         if(data["today"] is JsonArray events){
-            foreach(var e in events.Select(x=>Event(x,false)).OfType<JsonObject>())
-                if(e["season"]==null && e["dayOfSeason"]==null && e["year"]==null || SameDate(e,calendar))today.Add(e);
+            foreach(var e in events.Select(x=>Event(x,false)).OfType<JsonObject>()){
+                if((e["season"]!=null || e["dayOfSeason"]!=null || e["year"]!=null) && !SameDate(e,calendar))continue;
+                today.Add(e);
+                if(e.S("when")=="in sight now" && Label(e["seen"]) is {} seen && !sights.Any(s=>s?.ToString()==seen))sights.Add(seen);
+            }
             result["today"]=today;
         }
+        if(sights.Count>0)result["sights"]=sights;
         foreach(string field in new[]{"nextNotice","previousNotice"}){
             if(data[field] is not JsonObject entry || Event(entry,true) is not {} posted)continue;
             var order=DateOrder(entry,nativeDate);

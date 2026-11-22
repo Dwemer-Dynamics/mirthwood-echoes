@@ -38,7 +38,9 @@ public sealed partial class Conversation
         try{
             var head=CueHistory.OptionalId(binding?["head"]);
             var cues=ReadReturnCues(n["returnCues"]);
-            var facts=await Recall(c,a,day,opt,words,binding!=null,head,recentTurns:8,includeVoicedCues:cues!=null,relatedSpeech:true,topics:cues?.ToJsonString(),awareness:dispatch.Awareness);
+            var observedScene=binding==null?null:ObservedScene(dispatch.Awareness,(n["worldAwareness"] as JsonObject)?["observedAt"]);
+            var facts=await Recall(c,a,day,opt,words,binding!=null,head,recentTurns:8,includeVoicedCues:cues!=null,relatedSpeech:true,topics:cues?.ToJsonString(),awareness:dispatch.Awareness,
+                privateObservation:observedScene==null?null:(binding!.S("session"),observedScene));
             if(dispatch.Awareness!=null)facts["worldAwareness"]=dispatch.Awareness;
             var freshCues=FreshReturnCues(cues,facts["recentSpeech"]!.AsArray());
             if(cue!=null)facts["currentInteraction"]=cue;
@@ -98,7 +100,7 @@ public sealed partial class Conversation
             // A short acceptance can refer to a proposal in the preceding two exchanges.
             var prior=facts["recentSpeech"]!.AsArray().TakeLast(2).ToArray();
             if(packet["commitments"] is JsonArray marks)StageProposalReferences(marks,prior,words);
-            var saved=new {topic,flow,choices,endingChoices,continuations,returnCues=cues,playerImpression=impression,learned=CharacterKnowledge.Hints(packet["learned"]),commitments=packet["commitments"],recentSpeech=prior.Select(line=>new {turn=line.S("turn")}),provider=opt.Provider,model,opt.PositiveDesireCostPercent};
+            var saved=new {topic,flow,choices,endingChoices,continuations,returnCues=cues,playerImpression=impression,observedScene,learned=CharacterKnowledge.Hints(packet["learned"]),commitments=packet["commitments"],recentSpeech=prior.Select(line=>new {turn=line.S("turn")}),provider=opt.Provider,model,opt.PositiveDesireCostPercent};
             await db.Run("UPDATE turns SET state='ready',talk=@packet::jsonb,first_ms=@ms WHERE id=@id AND state='pending'",
                 ("packet",JsonSerializer.Serialize(saved,Database.Json)),("ms",(int)timer.ElapsedMilliseconds),("id",id));
         }catch(Exception e){
@@ -107,6 +109,59 @@ public sealed partial class Conversation
                 ("reason",e is UserError?e.Message:"The model did not complete this exchange."),("id",id));
         }
         return PublicTalk((await TalkState(id,c,a,words,binding))!);
+    }
+
+    static JsonObject? ObservedScene(JsonObject? awareness,JsonNode? at)
+    {
+        if(awareness==null || at is not JsonValue timestamp || !timestamp.TryGetValue<double>(out var observedAt) ||
+           !double.IsFinite(observedAt) || Math.Floor(observedAt)!=awareness.I("day"))return null;
+        var scene=new JsonObject();
+        foreach(string field in new[]{"place","weather","nearbyPeople","bystandersPresent"})
+            if(awareness[field] is {} value)scene[field]=value.DeepClone();
+        var firsthand=new JsonArray();
+        if(awareness["today"] is JsonArray today){
+            foreach(var item in today.OfType<JsonObject>()){
+                string when=item.S("when");
+                if(item.S("source")!="firsthand" || item.S("status") is not ("active" or "ended") ||
+                   when is not ("in sight now" or "earlier today"))continue;
+                var sighting=new JsonObject{["title"]=item.S("title"),["status"]=item.S("status"),
+                    ["when"]=when=="in sight now"?"during that conversation":"earlier that day"};
+                if(item["seen"] is {} seen)sighting["seen"]=seen.DeepClone();
+                firsthand.Add(sighting);
+                if(firsthand.Count==6)break;
+            }
+        }
+        if(firsthand.Count>0)scene["firsthand"]=firsthand;
+        if(scene.Count==0)return null;
+        scene["observedAt"]=observedAt;
+        if(awareness["calendar"]?["timeOfDay"] is {} time)scene["timeOfDay"]=time.DeepClone();
+        return scene;
+    }
+
+    // The current speaker packet supplies present knowledge. A missing name or event can
+    // preserve an earlier sighting here without turning the absence into a witnessed departure.
+    static JsonObject? EarlierObservation(JsonObject previous,JsonObject current)
+    {
+        // Three in-game hours cover a return visit. Keep the raw clock off the model input.
+        const double visitWindow=3.0/24;
+        if(previous["observedAt"] is not JsonValue prior || !prior.TryGetValue<double>(out var before) ||
+           current["observedAt"] is not JsonValue latest || !latest.TryGetValue<double>(out var now) ||
+           !double.IsFinite(before) || now<before || now-before>visitWindow)return null;
+        var changed=new JsonObject();
+        foreach(string field in new[]{"place","weather","nearbyPeople","bystandersPresent","firsthand"}){
+            if(previous[field] is not {} earlier || JsonNode.DeepEquals(earlier,current[field]))continue;
+            if(earlier is JsonArray observations){
+                var confirmed=current[field] as JsonArray;
+                var differences=new JsonArray();
+                foreach(var value in observations)
+                    if(value!=null && confirmed?.Any(now=>JsonNode.DeepEquals(value,now))!=true)differences.Add(value.DeepClone());
+                if(differences.Count>0)changed[field]=differences;
+            }else changed[field]=earlier.DeepClone();
+        }
+        if(changed.Count==0)return null;
+        foreach(string field in new[]{"source","day","timeOfDay"})
+            if(previous[field] is {} value)changed[field]=value.DeepClone();
+        return changed;
     }
 
     // A previous turn may expire while the provider is composing the reply. Keep only a

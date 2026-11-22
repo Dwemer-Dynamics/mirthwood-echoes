@@ -40,9 +40,9 @@ For live speech, start **Pocket-TTS (GPU / audio.cpp)** in Dwemer Distro. Echoes
 
 ## What a resident knows about the world
 
-Ask a resident where you are, what is happening today, or when the next public gathering is due. The Grand Joust poster in Brightoak and the festival poster in Mirthwood West give advertised dates. A resident who knows the joust poster can also tell you when to return if you miss this one. A resident who sees a gathering can tell you what they saw and when. Someone who heard the news from another villager can name their source. If you mentioned wanting to attend, a resident can ask how it went. A personal sighting provides separate evidence that you were there.
+Ask a resident where you are, what is happening today, or when the next public gathering is due. The Grand Joust poster in Brightoak and the festival poster in Mirthwood West give advertised dates. A resident familiar with both posters can answer separately about the next joust and the next festival. A resident who sees a gathering can tell you what they saw and when. Someone who heard the news from another villager can name their source. If you mentioned wanting to attend, a resident can ask how it went. A personal sighting provides separate evidence that you were there.
 
-Each new speaker gets their own surroundings, including the native season, day and time of day. A resident can point out a known landmark, recognize someone nearby or mention a task you interrupted when the game supplies that evidence. Private Talk, passing remarks, Group Talk and generated quest dialogue use the same sources. Your subject still leads the conversation. During a quest discussion, the offer in the native portrait sets the terms.
+Each new speaker gets their own surroundings, including the native season, day and time of day. A resident can point out a known landmark, recognize someone nearby or mention a task you interrupted when the game supplies that evidence. Ask about the weather after a resident steps inside and they can recall the rain they saw outdoors earlier that day. Private Talk, passing remarks, Group Talk and generated quest dialogue use the same sources. Your subject still leads the conversation. During a quest discussion, the offer in the native portrait sets the terms.
 
 ## Group Talk
 

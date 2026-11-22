@@ -166,7 +166,7 @@ namespace Mirthwood.Echoes
         {
             const float SightRangeSquared = 9f * 9f;
             internal readonly string Title;
-            readonly Transform[] landmarks;
+            readonly Dictionary<Transform, string> landmarks = new Dictionary<Transform, string>();
             readonly JoustingMiniGame tournament;
             internal readonly Component Incident;
             readonly FieldInfo active;
@@ -182,24 +182,31 @@ namespace Mirthwood.Echoes
                     publicJugglers = root.transform.Find("JOUSTING ARENA/Brightoak Decor/Jugglers");
                     tournament = root.GetComponent<JoustingMiniGame>();
                 }
-                landmarks = root.GetComponentsInChildren<Renderer>(true).Select(r => r.transform)
-                    .Where(t => IsEventLandmark(t, title, publicJugglers)).Distinct().ToArray();
+                foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+                {
+                    var spot = renderer.transform;
+                    string subject = LandmarkSubject(spot, title, publicJugglers);
+                    if (subject != null) landmarks[spot] = subject;
+                }
             }
 
             internal bool Underway => active == null || (Incident && (bool)active.GetValue(Incident));
 
-            internal Transform Visible(NPCController resident)
+            internal Transform Visible(NPCController resident, out string seen)
             {
                 var origin = resident.transform.position;
                 Transform nearest = VisibleStarter(resident);
+                seen = nearest ? "the tournament herald" : null;
                 float limit = nearest ? (nearest.position - origin).sqrMagnitude : SightRangeSquared;
-                foreach (var spot in landmarks)
+                foreach (var landmark in landmarks)
                 {
+                    var spot = landmark.Key;
                     if (!spot) continue;
                     float distance = (spot.position - origin).sqrMagnitude;
                     if (distance <= limit && SpeakerPerception.CanSee(resident, spot))
                     {
                         nearest = spot;
+                        seen = landmark.Value;
                         limit = distance;
                     }
                 }
@@ -223,32 +230,40 @@ namespace Mirthwood.Echoes
             }
         }
 
-        static bool IsEventLandmark(Transform spot, string title, Transform publicJugglers)
+        static string LandmarkSubject(Transform spot, string title, Transform publicJugglers)
         {
             string name = spot.name;
             switch (title)
             {
                 case Joust:
-                    // The mounted track is separate from the two performers at the public Brightoak grounds.
-                    return name == "NPC Jouster" || name.StartsWith("fenceJousting", StringComparison.Ordinal) ||
-                           name.Contains("Joust Dummy") || (publicJugglers && spot.parent == publicJugglers &&
-                           (name == "Dummy Juggler" || name == "Dummy Juggler (2)"));
-                case "Traveling Merchant": return name == "Shop Character";
-                case "Trade Ship": return name.StartsWith("Dummy Trader", StringComparison.Ordinal);
-                case "Town Raid": return name == "banditFlag" || name == "Bandit" || name == "Bandit 2";
-                case "Vermin Plague": return name == "ratNest";
-                case "Werewolf sighting": return name == "Werewolf";
-                case "Yuletide": return name.IndexOf("yuletide", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (publicJugglers && spot.parent == publicJugglers && (name == "Dummy Juggler" || name == "Dummy Juggler (2)"))
+                        return "a juggler at the Grand Joust";
+                    if (name == "NPC Jouster") return "a jouster at the Grand Joust";
+                    if (name.StartsWith("fenceJousting", StringComparison.Ordinal)) return "the tournament fence";
+                    return name.Contains("Joust Dummy") ? "a spectator at the Grand Joust" : null;
+                case "Traveling Merchant": return name == "Shop Character" ? "the traveling merchant" : null;
+                case "Trade Ship": return name.StartsWith("Dummy Trader", StringComparison.Ordinal) ? "a trader" : null;
+                case "Town Raid":
+                    if (name == "banditFlag") return "a bandit banner";
+                    return name == "Bandit" || name == "Bandit 2" ? "a bandit" : null;
+                case "Vermin Plague": return name == "ratNest" ? "a rat nest" : null;
+                case "Werewolf sighting": return name == "Werewolf" ? "a werewolf" : null;
+                case "Yuletide":
+                    if (name.StartsWith("treeSmallYuletide", StringComparison.Ordinal)) return "a Yuletide tree";
+                    return name.IndexOf("yuletide", StringComparison.OrdinalIgnoreCase) >= 0 ? "a Yuletide decoration" : null;
                 case "All Hallows Eve":
-                    if (name.StartsWith("scarecrowPumpkin", StringComparison.Ordinal) || name.StartsWith("ghost", StringComparison.Ordinal))
-                        return true;
+                    if (name.StartsWith("scarecrowPumpkin", StringComparison.Ordinal)) return "a pumpkin scarecrow";
+                    if (name.StartsWith("ghost", StringComparison.Ordinal)) return "a ghost decoration";
                     break;
             }
             // These are the native festival-specific performers and exhibitors. Each
             // celebration can have simultaneous decorations in several settlements.
-            return Festivals.Contains(title) && (name.StartsWith("Dummy Band", StringComparison.Ordinal) ||
-                name.StartsWith("Dummy Juggler", StringComparison.Ordinal) || name == "Dummy Vendor" ||
-                name.StartsWith("flagYellow", StringComparison.Ordinal) || name.StartsWith("flowerPot", StringComparison.Ordinal));
+            if (!Festivals.Contains(title)) return null;
+            if (name.StartsWith("Dummy Band", StringComparison.Ordinal)) return "a festival musician";
+            if (name.StartsWith("Dummy Juggler", StringComparison.Ordinal)) return "a juggler";
+            if (name == "Dummy Vendor") return "a festival vendor";
+            if (name.StartsWith("flagYellow", StringComparison.Ordinal)) return "a yellow flag";
+            return name.StartsWith("flowerPot", StringComparison.Ordinal) ? "a flowerpot" : null;
         }
 
         static Venue VenueFor(Story story)
@@ -341,9 +356,11 @@ namespace Mirthwood.Echoes
         {
             var clock = DayNightCycle.Instance;
             if (!clock || !SaveMaster.IsSlotLoaded() || snapshot == null) return;
-            int day = Mathf.FloorToInt(clock.Now);
+            float observedAt = clock.Now;
+            int day = Mathf.FloorToInt(observedAt);
             int season = Array.IndexOf(Seasons, clock.CurrentSeason);
             snapshot["day"] = day;
+            snapshot["observedAt"] = observedAt;
             if (season < 0 || clock.YearLength < 4) return;
             snapshot["calendar"] = new JObject
             {
@@ -363,6 +380,7 @@ namespace Mirthwood.Echoes
                 bool festival = knowsBrightoak || VisiblePoster(snapshot, "festival poster") || Reached(boards?["Events"], clock.Now);
                 bool joust = knowsBrightoak || VisiblePoster(snapshot, "joust poster") || Reached(boards?["Jousting"], clock.Now);
                 if (festival || joust) AddNotices(snapshot, today, clock, season, knowsBrightoak, festival, joust);
+                var postedToday = today.Keys.ToArray();
 
                 var earlier = TodayIndex(day)["people"][actor] as JObject;
                 if (earlier != null)
@@ -375,17 +393,24 @@ namespace Mirthwood.Echoes
                         if (source != "firsthand" && source != "public announcement") continue;
                         var item = Event(record.Name, ended ? "ended" : "active", source, season, clock.DayOfSeason, clock.YearNumber,
                             (string)entry["place"]);
-                        if (!ended) item["when"] = "earlier today";
+                        item["when"] = "earlier today";
+                        if (source == "firsthand" && entry["seen"]?.Type == JTokenType.String)
+                            item["seen"] = (string)entry["seen"];
                         today[record.Name] = item;
                     }
                 }
                 foreach (var venue in ActiveVenues())
                 {
-                    if (!venue.Visible(speaker)) continue;
+                    if (!venue.Visible(speaker, out string seen)) continue;
                     string place = (snapshot["place"] as JObject)?.Value<string>("name");
-                    today[venue.Title] = Event(venue.Title, "active", "firsthand", season, clock.DayOfSeason, clock.YearNumber, place);
+                    var item = Event(venue.Title, "active", "firsthand", season, clock.DayOfSeason, clock.YearNumber, place);
+                    item["when"] = "in sight now";
+                    item["seen"] = seen;
+                    today[venue.Title] = item;
                 }
                 AddWeatherEvents(snapshot, today, clock, season);
+                foreach (var title in postedToday)
+                    if ((string)today[title]["source"] == "firsthand") today[title]["advertised"] = true;
             }
             snapshot["today"] = new JArray(today.Values);
         }
@@ -399,7 +424,12 @@ namespace Mirthwood.Echoes
             // resident what happened to the player's crops. Full Moon uses ordinary Storm
             // weather, which provides no evidence that the resident can see a full moon.
             if (weather == "Dust Storm")
-                today[weather] = Event(weather, "active", "firsthand", season, clock.DayOfSeason, clock.YearNumber);
+            {
+                var item = Event(weather, "active", "firsthand", season, clock.DayOfSeason, clock.YearNumber);
+                item["when"] = "in sight now";
+                item["seen"] = "a dust storm";
+                today[weather] = item;
+            }
         }
 
         sealed class Board
@@ -461,23 +491,26 @@ namespace Mirthwood.Echoes
                         var old = people[actor]?[venue.Title] as JObject;
                         bool alreadySeen = old != null && SameDay(old, clock) &&
                             (string)old["status"] == "active" && (string)old["source"] == "firsthand";
-                        if (alreadySeen && (bool?)old["withPlayer"] == true) continue;
-                        var visible = venue.Visible(speaker);
+                        bool previousPlayer = alreadySeen && (bool?)old["withPlayer"] == true;
+                        bool previousDetail = alreadySeen && old["seen"]?.Type == JTokenType.String;
+                        if (previousPlayer && previousDetail) continue;
+                        var visible = venue.Visible(speaker, out string seen);
                         if (!visible) continue;
                         bool withPlayer = (player.transform.position - visible.position).sqrMagnitude <= 16f &&
                             (speaker.transform.position - visible.position).sqrMagnitude <= 16f &&
                             SpeakerPerception.CanSee(speaker, player.transform);
                         string playerName = player.CharacterInfo?.name;
                         withPlayer &= !string.IsNullOrWhiteSpace(playerName);
-                        if (alreadySeen && !withPlayer) continue;
+                        if (previousDetail && !withPlayer) continue;
                         string fact = venue.Title == "Werewolf sighting" ? "I saw a werewolf." : "I saw " + venue.Title + " underway.";
                         if (withPlayer) fact += " I saw " + playerName + " there.";
+                        if (venue.Title != "Werewolf sighting") fact += " I saw " + seen + ".";
                         var details = new JObject { ["title"] = venue.Title, ["day"] = day, ["status"] = "active",
-                            ["source"] = "firsthand", ["sawPlayer"] = withPlayer };
+                            ["source"] = "firsthand", ["sawPlayer"] = withPlayer, ["seen"] = seen };
                         if (withPlayer) details["player"] = player.CharacterInfo.id;
                         if (NativeCues.Fact(speaker, "worldEvent", fact, false, details) == null) continue;
                         Child(people, actor)[venue.Title] = new JObject { ["at"] = clock.Now, ["status"] = "active",
-                            ["source"] = "firsthand", ["withPlayer"] = withPlayer };
+                            ["source"] = "firsthand", ["withPlayer"] = previousPlayer || withPlayer, ["seen"] = seen };
                         changed = true;
                     }
                 }
@@ -513,18 +546,18 @@ namespace Mirthwood.Echoes
         {
             internal string Title, Session;
             internal int Day;
-            internal Dictionary<string, NPCController> Witnesses;
+            internal Dictionary<string, (NPCController Speaker, string Seen)> Witnesses;
         }
 
         static Ending Witnesses(Venue venue)
         {
             var clock = DayNightCycle.Instance;
             if (venue == null || !venue.Underway || !clock || !SaveMaster.IsSlotLoaded()) return null;
-            var witnesses = new Dictionary<string, NPCController>(StringComparer.Ordinal);
+            var witnesses = new Dictionary<string, (NPCController, string)>(StringComparer.Ordinal);
             foreach (var npc in TagSystem.AllGameObjectsForTag<NPCController>("npc"))
             {
                 string actor = Actor(npc);
-                if (actor != null && venue.Visible(npc)) witnesses[actor] = npc;
+                if (actor != null && venue.Visible(npc, out string seen)) witnesses[actor] = (npc, seen);
             }
             return witnesses.Count == 0 ? null : new Ending { Title = venue.Title, Session = NativeCues.Session,
                 Day = Mathf.FloorToInt(clock.Now), Witnesses = witnesses };
@@ -543,10 +576,12 @@ namespace Mirthwood.Echoes
                     var records = Child((JObject)index["people"], witness.Key);
                     if (records[ending.Title] is JObject prior && SameDay(prior, clock) && (string)prior["status"] == "ended") continue;
                     var details = new JObject { ["title"] = ending.Title, ["day"] = ending.Day, ["status"] = "ended",
-                        ["source"] = "firsthand" };
+                        ["source"] = "firsthand", ["seen"] = witness.Value.Seen };
                     string fact = ending.Title == "Werewolf sighting" ? "The werewolf I saw was gone." : "I saw " + ending.Title + " end.";
-                    NativeCues.Fact(witness.Value, "worldEvent", fact, false, details);
-                    records[ending.Title] = new JObject { ["at"] = clock.Now, ["status"] = "ended", ["source"] = "firsthand" };
+                    if (ending.Title != "Werewolf sighting") fact += " I saw " + witness.Value.Seen + ".";
+                    NativeCues.Fact(witness.Value.Speaker, "worldEvent", fact, false, details);
+                    records[ending.Title] = new JObject { ["at"] = clock.Now, ["status"] = "ended", ["source"] = "firsthand",
+                        ["seen"] = witness.Value.Seen };
                 }
                 SaveMaster.SetString(SaveKey, index.ToString(Formatting.None));
             }

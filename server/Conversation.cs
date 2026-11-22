@@ -83,7 +83,7 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
         if(d<0)throw new UserError("Load the save in Mirthwood to supply its current calendar day.",409);
         return(native.Describe(actor),d);
     }
-    public async Task<JsonNode> Recall(string c,string a,int day,Options opt,string question,bool scoped=false,Guid? head=null,int recentTurns=2,bool includeVoicedCues=false,bool relatedSpeech=false,bool groupOnly=false,string? topics=null,string[]? audience=null,string currentSpeaker="player",JsonObject? awareness=null)
+    public async Task<JsonNode> Recall(string c,string a,int day,Options opt,string question,bool scoped=false,Guid? head=null,int recentTurns=2,bool includeVoicedCues=false,bool relatedSpeech=false,bool groupOnly=false,string? topics=null,string[]? audience=null,string currentSpeaker="player",JsonObject? awareness=null,(string Load,JsonObject Scene)? privateObservation=null)
     {
         var terms=Regex.Matches(question.ToLowerInvariant(),@"[\p{L}\p{N}]{3,}").Select(m=>m.Value).Where(w=>w is not ("the" or "and" or "you" or "what" or "did" or "that" or "about" or "for")).Distinct().Take(15);
         int? requestedDay=Regex.IsMatch(question,@"\byesterday\b",RegexOptions.IgnoreCase)?day-1:
@@ -110,7 +110,9 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
             ),
             recent AS (
                 SELECT id AS turn,day,left(player_text,300) AS player,left(reply,600) AS npc,started,
-                    CASE WHEN @includeCues AND talk->>'deliveredContinuation'='true' THEN talk->'handoff'->>'cue' END AS "voicedCue"
+                    CASE WHEN @includeCues AND talk->>'deliveredContinuation'='true' THEN talk->'handoff'->>'cue' END AS "voicedCue",
+                    CASE WHEN @explicit AND day=@day AND cue_anchor=id AND cue_binding->>'session'=@observationLoad::text AND jsonb_typeof(talk->'observedScene')='object'
+                      THEN (talk->'observedScene') || jsonb_build_object('source',id,'day',day) END AS observed_scene
                 FROM turns WHERE NOT @groupOnly AND campaign=@c AND actor=@a AND day BETWEEN @earliest AND @day AND state='complete' AND NOT dialogue_expired
                 ORDER BY started DESC,id DESC LIMIT @recentTurns
             )
@@ -141,7 +143,8 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                 FROM named,q WHERE @recallSpeech AND (@listeners::text[] IS NULL OR audience @> @listeners::text[]) AND (mode='group' OR (NOT @groupOnly AND (day<@earliest OR source_type='event'))) AND
                     to_tsvector('english',words||' '||name) @@ q.speech
                 ORDER BY ts_rank(to_tsvector('english',words||' '||name),q.speech) DESC,at DESC,seq DESC,n DESC LIMIT 3)x),
-              'recentSpeech',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(r)-'started') ORDER BY r.started,r.turn),'[]') FROM recent r),
+              'recentSpeech',(SELECT coalesce(jsonb_agg(jsonb_strip_nulls(to_jsonb(r)-'started'-'observed_scene') ORDER BY r.started,r.turn),'[]') FROM recent r),
+              'previousObservation',(SELECT observed_scene FROM recent ORDER BY started DESC,turn DESC LIMIT 1),
               'earlierSpeech',(SELECT jsonb_agg(to_jsonb(x)-'started' ORDER BY x.started,x.turn) FROM (
                 SELECT t.id AS turn,t.day,left(t.player_text,300) AS player,left(t.reply,600) AS npc,t.started
                 FROM turns t CROSS JOIN q
@@ -150,9 +153,13 @@ public sealed partial class Conversation(Database db,Providers providers,Charact
                   AND NOT EXISTS(SELECT FROM recent r WHERE r.turn=t.id) AND s.words @@ q.speech
                 ORDER BY ts_rank_cd(s.words,q.speech) DESC,t.started DESC,t.id DESC LIMIT 2)x)
             )::text
-            """,scoped,head,("terms",string.Join(" | ",terms)),("requestedDay",requestedDay),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech&&!groupOnly),("groupOnly",groupOnly),("listeners",audience),("eventTerms",eventTerms),("hasWorld",awareness!=null),("recallSpeech",recallSpeech),("news",SpeakerWorld.NewsSubjects));
-        if(facts is JsonObject obj)foreach(var key in new[]{"earlierSpeech","heardSpeech","olderActivity","eventWitnesses","eventAccounts","heardToday"})
-            if(obj[key]==null)obj.Remove(key);
+            """,scoped,head,("terms",string.Join(" | ",terms)),("requestedDay",requestedDay),("c",c),("a",a),("day",day),("earliest",day-opt.DailyDays+1),("recentTurns",recentTurns),("includeCues",includeVoicedCues),("related",relatedSpeech&&!groupOnly),("groupOnly",groupOnly),("listeners",audience),("eventTerms",eventTerms),("hasWorld",awareness!=null),("recallSpeech",recallSpeech),("news",SpeakerWorld.NewsSubjects),("observationLoad",privateObservation?.Load));
+        if(facts is JsonObject obj){
+            if(obj["previousObservation"] is JsonObject prior && privateObservation is {} current)
+                obj["previousObservation"]=EarlierObservation(prior,current.Scene);
+            foreach(var key in new[]{"earlierSpeech","heardSpeech","olderActivity","eventWitnesses","eventAccounts","heardToday","previousObservation"})
+                if(obj[key]==null)obj.Remove(key);
+        }
         if(!recallSpeech)return facts!;
         var recaps=await DialogueRecaps.Recall(db,c,a,day,scoped,head,question,audience,currentSpeaker);
         if(recaps is JsonArray {Count:>0})facts!["conversationRecaps"]=recaps;
