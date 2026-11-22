@@ -195,7 +195,8 @@
   },
   "quest": {
     "resident": "Averil",
-    "questDecision": "Yes, I'll do the work on the original terms. By the way, when is the Grand Joust?",
+    "repeatUnrelatedOffer": true,
+    "questDecision": "Yes, I'll gather {items} on the original terms. By the way, when is the Grand Joust?",
     "questQuestion": "Before I decide about the job, what time of year is it here and is anything announced for today?",
     "turns": [
       {
@@ -207,7 +208,7 @@
   },
   "quest-decline": {
     "resident": "Averil",
-    "questDecision": "I'll attend the Grand Joust, but I won't take this job.",
+    "questDecision": "I'll attend the Grand Joust, but I won't gather {items} for this job.",
     "questQuestion": "Before I decide about work, what do the notices say about the Grand Joust today?",
     "declineQuest": true,
     "turns": [
@@ -239,6 +240,29 @@
         "words": "What's one landmark I could use to find my way back here?",
         "check": "Check the direction against the physical landmark and speaker coordinates. The player stands across the doorway.",
         "capture": true
+      }
+    ]
+  },
+  "weather": {
+    "resident": "Averil",
+    "startingDesire": "eager",
+    "turns": [
+      {
+        "calendar": { "season": "Fall", "day": 9, "time": 0.88 },
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside" },
+        "words": "It's late. How does the weather look to you out here?",
+        "check": "Compare the native night and actual weather at the resident. A fair-weather condition at night is not daylight.", "capture": true
+      },
+      {
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside" },
+        "nativePrecipitation": true,
+        "words": "I left my cloak behind. What's the weather doing out here now?",
+        "check": "Use the resident's actual native outdoor precipitation in the spoken reply.", "capture": true
+      },
+      {
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "inside", "playerSide": "outside" },
+        "words": "Can you actually see what the weather's doing now from inside the inn?",
+        "check": "Use the speaker's own indoor sightline and distinguish any earlier outdoor observation.", "capture": true
       }
     ]
   },

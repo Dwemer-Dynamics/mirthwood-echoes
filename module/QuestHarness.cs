@@ -153,6 +153,8 @@ namespace Mirthwood.Echoes
             yield return Await(()=>QuestPanel.Current?.Ready==true,"The offer did not reach the quest editor.",85);
             var panel = QuestPanel.Current;
             play.Record("quest-offer",0,npc,new {request=panel.LastRequest,result=panel.Last,nativeTerms=panel.NativeTerms});
+            var objectives=(JArray)panel.LastRequest["offer"]["objectives"];
+            var items=objectives.Values<string>().Where(x=>x.StartsWith("Gather ",StringComparison.Ordinal)).Select(x=>x.Substring(7)).ToArray();
             string opening = (string)panel.LastRequest["id"];
             float started = Time.realtimeSinceStartup;
             panel.Editor.text=words;
@@ -192,7 +194,29 @@ namespace Mirthwood.Echoes
             RequireQuest(QuestPanel.Current==panel && (string)panel.Last["action"]=="continue" && player.QuestList.Get(quest)==null &&
                 ReferenceEquals(chat.GetDialogueData(),start) && panel.NativeTerms==terms && Friendship(npc)==friendship,
                 "Agreeing to attend the joust resolved or altered the unrelated job.");
-            panel.Editor.text=play.QuestDecision;
+            if(play.RepeatUnrelatedOffer){
+                RequireQuest(items.Length>0,"The generated job has no named gathering objective.");
+                string proposal="I will gather "+items[0]+" molds if you pay more.";
+                for(int i=0;i<2;i++){
+                    string prior=(string)panel.LastRequest["id"];
+                    panel.Editor.text=proposal;panel.Editor.onSubmit.Invoke(proposal);
+                    yield return Await(()=>QuestPanel.Current!=panel || panel.Ready && (string)panel.LastRequest["id"]!=prior,
+                        "The unrelated proposal did not receive an answer.",85);
+                    string visible=null;
+                    if(QuestPanel.Current==panel) yield return Await(()=>{
+                        panel.Portrait.ForceMeshUpdate();visible=panel.Portrait.GetParsedText().Trim();
+                        return visible==new BubbleText((string)panel.Last["reply"],false).Plain.Trim();
+                    },"The quest portrait did not show the reply to the unrelated offer.",24);
+                    play.Record("quest-unrelated-proposal",i,npc,new {request=panel.LastRequest,result=panel.Last,rendered=visible,
+                        journal=player.QuestList.CountQuestsInProgress(quest),originalOffer=ReferenceEquals(chat.GetDialogueData(),start),terms,friendship=Friendship(npc)});
+                    RequireQuest(QuestPanel.Current==panel && (string)panel.Last["action"]=="continue" &&
+                        (bool?)panel.Last["warned"]!=true && player.QuestList.Get(quest)==null &&
+                        ReferenceEquals(chat.GetDialogueData(),start) && panel.NativeTerms==terms && Friendship(npc)==friendship,
+                        "A proposal about a different item altered or warned against the original job.");
+                }
+            }
+            if(play.QuestDecision.Contains("{items}"))RequireQuest(items.Length>0,"Cannot identify the goods in the native offer.");
+            panel.Editor.text=play.QuestDecision.Replace("{items}",string.Join(" and ",items));
             panel.Editor.onSubmit.Invoke(panel.Editor.text);
             yield return Await(()=>QuestPanel.Current==null,"The native decision did not close the offer.",85);
             int count=player.QuestList.CountQuestsInProgress(quest);

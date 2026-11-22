@@ -166,6 +166,19 @@ class AwarenessPlay:
             raise AssertionError("More than one ordinary dialogue call per accepted player turn.")
         if self.plan.get("compareFallPosters") and not self.baseline:
             self.verify_fall_posters(records, observations)
+        if any(step.get("nativePrecipitation") for step in self.plan["turns"]) and not self.baseline:
+            for step, record in zip(self.plan["turns"], records):
+                scene = record["provider"][0]["awareness"]
+                if step["doorway"]["speakerSide"] == "inside":
+                    if not scene.get("place", {}).get("interior") or scene.get("weather"):
+                        raise AssertionError("Indoor Talk borrowed the outdoor weather.")
+                    continue
+                native = {r["condition"] for r in record["source"]["resident"]["weatherVolumes"] if r["condition"]}
+                condition, = native
+                if step.get("nativePrecipitation") and condition == "Sun":
+                    raise AssertionError("The native trial did not establish outdoor precipitation.")
+                if scene.get("weather") != ("clear weather" if condition == "Sun" else condition):
+                    raise AssertionError("The provider weather differs from the outdoor speaker's native region.")
         if self.plan["turns"][0].get("watchResidentWalk") and not self.baseline:
             walking, = [o for o in observations if o["stage"] == "walking-before-talk"]
             active = {task["name"] for task in walking["resident"]["jobs"]
@@ -306,7 +319,10 @@ class AwarenessPlay:
         portrait, = [o for o in observations if o["stage"] == "quest-portrait"]
         intention, = [o for o in observations if o["stage"] == "quest-attendance-intention"]
         outcome, = [o for o in observations if o["stage"] == "quest-outcome"]
-        if self.plan.get("questDecision") and outcome["extra"]["request"]["text"] != self.plan["questDecision"]:
+        objectives = offer["extra"]["request"]["offer"]["objectives"]
+        items = [line.removeprefix("Gather ") for line in objectives if line.startswith("Gather ")]
+        decision = self.plan.get("questDecision", "").replace("{items}", " and ".join(items))
+        if decision and outcome["extra"]["request"]["text"] != decision:
             raise AssertionError("The native decision used different words from the player's mixed-subject response.")
         question = portrait["extra"]
         decline = self.plan.get("declineQuest", False)
@@ -315,10 +331,20 @@ class AwarenessPlay:
         if question["request"]["text"] != self.plan["questQuestion"] or question["result"]["action"] != "continue" or not question["rendered"]:
             raise AssertionError("Missing the incidental answer in the actual quest portrait.")
         calls = [t for t in trace if t["mode"] == "quest" and t["turn"] == question["request"]["id"]]
-        game.write(work / "world-awareness-quest.json", dict(before=before, offer=offer, portrait=portrait, intention=intention, provider=calls, outcome=outcome))
+        proposals = [o for o in observations if o["stage"] == "quest-unrelated-proposal"]
+        if self.plan.get("repeatUnrelatedOffer"):
+            if not items or len(proposals) != 2:
+                raise AssertionError("The two unrelated proposals did not reach the original native job.")
+            for obs in proposals:
+                row = obs["extra"]
+                if (row["request"]["text"] != "I will gather " + items[0] + " molds if you pay more." or
+                        row["result"]["action"] != "continue" or row["result"].get("warned") or row["journal"] or
+                        not row["rendered"] or not row["originalOffer"] or row["friendship"] != before["extra"]["friendship"]):
+                    raise AssertionError("A conditional proposal about a different item changed the native quest.")
+        game.write(work / "world-awareness-quest.json", dict(before=before, offer=offer, portrait=portrait, intention=intention, proposals=proposals, provider=calls, outcome=outcome))
         if intention["extra"]["journal"] or not intention["extra"]["originalOffer"] or intention["extra"]["result"]["action"] != "continue":
             raise AssertionError("The player's intention to attend a joust changed the quest.")
-        steps = [o["extra"]["request"]["id"] for o in (offer,portrait,intention,outcome)]
+        steps = [o["extra"]["request"]["id"] for o in (offer,portrait,intention,*proposals,outcome)]
         if not self.baseline and [t["turn"] for t in trace if t["mode"] == "quest"] != steps:
             raise AssertionError("The quest calls differ from the four accepted native steps.")
         if not self.baseline and (len(calls) != 1 or calls[0]["actor"] != question["request"]["actor"]):

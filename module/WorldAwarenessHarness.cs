@@ -60,6 +60,7 @@ namespace Mirthwood.Echoes
             public int TurnCount => ((JArray)plan["turns"]).Count;
             public string QuestQuestion => (string)plan["questQuestion"];
             public bool DeclineQuest => (bool?)plan["declineQuest"] == true;
+            public bool RepeatUnrelatedOffer => (bool?)plan["repeatUnrelatedOffer"] == true;
             public string QuestDecision => (string)plan["questDecision"] ??
                 (DeclineQuest ? "No thank you. I won't take this job." : "Yes, I'll do the work on the original terms.");
             public bool RetryAddress => (bool?)plan["retryAddress"] == true;
@@ -575,6 +576,16 @@ namespace Mirthwood.Echoes
                     Record("branch-saved", index, npc);
                 }
                 if (step?["doorway"] is JObject door) yield return Doorway(index,npc,door);
+                if ((bool?)step?["nativePrecipitation"] == true) {
+                    var weather=Object.FindObjectOfType<WeatherManager>();
+                    if(!weather || !weather.CurrentRegion) throw new InvalidOperationException("The private scene has no active weather region.");
+                    bool already=weather.GlobalPrecipitation;
+                    string before=weather.CurrentWeatherCondition?.Type;
+                    if(!already) AccessTools.Method(typeof(WeatherManager),"StartPrecipitation").Invoke(weather,null);
+                    yield return Await(()=>weather.GlobalPrecipitation,"The native weather system did not start precipitation.",8);
+                    Record("native-precipitation",index,npc,new {already,before,after=weather.CurrentWeatherCondition?.Type,
+                        region=weather.CurrentRegion.name,globalPrecipitation=weather.GlobalPrecipitation});
+                }
                 if (step?["venue"] is JObject venue) yield return Venue(index,npc,venue);
                 if (step?["returnFromVenue"]?.Type==JTokenType.String) {
                     string eventName=(string)step["returnFromVenue"];
