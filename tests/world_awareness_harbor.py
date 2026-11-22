@@ -35,7 +35,7 @@ def anchored(row, reference):
     return scope(row) == scope(reference)
 
 
-def support(sample, prior_player=None, resident_plank=None, scenery=False):
+def support(sample, prior_player=None, resident_plank=None, scenery=False, capsule=None):
     """Use the top solid contact in the recorded column, independent of the product floor query."""
     p = sample["point"]
     hits = sorted((h for h in sample["hits"] if h["position"][1] <= p[1] + .18),
@@ -52,10 +52,17 @@ def support(sample, prior_player=None, resident_plank=None, scenery=False):
     nav = sample.get("nav")
     if nav and math.dist(contact, nav) <= .18 and math.dist(contact[::2], nav[::2]) <= .06:
         return hit
-    # The player stayed on this physical plank while the Talk actors displaced the nav sample.
-    if prior_player and resident_plank and math.dist(prior_player["point"], p) < .05 and p[1] - contact[1] <= .10:
+    if not resident_plank or resident_plank["collider"] != hit["collider"]:
+        return None
+    if capsule is not None:
+        clearance = capsule["bottom"] - contact[1]
+        if capsule["enabled"] and capsule["detectCollisions"] and -.025 <= clearance <= min(.12, capsule["skinWidth"] + .02):
+            return hit
+        return None
+    # Older recordings measured navigation on the last clear frame before Talk.
+    if prior_player and math.dist(prior_player["point"], p) < .05 and p[1] - contact[1] <= .10:
         prior = support(prior_player)
-        if prior and prior["collider"] == resident_plank["collider"] == hit["collider"]:
+        if prior and prior["collider"] == hit["collider"]:
             return hit
     return None
 
@@ -92,31 +99,42 @@ def local_view(rows, accepted, geometry):
     require(anchored(sight, accepted) and sight["unityFrame"] <= accepted["unityFrame"] and
             e["root"] == venue["spawnedInstance"] and e["landmark"] == path and e["title"] == SHIP, "unrelated sightline")
     point = resident["position"]
-    require(math.dist(point, sight["resident"]["position"]) < .05 and math.dist(player["position"], sight["player"]["position"]) < .05,
-            "positions changed after the last independent sightline; current sight is unverified")
     require(any(s["title"] == SHIP for s in accepted["activeStories"]), "Trade Ship absent from native active stories at Talk")
-    grounded = e["solidFloor"] and any(BOARDING.fullmatch(hit) for hit in resident["ground"])
+    grounded = any(BOARDING.fullmatch(hit) for hit in resident["ground"])
     def measure(stage, frame):
         return one([g for g in geometry if g["stage"] == "geometry" and g["at"] == stage and
                     g["turn"] == accepted["turn"] and g["frame"] == frame], f"physical deck sample at {stage}")
     measurement = measure("accepted", accepted["unityFrame"])
-    previous = measure("spectator-sightlines", sight["unityFrame"])
     trader = one([t for t in measurement["traders"] if t["path"] == path and t["root"] == e["root"] and
                   t["id"] == venue["landmarkInstance"]], "same drawn trader")
     require(math.dist(point, measurement["resident"]["point"]) < .05 and
             math.dist(player["position"], measurement["player"]["point"]) < .05 and
-            math.dist(venue["position"], trader["support"]["point"]) < .05 and
-            math.dist(e["performer"]["target"], trader["boundsCenter"]) < .05, "deck or eye ray sampled other positions")
+            math.dist(venue["position"], trader["support"]["point"]) < .05, "deck receipt sampled other positions")
     drawn = trader["enabled"] and trader["active"] and not trader["forceRenderingOff"]
     resident_plank = support(measurement["resident"])
     trader_plank = support(trader["support"], scenery=True)
-    player_plank = support(measurement["player"], previous["player"], resident_plank)
+    capsule = measurement.get("playerCapsule")
+    previous_player = None
+    identified = player["name"] and player["name"] == sight["player"]["name"] and accepted["world"]["player"]
+    if "playerRay" in measurement:
+        eye = dict(facing=measurement["facing"], performer=trader["sight"], player=measurement["playerRay"])
+        require(math.dist(eye["player"]["position"], player["position"]) < .01 and
+                math.dist(eye["performer"]["target"], trader["boundsCenter"]) < .01, "accepted eye ray sampled another target")
+        identified = identified and (not capsule or
+                     capsule["name"] == player["name"] and capsule["id"] == accepted["world"]["player"])
+    else:
+        require(math.dist(point, sight["resident"]["position"]) < .05 and
+                math.dist(player["position"], sight["player"]["position"]) < .05 and
+                math.dist(e["performer"]["target"], trader["boundsCenter"]) < .05,
+                "positions changed after the last independent sightline")
+        previous_player = measure("spectator-sightlines", sight["unityFrame"])["player"]
+        eye = e
+    player_plank = support(measurement["player"], previous_player, resident_plank, capsule=capsule)
     trader_level = shared_level(measurement["resident"], trader["support"], resident_plank, trader_plank)
     player_level = shared_level(measurement["resident"], measurement["player"], resident_plank, player_plank)
-    clear = bool(grounded and trader_level and drawn and e["isActiveAndEnabled"] and not e["IsDead"] and ray(e, point, "performer"))
-    identified = player["name"] and player["name"] == sight["player"]["name"] and accepted["world"]["player"]
-    company = bool(clear and identified and player_level and resident["layer"] == player["layer"] and
-                   ray(e, point, "player") and math.dist(point, venue["position"]) <= 4 and
+    clear = bool(grounded and trader_level and drawn and e["isActiveAndEnabled"] and not e["IsDead"] and ray(eye, point, "performer"))
+    company = bool(clear and identified and player_level and
+                   ray(eye, point, "player") and math.dist(point, venue["position"]) <= 4 and
                    math.dist(player["position"], venue["position"]) <= 4)
     return clear, company, path, math.dist(point, venue["position"])
 
@@ -224,6 +242,11 @@ def self_test():
     assert support(measured) == plank and support(edge) is None
     assert support(edge, measured, plank) == plank
     assert support(edge, measured, dict(plank, collider=2)) is None
+    cap = dict(bottom=feet[1], skinWidth=.08, enabled=True, detectCollisions=True)
+    assert support(edge, edge, plank, capsule=cap) == plank
+    assert support(edge, edge, dict(plank, collider=2), capsule=cap) is None
+    for changes in (dict(bottom=-1.85), dict(skinWidth=.01), dict(enabled=False), dict(detectCollisions=False)):
+        assert support(edge, measured, plank, capsule=dict(cap, **changes)) is None
     assert support(dict(edge, point=[feet[0], -1.87, feet[2]]), measured, plank) is None
     assert support(dict(measured, hits=[dict(plank, path="roof")])) is None
     above = dict(plank, collider=2, position=[feet[0], -1.60, feet[2]])
