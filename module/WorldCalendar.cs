@@ -18,6 +18,7 @@ using _Mirthwood.Scripts.Demo.Stories;
 using _Mirthwood.Scripts.Demo.Utils;
 using _Mirthwood.Scripts.Demo.Weather;
 using _Mirthwood.Scripts.Localization;
+using _Mirthwood.Scripts.Runtime.Demo.Minigame;
 using _Mirthwood.Scripts.Runtime.Monobehaviors;
 
 namespace Mirthwood.Echoes
@@ -151,6 +152,7 @@ namespace Mirthwood.Echoes
         // Each venue belongs to an actual instance created by a running public story.
         // Renderers on an inactive prefab, a spawn point or a map marker cannot witness it.
         static readonly FieldInfo Spawned = AccessTools.Field(typeof(SpawnPrefabStory), "_spawnedObject");
+        static readonly FieldInfo JoustStarter = AccessTools.Field(typeof(JoustingMiniGame), "npcEventStarter");
         static readonly FieldInfo RaidActive = AccessTools.Field(typeof(BanditRaidController), "_questActive");
         static readonly FieldInfo PlagueActive = AccessTools.Field(typeof(VerminPlagueController), "_questActive");
         // LazyLoadSingleton.Instance instantiates the Storyteller when absent. Dialogue must
@@ -162,8 +164,11 @@ namespace Mirthwood.Echoes
 
         sealed class Venue
         {
+            const float SightRangeSquared = 9f * 9f;
             internal readonly string Title;
             readonly Transform[] landmarks;
+            readonly JoustingMiniGame tournament;
+            readonly NPCChatController starter;
             internal readonly Component Incident;
             readonly FieldInfo active;
 
@@ -172,17 +177,24 @@ namespace Mirthwood.Echoes
                 Title = title;
                 Incident = incident;
                 this.active = active;
+                Transform publicJugglers = null;
+                if (title == Joust)
+                {
+                    publicJugglers = root.transform.Find("JOUSTING ARENA/Brightoak Decor/Jugglers");
+                    tournament = root.GetComponent<JoustingMiniGame>();
+                    if (tournament) starter = JoustStarter?.GetValue(tournament) as NPCChatController;
+                }
                 landmarks = root.GetComponentsInChildren<Renderer>(true).Select(r => r.transform)
-                    .Where(t => IsEventLandmark(t, title)).Distinct().ToArray();
+                    .Where(t => IsEventLandmark(t, title, publicJugglers)).Distinct().ToArray();
             }
 
             internal bool Underway => active == null || (Incident && (bool)active.GetValue(Incident));
 
             internal Transform Visible(NPCController resident)
             {
-                Transform nearest = null;
-                float limit = 81f;
                 var origin = resident.transform.position;
+                Transform nearest = VisibleStarter(resident);
+                float limit = nearest ? (nearest.position - origin).sqrMagnitude : SightRangeSquared;
                 foreach (var spot in landmarks)
                 {
                     if (!spot) continue;
@@ -195,16 +207,31 @@ namespace Mirthwood.Echoes
                 }
                 return nearest;
             }
+
+            Transform VisibleStarter(NPCController resident)
+            {
+                if (!tournament || !tournament.isActiveAndEnabled || !starter || !starter.isActiveAndEnabled ||
+                    !(starter.Character is NPCController herald) || herald == resident) return null;
+                // Stock Mirthwood returns the player beside the starter at the public entrance.
+                // Check that the herald is still there whenever recording attendance.
+                var spot = herald.transform;
+                if (spot != starter.transform || spot.parent != tournament.transform ||
+                    (spot.position - tournament.transform.position).sqrMagnitude > SightRangeSquared ||
+                    (spot.position - resident.transform.position).sqrMagnitude > SightRangeSquared) return null;
+                return SpeakerPerception.CanSee(resident, spot) ? spot : null;
+            }
         }
 
-        static bool IsEventLandmark(Transform spot, string title)
+        static bool IsEventLandmark(Transform spot, string title, Transform publicJugglers)
         {
             string name = spot.name;
             switch (title)
             {
                 case Joust:
+                    // The mounted track is separate from the two performers at the public Brightoak grounds.
                     return name == "NPC Jouster" || name.StartsWith("fenceJousting", StringComparison.Ordinal) ||
-                           name.Contains("Joust Dummy");
+                           name.Contains("Joust Dummy") || (publicJugglers && spot.parent == publicJugglers &&
+                           (name == "Dummy Juggler" || name == "Dummy Juggler (2)"));
                 case "Traveling Merchant": return name == "Shop Character";
                 case "Trade Ship": return name.StartsWith("Dummy Trader", StringComparison.Ordinal);
                 case "Town Raid": return name == "banditFlag" || name == "Bandit" || name == "Bandit 2";
