@@ -27,7 +27,7 @@ internal static partial class DialogueRecaps
         public string Address => $"{Source:D}/{Position}/{Sentence}";
     }
     sealed record Account(PartKey Key,string Note,string[] Terms,bool SameVisit);
-    sealed record SpokenEvent(string Verb,string[] Objects,bool PointsBack);
+    sealed record SpokenEvent(string Verb,string[] Object,string[] Qualifier,bool PointsBack);
 
     // Compare the predicate at the same grammatical position in both clauses. A pronoun
     // object can leave the object unspecified. An impersonal subject supplies no action.
@@ -35,6 +35,11 @@ internal static partial class DialogueRecaps
         @"they and others|the (?:speaker|addressee)|(?!(?:it|this|that|the|a|an)\b)[\p{L}’'-]+(?: (?-i:\p{Lu})[\p{L}’'-]*)*)\s+" +
         @"(?:(?:may|might|can|could|will|would|should|must|did|not|never)\s+)*(?<verb>[\p{L}’'-]+)\b(?<object>.*)$",RegexOptions.IgnoreCase);
     static readonly Regex ObjectReference = new(@"^(?:it|them|this|that|these|those)\b",RegexOptions.IgnoreCase);
+    static readonly Regex Qualifier = new(@"\b(?:at|in|on|by|near|beside|alongside|under|beneath|over|above|below|behind|beyond|outside|inside|across|through|around|with|from|to|for|of|before|after|during|until|while|when|unless|because)\b|[,;:]",RegexOptions.IgnoreCase);
+
+    static string[] Phrase(string text) => Words.Matches(text.ToLowerInvariant().Replace('’','\'')
+        .Replace("the speaker's","my").Replace("the addressee's","your")).Select(m=>m.Value)
+        .Where(word=>word is not ("the" or "a" or "an")).ToArray();
 
     static SpokenEvent? Event(string clause)
     {
@@ -43,7 +48,9 @@ internal static partial class DialogueRecaps
         string verb = match.Groups["verb"].Value.ToLowerInvariant();
         if(verb is "is" or "are" or "was" or "were" or "am" or "be" or "have" or "has" or "had") return null;
         string rest = match.Groups["object"].Value.Trim();
-        return new(verb,Terms(rest),match.Groups["cleft"].Success || ObjectReference.IsMatch(rest));
+        int end = Qualifier.Match(rest) is {Success:true} qualifier ? qualifier.Index : rest.Length;
+        return new(verb,Phrase(ObjectReference.Replace(rest[..end],"",1)),Phrase(rest[end..]),
+            match.Groups["cleft"].Success || ObjectReference.IsMatch(rest));
     }
 
     static bool SameWord(string a,string b) => a==b || EventWords.Any(forms=>forms.Contains(a) && forms.Contains(b));
@@ -53,7 +60,8 @@ internal static partial class DialogueRecaps
         if(action==null) return false;
         string? clause = note.StartsWith("Said ",StringComparison.Ordinal) ? note["Said ".Length..] :
             note.StartsWith("Recounted “",StringComparison.Ordinal) ? note["Recounted “".Length..] : null;
-        return clause!=null && Event(clause) is {} prior && SameWord(action.Verb,prior.Verb) && Includes(prior.Objects,action.Objects);
+        return clause!=null && Event(clause) is {} prior && SameWord(action.Verb,prior.Verb) &&
+            prior.Object.AsSpan().EndsWith(action.Object) && prior.Qualifier.AsSpan().StartsWith(action.Qualifier);
     }
 
     static PartKey? ChooseTarget(Source row,List<Account> grounded,List<Account> eligible,Part[] local,bool fallback,bool denial)
@@ -113,7 +121,7 @@ internal static partial class DialogueRecaps
             var accounts = local.Select(p=>new Account(new(row.Id,row.Position,p.Index),p.Note,p.Terms,true)).ToList();
             bool fallback = bare && action?.PointsBack!=true;
             if(subject!=null || action!=null || local.Length==0)
-                await AddEarlierAccounts(conn,row,subject ?? (action==null ? [] : [action.Verb]),fallback,accounts,ct);
+                await AddEarlierAccounts(conn,row,subject ?? (action==null ? [] : [action.Verb,..action.Object]),fallback,accounts,ct);
             var grounded = accounts.Where(a=>subject!=null ? subject.Length>0 && Includes(a.Terms,subject) : Describes(action,a.Note)).ToList();
             var continued = subject==null ? grounded : grounded.Where(a=>Describes(action,a.Note)).ToList();
             var target = ChooseTarget(row,continued.Count>0 ? continued : grounded,accounts,local,fallback,denial);

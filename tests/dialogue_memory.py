@@ -680,6 +680,14 @@ def check(api, beat, world, campaign, residents, sql, calls, waiting, release, m
     assert "correction" not in concordance(sail,"Who stitched the torn sail?",385)[0]
     banner = concordance(needlework,"Who stitched the blue banner?",385)[0]
     assert banner["sentence"]==1 and "Mara stitched the blue banner" in banner["correction"]["note"], banner
+    beat(420)
+    painted_cart = exchange([("player",averil,"I painted the red handcart for the cooper.")])
+    visit, (shutters,corrected) = exchange([("player",averil,"I painted the shutters beside the red handcart."),
+                                            ("player",averil,"I was mistaken. It was Nia who painted the red handcart.")])
+    beat(421)
+    cooper = concordance(painted_cart,"What did I paint for the cooper?",420)[0]
+    assert cooper["correction"]["source"]==corrected and "Nia" in cooper["note"], cooper
+    assert "correction" not in concordance((visit,[shutters]),"Who painted the shutters?",420)[0]
     print("PASS incidental scenery preserves uncertainty, and a repeated action selects its source across visits and inline grants.",flush=True)
     memory_model("historian")
     print("PASS Talk and journal agree on sourced roles, recipients, corrections and unresolved claims after an unavailable overnight model.", flush=True)
