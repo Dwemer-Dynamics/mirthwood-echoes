@@ -249,6 +249,9 @@ class AwarenessPlay:
         if not venue:
             return
         firsthand = [e for e in call["awareness"].get("today", []) if e["title"] == title and e["source"] == "firsthand"]
+        if step.get("keepVenueActive") and (not firsthand or any(
+                e.get("when") != "earlier today" or not e.get("seen") or e.get("playerInSight") for e in firsthand)):
+            raise AssertionError("The remote conversation lacks the earlier, event-only sighting.")
         if venue.get("view") == "blocked":
             if firsthand:
                 raise AssertionError("The blocked spectator received a firsthand sighting. Check the performers and the prior visit.")

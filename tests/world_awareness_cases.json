@@ -419,23 +419,35 @@
   "joust-witness-only": {
     "resident": "Drystan",
     "startingDesire": "eager",
+    "attendanceEvent": "Grand Joust",
     "turns": [
       {
         "calendar": {"season": "Spring", "day": 14, "time": 0.44},
         "doorway": {"building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside", "openSky": true},
-        "words": "I'd like to go to the joust today. Has it started?",
-        "check": "Identify what is posted before any personal sighting."
+        "attendance": "unknown",
+        "words": "I'm thinking of going to the joust. Have you seen me there yet?",
+        "check": "The resident has the public notice and the player's intention before seeing the gathering."
       },
       {
         "venue": {"title": "Grand Joust", "landmark": "Dummy Juggler", "view": "event-only"},
-        "words": "What can you see at the gathering? Did you see me with the performers?",
-        "check": "The resident could see a performer independently of seeing the player.",
+        "returnFromVenue": "Grand Joust",
+        "keepVenueActive": true,
+        "words": "From back here, what did you see at the joust? Did you see me there with the performers?",
+        "check": "Ask away from the still active venue after the resident saw the juggler with Michael behind him.",
+        "capture": true
+      },
+      {
+        "venue": {"title": "Grand Joust", "landmark": "Dummy Juggler"},
+        "attendance": "witnessed",
+        "words": "Now that we're here together, what can you see? Am I here with you this time?",
+        "check": "A later shared view establishes the player's attendance after the first conversation.",
         "capture": true
       },
       {
         "returnFromVenue": "Grand Joust",
-        "words": "What did you see at the joust? Can you tell if it is still going on from here?",
-        "check": "Attribute any earlier performance and leave the remote ending unknown."
+        "attendance": "witnessed",
+        "words": "Back in town, do you remember seeing me there? Can you still tell if the joust is going on?",
+        "check": "Remember the later shared visit and leave the remote ending unknown."
       }
     ]
   },

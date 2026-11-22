@@ -551,6 +551,7 @@ namespace Mirthwood.Echoes
                     agent.isStopped=true;
                     RecordSight("arrival");
                     PositionSpectator(npc,mark,observer.transform,view);
+                    var heldPosition=npc.transform.position;
                     Record("at-venue",index,npc,new {title,root=root.name,landmark=PathOf(mark.transform),position=At(spot),
                         speakerDistance=Vector3.Distance(npc.transform.position,spot),playerDistance=Vector3.Distance(observer.transform.position,spot),
                         spawnedInstance=root.GetInstanceID(),landmarkInstance=mark.GetInstanceID(),
@@ -560,8 +561,11 @@ namespace Mirthwood.Echoes
                     // Keep the measured sightlines through that tick and through an actual ending.
                     float until=Time.realtimeSinceStartup+3f;
                     do {
+                        // A new native work task can resume the agent while this copied sightline is being measured.
+                        agent.isStopped=true;
+                        if((npc.transform.position-heldPosition).sqrMagnitude>.0004f)StageGuest(npc,heldPosition);
                         GroupGathering.Face(npc,spot);
-                        yield return new WaitForSecondsRealtime(.15f);
+                        yield return null;
                     } while(Time.realtimeSinceStartup<until);
                     RecordSight("before departure");
                     if(!RequestedView(npc,mark,observer.transform,view))
@@ -579,7 +583,7 @@ namespace Mirthwood.Echoes
                 void RecordSight(string phase)
                 {
                     object Sight(Transform target, Vector3 point) {
-                        return new {position=At(target.position),target=At(point),clear=ClearView(npc,target,point),
+                        return new {position=At(target.position),target=At(point),clear=ClearView(npc,target,point),facingCosine=FacingCosine(npc,point),
                             blockers=Obstructions(npc,target,point).OrderBy(h=>h.distance)
                                 .Select(h=>new {collider=PathOf(h.transform),h.distance}).ToArray()};
                     }
@@ -601,10 +605,15 @@ namespace Mirthwood.Echoes
 
             static bool ClearView(NPCController npc,Transform target,Vector3 point)
             {
-                var facing=npc.DataContainer.data.FacingDirection;
-                var direction=point-npc.transform.position;
-                return target.gameObject.activeInHierarchy && Mathf.Abs(target.position.y-npc.transform.position.y)<1.4f &&
-                    facing.x*direction.x+facing.z*direction.z>0 && !Obstructions(npc,target,point).Any();
+                return target.gameObject.activeInHierarchy && Mathf.Abs(target.position.y-npc.transform.position.y)<=1.4f &&
+                    FacingCosine(npc,point)>=0 && !Obstructions(npc,target,point).Any();
+            }
+
+            static float FacingCosine(NPCController npc,Vector3 point)
+            {
+                var facing=Vector3.ProjectOnPlane(npc.DataContainer.data.FacingDirection,Vector3.up);
+                var direction=Vector3.ProjectOnPlane(point-npc.transform.position,Vector3.up);
+                return facing.sqrMagnitude<.01f ? -1f : Vector3.Dot(facing.normalized,direction.normalized);
             }
 
             static bool RequestedView(NPCController npc,Renderer mark,Transform player,string view)
@@ -613,6 +622,8 @@ namespace Mirthwood.Echoes
                     !mark.enabled || mark.forceRenderingOff || !mark.gameObject.activeInHierarchy)return false;
                 bool seesPerformer=ClearView(npc,mark.transform,mark.bounds.center);
                 bool seesPlayer=ClearView(npc,player,player.position+Vector3.up*.95f);
+                // An unobstructed side-on player is in the game's forward half-plane.
+                if(view=="event-only" && FacingCosine(npc,player.position)>-.35f)return false;
                 return seesPerformer==(view!="blocked") && seesPlayer==(view!="event-only");
             }
 
@@ -620,13 +631,17 @@ namespace Mirthwood.Echoes
             {
                 if(RequestedView(npc,mark,player,view))return;
                 var original=npc.transform.position;
-                foreach(float radius in new[]{1.4f,1.85f,2.35f,1.05f}){
-                    for(int i=0;i<16;i++){
-                        var spot=player.position+Quaternion.Euler(0,i*22.5f,0)*Vector3.forward*radius;
-                        if(!NavMesh.SamplePosition(spot,out var hit,1f,NavMesh.AllAreas) || !SolidFloor(hit.position) ||
+                bool rear=view=="event-only";
+                var radii=rear ? new[]{1.5f,2f,2.4f,1.1f} : new[]{1.4f,1.85f,2.35f,1.05f};
+                int directions=rear?24:16;
+                foreach(float radius in radii){
+                    for(int i=0;i<directions;i++){
+                        var spot=player.position+Quaternion.Euler(0,i*360f/directions,0)*Vector3.forward*radius;
+                        if(!NavMesh.SamplePosition(spot,out var hit,rear ? .45f : 1f,NavMesh.AllAreas) || !SolidFloor(hit.position) ||
                             Vector3.Distance(hit.position,mark.transform.position)>3.85f || Vector3.Distance(hit.position,player.position)>2.65f)continue;
                         StageGuest(npc,hit.position);
                         GroupGathering.Face(npc,mark.transform.position);
+                        Physics.SyncTransforms();
                         if(RequestedView(npc,mark,player,view))return;
                     }
                 }
@@ -743,9 +758,16 @@ namespace Mirthwood.Echoes
                     Record("left-venue",index,npc,new {eventName,distance});
                     var teller=Object.FindObjectOfType<Storyteller>();
                     if(!teller || !teller.HasActiveStory(eventName))throw new InvalidOperationException("The remote event is already absent.");
-                    teller.EndStory(eventName);
-                    yield return Await(()=>!teller.HasActiveStory(eventName),"The remote event did not end.",8);
-                    Record("remote-event-ended",index,npc,new {eventName});
+                    if((bool?)step["keepVenueActive"]==true) {
+                        float playerDistance=Vector3.Distance(PlayerCharacterController.Instance.transform.position,recentVenue.Value);
+                        if(playerDistance<20)throw new InvalidOperationException("The player is still beside the event.");
+                        Record("left-active-venue",index,npc,new {eventName,distance,playerDistance});
+                    }
+                    else {
+                        teller.EndStory(eventName);
+                        yield return Await(()=>!teller.HasActiveStory(eventName),"The remote event did not end.",8);
+                        Record("remote-event-ended",index,npc,new {eventName});
+                    }
                 }
                 Record("before-visit", index, npc, step);
             }
