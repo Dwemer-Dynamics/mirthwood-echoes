@@ -1,6 +1,6 @@
 # Mirthwood: Echoes development command centre
 
-Use one coordinator for a batch and one owner per independent player-facing outcome. The module, server, journal, companion and installer live in [one repository](https://github.com/Dwemer-Dynamics/mirthwood-echoes). A change spanning them can travel in one PR.
+For substantial Echoes work, the coordinator assigns one separate user-visible build chat per independent outcome by default. Give one owner the whole change across the module, server, journal, companion and installer when they share a contract. Those components live in [one repository](https://github.com/Dwemer-Dynamics/mirthwood-echoes). A small status or management action can stay with the coordinator.
 
 | Place | What it contains |
 | --- | --- |
@@ -14,7 +14,7 @@ Use the [coordinator prompt](templates/COORDINATOR.md) to start a new Echoes com
 
 Read the [project rules](../../AGENTS.md) and [build and harness guide](../../README.md). Verify the checkout's physical path, origin, branch and HEAD, working changes, linked worktrees and open Echoes PRs. Check active Echoes chats for overlapping paths or a shared game, companion, database fixture or validation run. Resume the assigned owner when appropriate. An idle chat can still own a handoff.
 
-Keep the live [programme, ledger and checklist](templates) together **outside** the checkout. On Windows, the default is the current user's Documents folder under `Codex/Mirthwood-Echoes-Command-Centre`. Keep source and portable templates here and local task IDs, decisions and receipts in that folder. Record the user's current scope, authority, owners, dependencies, last evidence and next deliverable. Reuse existing records across restarts. Give each worker its own brief and exact released paths. Check new handoffs when reported.
+Keep the live [programme, ledger and checklist](templates) together **outside** the checkout. On Windows, the default is the current user's Documents folder under `Codex/Mirthwood-Echoes-Command-Centre`. The coordinator maintains the user's decisions and assignments in the programme, PR and evidence links in the ledger, and observable done conditions in the checklist. Reuse these Echoes records across restarts.
 
 For a fresh checkout, use Windows PowerShell 7, Python 3.11 or later, Node, Git, GitHub CLI and the .NET 10 SDK. Discover the licensed Mirthwood Steam installation and obtain the loader archive specified by the build script. The WSL fixtures use a prepared Echoes account, .NET 10 and PostgreSQL. Set the validator's `--game-dir`, `--loader-zip` and `--distro` when their defaults differ. Codex discovers the nine skills in this project's `.agents/skills` folder.
 
@@ -30,9 +30,17 @@ For a fresh checkout, use Windows PowerShell 7, Python 3.11 or later, Node, Git,
 | Merge a reviewed PR under recorded authority | [Review and merge](../../.agents/skills/echoes-review-merge/SKILL.md) |
 | Install and verify the server package | [Local deployment](../../.agents/skills/echoes-local-deploy/SKILL.md) |
 
+## Assign and follow a build
+
+Select the Echoes project and give the owner the [worker brief](templates/WORKER.md), including the exact base, paths, dependencies, authority and acceptance. Set `model: gpt-6.2-astra` and `thinking: max` in the Codex call for each new visible Echoes coding or coordination worker and each follow-up assignment. Continue in the same chat when its ownership carries forward. Record its ID and check the executing turn when available. If a saved setting changes mid-turn, preserve the work and verify the setting on the resumed turn. If the host cannot apply the requested settings, report the limitation and obtain the maintainer's choice before substituting another model. Independent Claude review and the player's conversation model use their own settings.
+
+The coordinator follows the assigned chats with bounded waits and saved status cursors. Check the owner's evidence when an outcome, dependency or blocker changes. Before handing off shared paths, identify the commit, released paths, acceptance already verified and any continuing ownership. Allocate the validation lane, copied-save harness and playable updater separately as needed. Recheck each resource just before use and record its restoration or any exception before passing it on.
+
+The build owner hands back the draft and the evidence listed under Delivery in the [worker brief](templates/WORKER.md). The coordinator verifies the handoff and controls integration. Use existing GitHub access under the authority recorded for that PR or batch. A blocked action goes back with its reason and evidence.
+
 ## Git and validation
 
-Fetch the shared branch before assigning a job. A worktree is another working folder for the same Git history. Its branch holds one job's commits. Run these commands from the clean development checkout with the job's own path and name.
+Fetch the shared branch before assigning a job. A worktree is another working folder for the same Git history. Its branch holds one job's commits. In Codex desktop, create the managed worktree from the fetched Echoes `origin/unstable`, use the returned folder, and create the job's `codex/<task>` branch there if it starts detached. Verify the physical path, branch and base. For a command-line checkout, use the job's own path and name.
 
 ```powershell
 git fetch --prune origin
@@ -49,7 +57,7 @@ py -3 scripts/validate-change.py run --base origin/unstable
 
 A push uploads a branch. A draft PR presents its commits for review. Record an independent Claude verdict on the exact head. A merge puts that reviewed change on the target branch after user authorisation. The coordinator verifies the remote head, merge commit, measured outcome and open acceptance items.
 
-Before removing a finished worktree, retain its receipt outside the worktree. If deployment, tester distribution or a handoff needs the candidate, retain the complete run directory, including the server package. Verify the destination against the receipt, record both locations and the receipt's SHA-256 in the ledger, and keep the last verified copy. Fast-forward a clean shared checkout, remove the released worktree with Git and retire its verified merged branch. Archive finished chats under the applicable storage policy when authorised.
+Retain completed receipts and required packages under `E:\CodexStorage\Projects\MirthwoodEchoes`. If deployment, tester distribution or a handoff needs the candidate, retain the complete run directory, including the server package. Verify the destination against the receipt, record both locations and the receipt's SHA-256 in the ledger, and keep the last verified copy. Fast-forward a clean shared checkout. Before removing a released worktree with Git, check that its active chats and harness consumers have usable working directories. Retire its verified merged branch. When archiving a finished chat, follow the current storage policy for full available history, exact native originals and project-scoped lessons on E:.
 
 ## How the module reaches the player
 
@@ -68,4 +76,4 @@ The installed server checks the manifest and installs `BepInEx/plugins/Mirthwood
 
 The prepared WSL distro can host other products. Operate only the Echoes unit, console and database. Honour the companion's start, minimize and close behavior. For approved gameplay checks, use the copied-save harness, verify the original save and backup afterward, and distinguish native observation, fixture output and live-provider results. Keep a release candidate's package receipt until its deployment or handoff is complete.
 
-For a requested unstable tester distribution, deliver one `Mirthwood-Echoes-Server-<version>.zip` containing the qualified server, bundled module and loader, companion, updater, player instructions and the package's required assets. Extract the resulting ZIP to an empty directory and run `verify-package` on the extracted package with the retained receipt. Record the source SHA, ZIP SHA-256 and verified distribution link in the ledger. When the batch includes the user's Google Drive, use the Echoes destination and keep its sharing settings. Exclude worktrees, saves, provider configuration, databases and diagnostics.
+For a requested unstable tester distribution, retain one `Mirthwood-Echoes-Server-<version>.zip` in the Echoes project folder on E:. Include the qualified server, bundled module and loader, companion, updater, player instructions and the package's required assets. Extract the ZIP to an empty directory and run `verify-package` on the extracted package with the retained receipt. Record the source SHA, inventory, ZIP SHA-256 and verified local path in the ledger. External distribution requires separate user authority for the destination. Exclude worktrees, saves, provider configuration, databases and diagnostics.
