@@ -170,8 +170,27 @@ def literal(call):
 
 def named_witness(call, player, day):
     recall = json.JSONDecoder().raw_decode(call["system"].split("Recall: ", 1)[1])[0]
-    return any(w["day"] == day and SHIP in w["description"] and f"I saw {player} there." in w["description"]
-               for w in recall.get("eventWitnesses", []))
+    primary = [w for w in recall.get("eventWitnesses", []) if w["day"] == day]
+    other = [w for w in recall.get("daily", []) if w["day"] == day and w["kind"] == "worldEvent"]
+    older = recall.get("olderActivity") or {}
+    if older.get("day") == day and older.get("kind") == "worldEvent":
+        other.append(dict(older, description=older["experience"]))
+    previous = recall.get("previousObservation") or {}
+    if previous.get("day") == day:
+        other.extend(previous.get("witnessedSince", []))
+    # Tie alternate projections of the same native cue together. Check the name independently
+    # of the template which describes company, including variants that mention only the trader.
+    ship = re.compile(r"\b(?:trade ship|trader)\b", re.IGNORECASE)
+    name = re.compile(rf"(?<!\w){re.escape(player)}(?!\w)", re.IGNORECASE)
+    sources = {w["source"] for w in primary + other if w.get("source") and ship.search(w["description"])}
+
+    def names_player(w):
+        same_event = w.get("source") in sources or ship.search(w["description"])
+        return same_event and (name.search(w["description"]) or w.get("sawPlayerBeforePreviousTalk") is True)
+
+    prior_company = previous.get("day") == day and any(
+        sight.get("title") == SHIP and sight.get("sawPlayer") is True for sight in previous.get("firsthand", []))
+    return any(map(names_player, primary)), prior_company or any(map(names_player, primary + other))
 
 
 def run(directory):
@@ -242,7 +261,8 @@ def run(directory):
                         math.dist(source["player"]["position"], spot) > 9, "remote Talk is still at the measured venue")
             check_scene(frozen, when, company, "accepted snapshot")
             check_scene(projected, when, company, "literal provider input")
-            require(named_witness(call, source["player"]["name"], source["world"]["day"]) == (stamp in named_attendance),
+            expected_name = stamp in named_attendance
+            require(named_witness(call, source["player"]["name"], source["world"]["day"]) == (expected_name, expected_name),
                     "named attendance in recall differs from the observed company")
         except (ValueError, TypeError, KeyError, IndexError) as exc:
             failures.append(f"Turn {index + 1}: {exc}")
@@ -289,12 +309,24 @@ def self_test():
         except ValueError:
             continue
         raise AssertionError("unwitnessed current company passed")
-    account = {"day": 58, "description": "I saw Trade Ship underway. I saw Michael there. I saw a trader."}
-    call = {"system": "Recall: " + json.dumps({"eventWitnesses": [account]})}
-    assert named_witness(call, "Michael", 58) and not named_witness(call, "Michael", 59)
-    assert not named_witness(call, "Graham", 58)
+    account = {"day": 58, "source": "ship-cue", "description": "I saw Trade Ship underway. I saw Michael there. I saw a trader."}
+
+    def company(name="Michael", day=58, **extra):
+        call = {"system": "Recall: " + json.dumps(dict(eventWitnesses=[account], **extra))}
+        return named_witness(call, name, day)
+
+    assert company() == (True, True) and company(day=59) == (False, False)
+    assert company("Graham") == (False, False)
+    account["description"] = "Michael stood by the trader."
+    assert company() == (True, True) and company("Micha") == (False, False)
     account["description"] = "I saw Trade Ship underway. I saw a trader."
-    assert not named_witness({"system": "Recall: " + json.dumps({"eventWitnesses": [account]})}, "Michael", 58)
+    assert company() == (False, False)
+    leak = dict(account, kind="worldEvent", description="Michael stood on the planks.")
+    assert company(daily=[leak]) == (False, True)
+    assert company(previousObservation=dict(day=58, witnessedSince=[leak])) == (False, True)
+    assert company(previousObservation=dict(day=58, firsthand=[dict(title=SHIP, sawPlayer=True)])) == (False, True)
+    assert company(olderActivity=dict(leak, experience="I saw Michael there.")) == (False, True)
+    assert company(heardToday=[dict(speaker="Michael", quote="I saw a trader.")]) == (False, False)
     print("Harbor footing, ray, upper-floor, shared, unknown and dated-company controls passed.")
 
 

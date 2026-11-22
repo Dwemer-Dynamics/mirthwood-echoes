@@ -13,32 +13,31 @@ public sealed partial class Conversation
             SELECT seq,source,speaker,name,addressed,words,audience,day FROM named WHERE mode='group' AND session=@session
         ), common AS (
             SELECT seq,source AS id,speaker,name,addressed,words FROM circle WHERE audience @> @listeners ORDER BY seq DESC LIMIT 14
-        ), latest AS (SELECT * FROM common ORDER BY seq DESC LIMIT 1), earlier AS (
-            SELECT c.*,regexp_replace(c.words,'\*[^*]+\*','','g') AS speech FROM circle c,latest l
-            WHERE c.day=@day AND c.seq<l.seq ORDER BY c.seq DESC LIMIT 14
-        ), focus AS (
+        ), latest AS (SELECT * FROM common ORDER BY seq DESC LIMIT 1), focus AS (
             SELECT DISTINCT word,plainto_tsquery('english',word) AS term FROM latest l
             CROSS JOIN LATERAL regexp_split_to_table(lower(regexp_replace(l.words,'\*[^*]+\*','','g')),'[^[:alnum:]]+') word
-            WHERE l.speaker<>@a AND l.addressed IN (@a,'group') AND length(word)>1
+            WHERE l.speaker='player' AND l.addressed IN (@a,'group') AND length(word)>1
               AND numnode(plainto_tsquery('english',word))>0
-              AND NOT to_tsvector('english','see saw seen hear heard say said tell told know knew mention source firsthand earlier remember recall')
+              AND NOT to_tsvector('english','can could would did anyone someone somebody yourself firsthand personally see saw seen hear heard say said tell told know knew mention source account story earlier remember recall')
                       @@ plainto_tsquery('english',word)
-              AND NOT EXISTS(SELECT FROM circle person WHERE to_tsvector('simple',person.name) @@ plainto_tsquery('simple',word))
-        ), matched AS (
-            SELECT e.*,ARRAY(SELECT word FROM focus WHERE to_tsvector('english',e.speech) @@ term ORDER BY word LIMIT 4) AS subjects
-            FROM earlier e WHERE e.speaker<>@a AND NOT e.audience @> @listeners
-        ), relay AS (
-            SELECT * FROM matched WHERE cardinality(subjects)>0
-            ORDER BY cardinality(subjects) DESC,(addressed=@a) DESC,seq DESC LIMIT 1
+              AND NOT EXISTS(SELECT FROM actors person WHERE person.campaign=@c AND person.key=@a
+                  AND to_tsvector('simple',person.name) @@ plainto_tsquery('simple',word))
+        ), pairs AS (
+            SELECT r.seq,r.source,r.name AS teller,r.words AS delivered,p.source AS original,p.name AS claimant,p.words AS request,
+                you.name AS recipient FROM circle r JOIN circle p ON p.seq=r.seq-1
+            JOIN actors you ON you.campaign=@c AND you.key=@a CROSS JOIN latest l
+            WHERE l.speaker='player' AND l.addressed IN (@a,'group') AND r.seq<l.seq AND r.day=@day AND p.day=@day
+              AND r.addressed=@a AND p.speaker='player' AND p.addressed=r.speaker AND r.speaker<>@a
+              AND NOT r.audience @> @listeners AND r.audience @> p.audience AND p.audience @> r.audience
+            ORDER BY r.seq DESC LIMIT 14
         )
         SELECT jsonb_build_object('common',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY seq),'[]') FROM common c),
-            'earlierSource',(SELECT jsonb_strip_nulls(jsonb_build_object('source',r.source,'heardFrom',r.name,
-                'addressedToYou',r.addressed=@a,'subjectInCurrentLine',r.subjects,'inReplyTo',(
-                    SELECT jsonb_build_object('source',p.source,'speaker',p.name) FROM earlier p
-                    WHERE p.seq=r.seq-1 AND p.addressed=r.speaker AND p.speaker<>r.speaker
-                      AND to_tsvector('simple',r.speech) @@ phraseto_tsquery('simple',p.name)
-                      AND EXISTS(SELECT FROM focus WHERE word=ANY(r.subjects) AND to_tsvector('english',p.speech) @@ term)
-                    LIMIT 1))) FROM relay r))::text
+            'pairs',(SELECT coalesce(jsonb_agg(to_jsonb(p) || jsonb_build_object('subjects',
+                ARRAY(SELECT word FROM focus ORDER BY word LIMIT 4)) ORDER BY p.seq DESC),'[]') FROM pairs p
+                CROSS JOIN LATERAL regexp_match(regexp_replace(p.delivered,'\*[^*]+\*','','g'),'([[:alnum:]][^.!?…;\r\n]*)') report
+                WHERE EXISTS(SELECT FROM focus) AND NOT EXISTS(SELECT FROM focus
+                    WHERE NOT to_tsvector('english',report[1]) @@ term OR NOT
+                        to_tsvector('english',p.claimant||' '||regexp_replace(p.request,'\*[^*]+\*','','g')) @@ term)))::text
         """;
 
     async Task<JsonObject> GenerateGroupReply(JsonObject input,CancellationToken ct)
@@ -67,7 +66,7 @@ public sealed partial class Conversation
         var opt=await providers.Options();
         var recall=await Recall(c,a,day,opt,question,true,head,groupOnly:true,topics:input.S("cue"),audience:listeners,currentSpeaker:latest.S("speaker"),awareness:dispatch.Awareness);
         var memory=new JsonObject{["daily"]=recall["daily"]?.DeepClone(),["olderActivity"]=recall["olderActivity"]?.DeepClone()};
-        if(history["earlierSource"] is JsonObject earlierSource)memory["earlierGroupSource"]=earlierSource.DeepClone();
+        if(GroupRelay.Source(question,history["pairs"]!.AsArray()) is JsonObject attribution)memory["earlierGroupSource"]=attribution;
         if(recall["characterKnowledge"]!=null)memory["characterKnowledge"]=recall["characterKnowledge"]!.DeepClone();
         if(recall["conversationRecaps"]!=null)memory["conversationRecaps"]=recall["conversationRecaps"]!.DeepClone();
         if(recall["heardSpeech"]!=null)memory["heardSpeech"]=recall["heardSpeech"]!.DeepClone();
@@ -90,6 +89,7 @@ public sealed partial class Conversation
         const string instructions="""
             You are one resident in a small Mirthwood conversation with the player and other residents.
             Speak only as the resident identified by yourKey. Read heardInOrder with its real speakers and addressees.
+            If the player asks you to pass their observation to someone here, address that person and name the player in a short sentence. Keep the player's words for what they observed.
             Answer the last speaker or unanswered question in character, including another villager. Address them by a natural detail.
             A nativeCue is a suggestion when a topic has room to move. Develop a subject or bridge to another without repeating.
             Use one or two short spoken sentences. Only observable physical actions go between single asterisks. Actually tell jokes.
@@ -115,9 +115,8 @@ public sealed partial class Conversation
         var output=new StringBuilder();
         string sourceGuidance=memory.ContainsKey("earlierGroupSource") ? """
 
-            earlierGroupSource records whom you personally heard discussing the subject now raised. When asked how you know, credit heardFrom.
-            inReplyTo identifies the preceding speaker named in that reply. Keep the earlier account and its teller distinct. Claim personal sight only with your own evidence.
-            Keep to what the present circle has heard. If naming the source would expose a confidence, acknowledge hearing it earlier and save the detail for its original listeners.
+            Respond to the source question from earlierGroupSource. At the player's request, heardFrom told you the account originally given by inReplyTo.speaker.
+            Name the teller and credit the original account in your own voice. Only its subject has been raised again here. Speak to who told you, and claim personal sight only with your own evidence.
             """ : "";
         await providers.Generate(opt with {ReplyTokens=Math.Max(opt.ReplyTokens,550)},instructions+"\n"+DialogueRecaps.Instructions+"\n"+CharacterKnowledge.Instructions+dispatch.Guidance+sourceGuidance,prompt.ToJsonString(),
             part=>{if(output.Length+part.Length>5000)throw new UserError("The group reply was too long.",502);output.Append(part);return Task.CompletedTask;},ct,dispatch:dispatch);

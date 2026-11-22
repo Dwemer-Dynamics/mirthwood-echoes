@@ -523,25 +523,83 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         response, packet = generate("/api/dialogue/group", request)
         projected = context(packet)
         assert response["previous"] == question_id == projected["heardInOrder"][-1]["id"]
-        assert all(row["seq"] >= 4 for row in projected["heardInOrder"])
+        assert all(row["id"] not in (original_claim, delivered_relay) for row in projected["heardInOrder"])
         for restricted in ("copper", "red ledger", "old kiln", "turquoise locket"):
             assert restricted not in json.dumps(projected).casefold()
-        return request, response, projected["yourMemory"].get("earlierGroupSource")
+        source = projected["yourMemory"].get("earlierGroupSource")
+        assert ("earlierGroupSource" in packet["messages"][0]["content"]) == (source is not None)
+        return request, response, source
 
     original_claim = group_line(1, "player", visitor, original_listeners,
-                                "I saw a copper streamer by the field. Would you tell Miller about it?")
+                                "I collect Grand Joust pennants. I saw a copper streamer by the field. Would you tell Miller about it?")
     delivered_relay = group_line(2, visitor, speaker, original_listeners,
-                                 "Miller, Test player saw a copper streamer by the field. I'll keep the red ledger here.")
-    group_line(3, speaker, visitor, original_listeners, "Thank you, Linn. I remember the streamer.")
+                                 "Miller, Test player saw a copper streamer by the field.")
+    group_line(3, speaker, visitor, original_listeners, "Thank you, Linn. I'll keep the red ledger here.")
     source_question = "Did you see the streamer yourself, or did you hear about it here?"
+    default_group_answer = model.samples["group speaker"]
+    model.samples["group speaker"] = json.dumps(dict(words="I will.", to="player", promise="I will.",
+        proposal=dict(source=delivered_relay, quote="Miller, Test player saw a copper streamer by the field."),
+        receivedTopic="Small Talk", ownTopic="Small Talk"))
     request, response, earlier = relay_question(4, speaker, source_question)
+    model.samples["group speaker"] = default_group_answer
+    assert response.get("promise") == "I will." and "proposal" not in response
     assert earlier == dict(source=delivered_relay, heardFrom="Linn", addressedToYou=True,
                            subjectInCurrentLine=["streamer"], inReplyTo=dict(source=original_claim, speaker="Test player"))
     assert without_generation("/api/dialogue/group", request) == response
     assert relay_question(5, twin, source_question)[2] is None
     assert relay_question(6, speaker, "Could we speak about my brother?")[2] is None
+    assert relay_question(7, speaker, "Who told you about the fox by the field?")[2] is None
+    assert relay_question(8, speaker, "Who told you that the Grand Joust was underway?")[2] is None
+    assert relay_question(9, speaker, "The streamer was a fine sight.")[2] is None
+    for seq in range(10, 25):
+        group_line(seq, "player", speaker, expanded_circle, "Thank you for your company.")
+    assert relay_question(25, speaker, "Who told you about the streamers?")[2]["source"] == delivered_relay
     world["cueHead"] = before_relay
-    assert relay_question(4, speaker, source_question)[2] is None
+    assert relay_question(1, speaker, source_question)[2] is None
+    world["cueHead"] = before_relay
+    # A request for directions supplies no directions. Naming the player in an unrelated
+    # sentence also does not make them the source of this resident's answer.
+    group_line(1, "player", visitor, original_listeners, "Where is the nearest public notice? Could you point it out? I saw a poster by the bridge.")
+    group_line(2, visitor, speaker, original_listeners, "Test player is visiting. A poster stands by the inn.")
+    assert relay_question(3, speaker, "Which public notices can you point to?")[2] is None
+    assert relay_question(4, speaker, "Did you hear about the poster?")[2] is None
+    for claim, relay in (
+        ("Good morning.", "My red streamer tore in the wind."),
+        ("Good morning.", "Keep this between us. I lost the turquoise locket."),
+        ("I saw a copper streamer by the field. Could you tell Miller what I saw?",
+         "Test player saw a copper streamer by the field. Please keep it between us."),
+        ("Keep this in confidence. I saw a copper streamer by the field. Could you tell Miller what I saw?",
+         "Test player saw a copper streamer by the field."),
+        ("I saw a copper streamer by the field. Could you tell Miller what I saw?",
+         "Test player did not see a copper streamer by the field."),
+        ("I spotted a copper streamer by the field. Could you tell Miller what I saw?",
+         "Test player saw a silver streamer near the field."),
+        ("I spotted a copper streamer by the field. Could you tell Miller what I saw?",
+         "Test player saw a copper streamer near the mill."),
+        ("I collect pennants. I saw a copper streamer by the field. Could you tell Miller what I saw?",
+         "Test player saw a copper streamer by the field. He collects wages for the reeve.")):
+        world["cueHead"] = before_relay
+        group_line(1, "player", visitor, original_listeners, claim)
+        group_line(2, visitor, speaker, original_listeners, relay)
+        inquiry = "Who mentioned the locket?" if "locket" in relay else "Has anyone mentioned a streamer by the field?"
+        assert relay_question(3, speaker, inquiry)[2] is None
+    for claim, relay in (
+        ("Collecting Grand Joust pennants is my favorite pastime. I saw a copper streamer by the field. Could you tell Miller what I saw?",
+         "Miller, Test player says he saw a copper streamer by the field. He collects Grand Joust pennants, you know."),
+        ("I spotted a copper streamer by the field. Please tell Miller about it.",
+         "Miller, Test player says he saw a copper streamer near the field.")):
+        world["cueHead"] = before_relay
+        player_source = group_line(1, "player", visitor, original_listeners, claim)
+        teller_source = group_line(2, visitor, speaker, original_listeners, relay)
+        selected = relay_question(3, speaker, "Miller, who told you about the streamer?")[2]
+        assert selected["source"] == teller_source and selected["inReplyTo"]["source"] == player_source
+        assert relay_question(4, speaker, "Who told you about the Grand Joust pennants?")[2] is None
+    world["cueHead"] = before_relay
+    for seq, color in ((1, "blue"), (3, "red")):
+        group_line(seq, "player", visitor, original_listeners, f"I saw a {color} streamer. Please tell Miller about it.")
+        group_line(seq+1, visitor, speaker, original_listeners, f"Miller, Test player said they saw a {color} streamer.")
+    assert relay_question(5, speaker, "Who told you about the streamer?")[2] is None
+    assert relay_question(6, speaker, "Who told you about the blue streamer?")[2]["heardFrom"] == "Linn"
     world["cueHead"] = before_relay
     beat()
     checked("a group hearer retains the relay's source after a late join, with separate claimant, private words, replay and rewind")
