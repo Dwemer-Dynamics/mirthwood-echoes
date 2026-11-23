@@ -10,21 +10,29 @@ internal static class GroupRelay
     static readonly Regex Sentence=new(@"[.!?…;\r\n]+");
     static readonly Regex SourceQuestion=new(@"^(?:(?:so|and|then) )?(?:(?:who|whom|where|how)\b.{0,70}\b(?:tell|told|mention(?:ed)?|say|said|hear|heard|learn(?:ed)?|know|source)|(?:did|have|has|was|were|is)\b.{0,90}\b(?:hear|heard|mention(?:ed)?|told|tell|firsthand|yourself|there in person))\b",Options);
     static readonly Regex Confidence=new(@"\b(?:privat\w*|secret\w*|confiden\w*|between (?:us|you and me)|keep (?:quiet|it to)|(?:only|just) (?:tell|between)|(?:don.t|do not|never) (?:want|tell|say|share|repeat|mention))\b",Options);
+    // A stated preference about disclosure qualifies the invitation even when phrased as a pastime.
+    static readonly Regex DisclosurePreference=new(@"\b(?:privacy|secrecy|anonym(?:ity|ous(?:ly)?)|discre(?:tion|et(?:ly)?)|incognito|nameless|un(?:named|identified|credited)|(?:my|our) (?:name|identity))\b",Options);
     static readonly Regex Words=new(@"[^\p{L}\p{Nd}]+");
     static readonly Regex Reported=new(@"^(?:said|says|reported|told me|tells me|mentioned)(?: that)? (?:he|she|they) ",Options);
-    // Allow a common modifier or a short proper name before the hobby noun.
-    // Further clauses leave the player's directions for the relay unresolved.
-    const string HobbyObject=@"(?:(?i:a|an|the) )?(?:\p{L}+ |(?:\p{Lu}\p{L}* ){2,3})?\p{L}+";
-    static readonly Regex Pastime=new(@"^(?<activity>(?i:\p{L}+ing) "+HobbyObject+
+    // A collection can have a short common or proper name. An open-ended preference or
+    // gerund can also be a request for discretion. Admit recognizable activities and interests.
+    const string Modifier=@"(?:(?i:a|an|the) )?(?:\p{L}+ |(?:\p{Lu}\p{L}* ){2,3})?";
+    const string HobbyObject=Modifier+@"\p{L}+";
+    const string InterestNoun=Modifier+@"(?i:games?|sports?|puzzles?|cards|chess|music|fiddle|lute|books?|stories|arts?|crafts?|surprises)";
+    const string Activity=@"(?:(?i:collecting|studying|reading|painting|growing|drawing|cooking|gardening|fishing|crafting)(?: "+HobbyObject+
+        @")?|(?i:playing) "+InterestNoun+@"|(?i:(?:staying|being|keeping) (?:active|fit|outdoors)|keeping (?:bees|livestock)))";
+    static readonly Regex Pastime=new(@"^(?<activity>"+Activity+
         @") (?i:is (?:one of )?my (?:favou?rite )?(?:hobb(?:y|ies)|pastimes?|interests?))$",RegexOptions.CultureInvariant);
     static readonly Regex Sight=new(@"^(?:saw|spotted|noticed|observed|caught sight of) ",Options);
     static readonly Regex Proximity=new(@"\b(?:by|beside|near|close to|next to) (?=(?:a|an|the|that|this) )",Options);
     static readonly Regex ContractedNegative=new(@"\b(did|could)n['’]t\b",Options);
     static readonly Regex Negative=new(@"\b(?:no|not|never|neither|none|nothing|nobody|[a-z]+n t)\b",Options);
     static readonly Regex DeniedSight=new(@"\b(?:(?<scope>did not|could not) (?:see|spot|notice|observe)|(?<scope>never) (?:saw|spotted|noticed|observed))\b",Options);
+    static readonly Regex ReportSubject=new(@"\b(?:told|tell|said|say|mention(?:ed)?|hear|heard|learn(?:ed)?|know) (?:you |me )?(?:that )?(?<observer>.+)$",Options);
     static readonly Regex AskedAboutSight=new(@"\b(?:see|saw|seen|spot|spotted|observe|observed)\b",Options);
     static readonly Regex OtherObservation=new(@"^(?:heard|found|met|visited|watched|witnessed) ",Options);
-    static readonly Regex Interest=new(@"^(?i:i (?:collect|enjoy|like|love|study|play|read|paint|grow)) "+HobbyObject+"$",RegexOptions.CultureInvariant);
+    static readonly Regex Interest=new(@"^(?i:i )(?:(?i:collect|study|read|paint|grow) "+HobbyObject+
+        @"|(?i:play) "+InterestNoun+@"|(?i:enjoy|like|love) (?:"+Activity+"|"+InterestNoun+"))$",RegexOptions.CultureInvariant);
     static readonly Regex ExtraClause=new(@"\b(?:and|but|or|unless|until|though|although|because|however|if|when|whether|please|you|your|must|should|might|would|could|may)\b",Options);
     enum Attribution { Unrelated, Unresolved, Teller, NamedAccount, DeniedSighting }
 
@@ -62,6 +70,9 @@ internal static class GroupRelay
 
     static string[] Sentences(string words,bool preserveCase=false)=>Sentence.Split(Action.Replace(words," "))
         .Select(text=>preserveCase?Tokens(text):Plain(text)).Where(text=>text.Length>0).ToArray();
+
+    static bool Confidential(string words)=>Confidence.IsMatch(words)||
+        Action.Matches(words).Any(aside=>DisclosurePreference.IsMatch(aside.Value));
 
     static bool HasUnboundClause(string words,string addressee,string trailingCourtesy)
     {
@@ -124,13 +135,13 @@ internal static class GroupRelay
         var preface=player[..^2].Select(line=>WithoutAddress(line,teller)).ToArray();
         // Another permitted account of the subject remains a possible rival even when its
         // wording is too uncertain or private to identify its teller to the larger circle.
-        if(resident.Length is <1 or >2 || Confidence.IsMatch(request)||Confidence.IsMatch(delivered)||delivered.Contains('?'))return Attribution.Unresolved;
+        if(resident.Length is <1 or >2 || Confidential(request)||Confidential(delivered)||delivered.Contains('?'))return Attribution.Unresolved;
         if(HasUnboundClause(request,(string)pair["teller"]!,"please") ||
            HasUnboundClause(delivered,(string)pair["recipient"]!,"you know"))return Attribution.Unresolved;
         // Account for the whole request before identifying either person to a new audience.
         // A single-clause self-description can accompany the request. Other directions or
         // qualifications have unknown disclosure scope, even when the final invitation is clear.
-        if(preface.Any(line=>ExtraClause.IsMatch(line)|| !(Pastime.IsMatch(line)||Interest.IsMatch(line))))return Attribution.Unresolved;
+        if(preface.Any(line=>DisclosurePreference.IsMatch(line)||ExtraClause.IsMatch(line)|| !(Pastime.IsMatch(line)||Interest.IsMatch(line))))return Attribution.Unresolved;
         var retold=WithoutAddress(resident[0],recipient);
         bool named=retold.StartsWith(claimant+" ",StringComparison.Ordinal);
         var expected=Account(original[2..]);
@@ -144,8 +155,8 @@ internal static class GroupRelay
             // The same negative verb can belong to the teller or another observer. Bind it
             // to the original claimant (the player asking), with its scope intact.
             string before=inquiry[..asked.Index].TrimEnd(),after=inquiry[(asked.Index+asked.Length)..];
-            if(Negative.IsMatch(before)||Negative.IsMatch(after)||
-                !(before.EndsWith(" "+claimant,StringComparison.Ordinal)||before.EndsWith(" i",StringComparison.Ordinal)))return Attribution.Unresolved;
+            var observer=ReportSubject.Match(before).Groups["observer"].Value;
+            if(Negative.IsMatch(before)||Negative.IsMatch(after)||(observer!="i"&&observer!=claimant))return Attribution.Unresolved;
         }else if(ExtraClause.IsMatch(expected) || !Sight.IsMatch(expected) &&
             (AskedAboutSight.IsMatch(inquiry)||!OtherObservation.IsMatch(expected)))return Attribution.Unresolved;
         string account=named?Account(Reported.Replace(retold[(claimant.Length+1)..],"",1)):retold;

@@ -600,10 +600,6 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     for claim, relay in (
         ("I enjoy surprises. I saw a copper streamer by the field. Please tell Miller about it.",
          "Test player saw a copper streamer by the field."),
-        ("I like board games. I saw a copper streamer by the field. Please tell Miller about it.",
-         "Test player saw a copper streamer by the field."),
-        ("I collect fishing lures. I saw a copper streamer by the field. Please tell Miller about it.",
-         "Test player saw a copper streamer by the field."),
         ("Collecting Grand Joust pennants is my favorite pastime. I saw a copper streamer by the field. Could you tell Miller what I saw?",
          "Miller, Test player says he saw a copper streamer by the field. He collects Grand Joust pennants, you know."),
         ("I spotted a copper streamer by the field. Please tell Miller about it.",
@@ -616,6 +612,23 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         selected = relay_question(3, speaker, "Miller, who told you about the streamer?")[2]
         assert selected["source"] == teller_source and selected["inReplyTo"]["source"] == player_source
         assert relay_question(4, speaker, "Who told you about the Grand Joust pennants?")[2] is None
+    for preface, disclose in (
+        ("I like board games.", True), ("I collect fishing lures.", True), ("I like playing chess.", True),
+        ("I like staying active.", True), ("Playing chess is my favorite pastime.", True),
+        ("I like being anonymous.", False), ("I like staying unnamed.", False), ("I like discretion.", False),
+        ("I enjoy anonymity.", False), ("I like my privacy.", False), ("I like being discreet.", False),
+        ("Staying anonymous is my favorite pastime.", False), ("I like remaining unrecognised.", False),
+        ("I like withholding names.", False), ("I like lying low.", False), ("I like keeping mum.", False),
+        ("I like playing coy.", False), ("*I ask for discretion.*", False),
+    ):
+        world["cueHead"] = before_relay
+        claim = group_line(1, "player", visitor, original_listeners,
+                           f"Linn, {preface} I saw a copper streamer by the field. Please tell Miller about it.")
+        delivered = group_line(2, visitor, speaker, original_listeners, "Miller, Test player saw a copper streamer by the field.")
+        selected = relay_question(3, speaker, "Miller, who told you about the streamer?")[2]
+        expected = dict(source=delivered, heardFrom="Linn", addressedToYou=True, subjectInCurrentLine=["streamer"],
+                        inReplyTo=dict(source=claim, speaker="Test player"))
+        assert selected == (expected if disclose else None), preface
     world["cueHead"] = before_relay
     group_line(1, "player", visitor, original_listeners, "I saw a copper streamer by the field. Please tell Miller about it.")
     unnamed = group_line(2, visitor, speaker, original_listeners, "Miller, there was a copper streamer by the field.")
@@ -650,8 +663,17 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     assert relay_question(22, speaker, "Who didn't tell you Test player couldn't see the streamer by the field?")[2] is None
     assert relay_question(23, speaker, "Who told you that you couldn't see the streamer by the field?")[2] is None
     assert relay_question(24, twin, question)[2] is None
+    assert relay_question(25, speaker, "Who told you that you and I couldn't see the streamer by the field?")[2] is None
+    assert relay_question(26, speaker, "Who told you that I and you couldn't see the streamer by the field?")[2] is None
+    named = relay_question(27, speaker, "Did you hear that Test player couldn't see the streamer by the field?")[2]
+    assert named == dict(expected, subjectInCurrentLine=["field", "player", "streamer", "test"])
     world["cueHead"] = before_relay
     assert relay_question(1, speaker, question)[2] is None
+    world["cueHead"] = before_relay
+    group_line(1, "player", visitor, original_listeners, "I never saw a copper streamer by the field. Please tell Miller about it.")
+    group_line(2, visitor, speaker, original_listeners, "Miller, Test player never saw a copper streamer by the field.")
+    assert relay_question(3, speaker, "Who told you I never saw the streamer by the field?")[2]["reportedSighting"] == "denied"
+    assert relay_question(4, speaker, "Who told you I didn't see the streamer by the field?")[2] is None
     world["cueHead"] = before_relay
     for seq, color in ((1, "blue"), (3, "red")):
         group_line(seq, "player", visitor, original_listeners, f"I saw a {color} streamer. Please tell Miller about it.")
