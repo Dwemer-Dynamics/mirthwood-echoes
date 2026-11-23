@@ -9,6 +9,11 @@ internal static class GroupRelay
     static readonly Regex Action=new(@"\*[^*]*\*");
     static readonly Regex Sentence=new(@"[.!?…;\r\n]+");
     static readonly Regex SourceQuestion=new(@"^(?:(?:so|and|then) )?(?:(?:who|whom|where|how)\b.{0,70}\b(?:tell|told|mention(?:ed)?|say|said|hear|heard|learn(?:ed)?|know|source)|(?:did|have|has|was|were|is)\b.{0,90}\b(?:hear|heard|mention(?:ed)?|told|tell|firsthand|yourself|there in person))\b",Options);
+    const string QuestionWord=@"(?:who|whom|whose|where|when|why|what|which|how|do|does|did|have|has|is|are|was|were|can|could|will|would|should)";
+    static readonly Regex QuestionStart=new(@"^(?:(?:so|and|or|then|but) )?"+QuestionWord+@"\b",Options);
+    static readonly Regex JoinedQuestion=new(@"(?:,\s*(?:(?:and|or|but)\s+)?|\s+(?:and|or|but)\s+)(?="+QuestionWord+@"\b)",Options);
+    static readonly Regex OwnSight=new(@"^(?:did you (?:personally |actually )?(?:see|observe|witness)|have you (?:personally |actually )?(?:seen|observed|witnessed)) (?<object>.+?)(?: yourself| firsthand| in person)?$",Options);
+    static readonly Regex EvidenceOnly=new(@"^(?:were you there(?: yourself| in person)?|did you (?:just |only )?hear (?:about )?(?:it|this|that)(?: here)?)$",Options);
     static readonly Regex Confidence=new(@"\b(?:privat\w*|secret\w*|confiden\w*|between (?:us|you and me)|keep (?:quiet|it to)|(?:only|just) (?:tell|between)|(?:don.t|do not|never) (?:want|tell|say|share|repeat|mention))\b",Options);
     // A stated preference about disclosure qualifies the invitation even when phrased as a pastime.
     static readonly Regex DisclosurePreference=new(@"\b(?:privacy|secrecy|anonym(?:ity|ous(?:ly)?)|discre(?:tion|et(?:ly)?)|incognito|nameless|un(?:named|identified|credited)|(?:my|our) (?:name|identity))\b",Options);
@@ -29,7 +34,7 @@ internal static class GroupRelay
     static readonly Regex Negative=new(@"\b(?:no|not|never|neither|none|nothing|nobody|[a-z]+n t)\b",Options);
     static readonly Regex DeniedSight=new(@"\b(?:(?<scope>did not|could not) (?:see|spot|notice|observe)|(?<scope>never) (?:saw|spotted|noticed|observed))\b",Options);
     static readonly Regex ReportSubject=new(@"\b(?:told|tell|said|say|mention(?:ed)?|hear|heard|learn(?:ed)?|know) (?:you |me )?(?:that )?(?<observer>.+)$",Options);
-    static readonly Regex AskedAboutSight=new(@"\b(?:see|saw|seen|spot|spotted|observe|observed)\b",Options);
+    static readonly Regex AskedAboutSight=new(@"\b(?:see|saw|seen|spot|spotted|observe|observed|witness|witnessed)\b",Options);
     static readonly Regex OtherObservation=new(@"^(?:heard|found|met|visited|watched|witnessed) ",Options);
     static readonly Regex Interest=new(@"^(?i:i )(?:(?i:collect|study|read|paint|grow) "+HobbyObject+
         @"|(?i:play) "+InterestNoun+@"|(?i:enjoy|like|love) (?:"+Activity+"|"+InterestNoun+"))$",RegexOptions.CultureInvariant);
@@ -39,14 +44,23 @@ internal static class GroupRelay
     internal static JsonObject? Source(string question,JsonArray pairs)
     {
         if(pairs.Count==0)return null;
-        var questions=Sentences(question);
+        var sentences=Sentence.Split(Action.Replace(question," "));
         JsonObject? match=null;
         foreach(var pair in pairs.OfType<JsonObject>()){
             var recipient=Plain((string)pair["recipient"]!);
-            var inquiry=questions.Select(line=>WithoutAddress(line,recipient)).Where(line=>SourceQuestion.IsMatch(line)).ToArray();
+            var inquiry=sentences.Where(line=>QuestionStart.IsMatch(WithoutAddress(Plain(line),recipient)))
+                .SelectMany(line=>JoinedQuestion.Split(line)).Select(line=>WithoutAddress(Plain(line),recipient))
+                .Where(line=>QuestionStart.IsMatch(line)).ToArray();
             if(inquiry.Length==0)continue;
-            if(inquiry.Length!=1)return null;
-            var attribution=RequestedAccount(pair,inquiry[0]);
+            if(inquiry.Length>2)return null;
+            var main=inquiry[0];
+            if(inquiry.Length==2){
+                bool first=ClarifiesEvidence(inquiry[0],inquiry[1]),second=ClarifiesEvidence(inquiry[1],inquiry[0]);
+                if(first==second)return null;
+                if(first)main=inquiry[1];
+            }
+            if(!SourceQuestion.IsMatch(main))continue;
+            var attribution=RequestedAccount(pair,main,inquiry.Any(AskedAboutSight.IsMatch));
             if(attribution==Attribution.Unrelated)continue;
             if(attribution==Attribution.Unresolved || match!=null)return null;
             match=new JsonObject{["source"]=pair["source"]!.DeepClone(),["heardFrom"]=pair["teller"]!.DeepClone(),
@@ -60,6 +74,17 @@ internal static class GroupRelay
 
     static string Tokens(string value)=>Words.Replace(ContractedNegative.Replace(value,"$1 not")," ").Trim();
     static string Plain(string value)=>Tokens(value).ToLowerInvariant();
+
+    // The player can ask who told the resident and whether they saw it themselves.
+    // Link the two questions only when the clarification refers back to the same report.
+    static bool ClarifiesEvidence(string question,string main)
+    {
+        if(EvidenceOnly.IsMatch(question))return true;
+        var sight=OwnSight.Match(question);
+        if(!sight.Success)return false;
+        var topic=sight.Groups["object"].Value;
+        return topic is "it" or "this" or "that" || main.EndsWith(" about "+topic,StringComparison.Ordinal);
+    }
 
     static string WithoutAddress(string line,string person)
     {
@@ -117,7 +142,7 @@ internal static class GroupRelay
         return false;
     }
 
-    static Attribution RequestedAccount(JsonObject pair,string inquiry)
+    static Attribution RequestedAccount(JsonObject pair,string inquiry,bool asksAboutSight)
     {
         string teller=Plain((string)pair["teller"]!),recipient=Plain((string)pair["recipient"]!),claimant=Plain((string)pair["claimant"]!);
         string request=(string)pair["request"]!,delivered=(string)pair["delivered"]!;
@@ -158,7 +183,7 @@ internal static class GroupRelay
             var observer=ReportSubject.Match(before).Groups["observer"].Value;
             if(Negative.IsMatch(before)||Negative.IsMatch(after)||(observer!="i"&&observer!=claimant))return Attribution.Unresolved;
         }else if(ExtraClause.IsMatch(expected) || !Sight.IsMatch(expected) &&
-            (AskedAboutSight.IsMatch(inquiry)||!OtherObservation.IsMatch(expected)))return Attribution.Unresolved;
+            (asksAboutSight||!OtherObservation.IsMatch(expected)))return Attribution.Unresolved;
         string account=named?Account(Reported.Replace(retold[(claimant.Length+1)..],"",1)):retold;
         if(resident.Length==2){
             // Resolve one indefinite object only if the resulting whole report agrees.

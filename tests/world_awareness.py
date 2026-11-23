@@ -630,6 +630,27 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         expected = dict(source=delivered, heardFrom="Linn", addressedToYou=True, subjectInCurrentLine=["streamer"],
                         inReplyTo=dict(source=claim, speaker="Test player"))
         assert selected == (expected if disclose else None), preface
+    # The player can ask for the teller and clarify whether this resident personally saw it.
+    for inquiry, eligible in (
+        ("Miller, who told you about the streamer by the field? Did you see it yourself?", True),
+        ("Who told you about the streamer by the field, and did you see it yourself?", True),
+        ("Who told you about the streamer? Did you see the streamer yourself?", True),
+        ("Who told you about the streamer by the field? Did you see the field yourself?", False),
+        ("Who told you about the streamer? Didn't you see it yourself?", False),
+        ("Who told you about the streamer, and who told you about the field?", False),
+        ("Who told you about the streamer? Where is the field?", False),
+    ):
+        world["cueHead"] = before_relay
+        claim = group_line(1, "player", visitor, original_listeners,
+                           "Linn, I like playing chess. I saw a copper streamer by the field. Please tell Miller what I saw.")
+        delivered = group_line(2, visitor, speaker, original_listeners, "Miller, Test player saw a copper streamer by the field.")
+        selected = relay_question(3, speaker, inquiry)[2]
+        if eligible:
+            assert selected["source"] == delivered and selected["inReplyTo"] == dict(source=claim, speaker="Test player")
+            assert selected["heardFrom"] == "Linn" and "reportedSighting" not in selected
+        else:
+            assert selected is None, inquiry
+        assert relay_question(4, twin, inquiry)[2] is None
     world["cueHead"] = before_relay
     group_line(1, "player", visitor, original_listeners, "I saw a copper streamer by the field. Please tell Miller about it.")
     unnamed = group_line(2, visitor, speaker, original_listeners, "Miller, there was a copper streamer by the field.")
@@ -668,6 +689,8 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     assert relay_question(26, speaker, "Who told you that I and you couldn't see the streamer by the field?")[2] is None
     named = relay_question(27, speaker, "Did you hear that Test player couldn't see the streamer by the field?")[2]
     assert named == dict(expected, subjectInCurrentLine=["field", "player", "streamer", "test"])
+    assert relay_question(28, speaker, question+" Did you see it yourself?")[2] == expected
+    assert relay_question(29, speaker, "Who told you I saw the streamer by the field? Did you see it yourself?")[2] is None
     world["cueHead"] = before_relay
     assert relay_question(1, speaker, question)[2] is None
     world["cueHead"] = before_relay
