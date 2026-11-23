@@ -578,6 +578,8 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
          "Test player saw a copper streamer by the field."),
         ("I enjoy surprises so keep my name out of it in front of the others. I saw a copper streamer by the field. Please tell Miller about it.",
          "Test player saw a copper streamer by the field."),
+        ("I collect fishing lures so say less about me. I saw a copper streamer by the field. Please tell Miller about it.",
+         "Test player saw a copper streamer by the field."),
         ("I might have seen a copper streamer by the field. Please tell Miller about it.",
          "Test player said he might have seen a copper streamer by the field."),
         ("I saw a copper streamer by the field. Could you tell Miller what I saw?",
@@ -597,6 +599,10 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         assert relay_question(3, speaker, inquiry)[2] is None
     for claim, relay in (
         ("I enjoy surprises. I saw a copper streamer by the field. Please tell Miller about it.",
+         "Test player saw a copper streamer by the field."),
+        ("I like board games. I saw a copper streamer by the field. Please tell Miller about it.",
+         "Test player saw a copper streamer by the field."),
+        ("I collect fishing lures. I saw a copper streamer by the field. Please tell Miller about it.",
          "Test player saw a copper streamer by the field."),
         ("Collecting Grand Joust pennants is my favorite pastime. I saw a copper streamer by the field. Could you tell Miller what I saw?",
          "Miller, Test player says he saw a copper streamer by the field. He collects Grand Joust pennants, you know."),

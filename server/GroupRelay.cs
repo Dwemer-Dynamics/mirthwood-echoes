@@ -12,9 +12,9 @@ internal static class GroupRelay
     static readonly Regex Confidence=new(@"\b(?:privat\w*|secret\w*|confiden\w*|between (?:us|you and me)|keep (?:quiet|it to)|(?:only|just) (?:tell|between)|(?:don.t|do not|never) (?:want|tell|say|share|repeat|mention))\b",Options);
     static readonly Regex Words=new(@"[^\p{L}\p{Nd}]+");
     static readonly Regex Reported=new(@"^(?:said|says|reported|told me|tells me|mentioned)(?: that)? (?:he|she|they) ",Options);
-    // A single hobby object may have a proper name, as in "Grand Joust pennants".
-    // Ordinary trailing prose cannot establish permission to disclose the later report.
-    const string HobbyObject=@"(?:(?i:a|an|the) )?(?:\p{Lu}\p{L}* ){0,3}\p{L}+";
+    // Allow a common modifier or a short proper name before the hobby noun.
+    // Further clauses leave the player's directions for the relay unresolved.
+    const string HobbyObject=@"(?:(?i:a|an|the) )?(?:\p{L}+ |(?:\p{Lu}\p{L}* ){2,3})?\p{L}+";
     static readonly Regex Pastime=new(@"^(?<activity>(?i:\p{L}+ing) "+HobbyObject+
         @") (?i:is (?:one of )?my (?:favou?rite )?(?:hobb(?:y|ies)|pastimes?|interests?))$",RegexOptions.CultureInvariant);
     static readonly Regex Sight=new(@"^(?:saw|spotted|noticed|observed|caught sight of) ",Options);
