@@ -20,7 +20,7 @@ internal static class GroupRelay
     const string HobbyObject=Modifier+@"\p{L}+";
     const string InterestNoun=Modifier+@"(?i:games?|sports?|puzzles?|cards|chess|music|fiddle|lute|books?|stories|arts?|crafts?|surprises)";
     const string Activity=@"(?:(?i:collecting|studying|reading|painting|growing|drawing|cooking|gardening|fishing|crafting)(?: "+HobbyObject+
-        @")?|(?i:playing) "+InterestNoun+@"|(?i:(?:staying|being|keeping) (?:active|fit|outdoors)|keeping (?:bees|livestock)))";
+        @")?|(?i:playing) "+InterestNoun+@"|(?i:jousting|(?:staying|being|keeping) (?:active|fit|outdoors)|keeping (?:bees|livestock)))";
     static readonly Regex Pastime=new(@"^(?<activity>"+Activity+
         @") (?i:is (?:one of )?my (?:favou?rite )?(?:hobb(?:y|ies)|pastimes?|interests?))$",RegexOptions.CultureInvariant);
     static readonly Regex Sight=new(@"^(?:saw|spotted|noticed|observed|caught sight of) ",Options);

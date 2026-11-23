@@ -615,6 +615,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     for preface, disclose in (
         ("I like board games.", True), ("I collect fishing lures.", True), ("I like playing chess.", True),
         ("I like staying active.", True), ("Playing chess is my favorite pastime.", True),
+        ("I love jousting.", True), ("Jousting is my favorite pastime.", True), ("I love jousting incognito.", False),
         ("I like being anonymous.", False), ("I like staying unnamed.", False), ("I like discretion.", False),
         ("I enjoy anonymity.", False), ("I like my privacy.", False), ("I like being discreet.", False),
         ("Staying anonymous is my favorite pastime.", False), ("I like remaining unrecognised.", False),
