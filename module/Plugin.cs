@@ -39,6 +39,8 @@ namespace Mirthwood.Echoes
         BepInEx.Configuration.ConfigEntry<BepInEx.Configuration.KeyboardShortcut> groupKey;
         private ReactionVoices reactionVoices;
         internal static ReactionVoices Voices => instance && instance.isActiveAndEnabled ? instance.reactionVoices : null;
+        internal static bool TalkActive => instance.dialogue.Visible || instance.dialogue.GroupActive ||
+            QuestPanel.Active || instance.dialogue.PassingVoicePending;
         private string probing,completedProbe,completedPacket;
         private IsolatedGameRun isolated;
         private JArray testObservations;
@@ -69,6 +71,7 @@ namespace Mirthwood.Echoes
             groupKey=Config.Bind("Controls","GroupTalk",new BepInEx.Configuration.KeyboardShortcut(KeyCode.T),"Gather nearby residents for a group conversation.");
             reactionVoices = new ReactionVoices(Config.Bind("Audio","OriginalVoices",true,"Play the Echoes cast for resident and player chat reactions."),Logger);
             hooks.CreateClassProcessor(typeof(ReactionVoices.NativeSound)).Patch();
+            hooks.CreateClassProcessor(typeof(ReactionVoices.ChildSounds)).Patch();
             QuestPanel.Install(this,hooks);
             NativeCues.Start(this);
             InteractionHooks.Install(hooks,Logger);

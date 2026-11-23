@@ -22,6 +22,8 @@ namespace Mirthwood.Echoes
     {
         static Plugin host;
         internal static QuestPanel Current {get;private set;}
+        static bool choosing;
+        internal static bool Active => Current != null || choosing;
         static readonly System.Reflection.FieldInfo ShownData=AccessTools.Field(typeof(DialogueView),"_dialogueData");
         readonly DialogueView view;
         readonly DialogueData data;
@@ -85,6 +87,7 @@ namespace Mirthwood.Echoes
             var panel=new QuestPanel(v,d,entry,brain,resident,JObject.FromObject(world),yes,no);
             if(!panel.Eligible())return;
             Current=panel;
+            Plugin.Voices?.StopPlayingReactions();
             v.choiceButtons[yes].interactable=false;
             v.choiceButtons[yes].GetComponentInChildren<TextMeshProUGUI>(true).text="One moment…";
             v.choiceButtons[no].gameObject.SetActive(false);
@@ -191,7 +194,9 @@ namespace Mirthwood.Echoes
                 if(opening||spent){Fallback();yield break;}
                 spent=true;
                 // The original listener owns the quest journal, marker/spawn work, relationship and portrait close.
-                view.choiceButtons[action=="accept"?accept:decline].onClick.Invoke();
+                choosing=true;
+                try{view.choiceButtons[action=="accept"?accept:decline].onClick.Invoke();}
+                finally{choosing=false;}
                 bool started=MirthwoodPlayer.Instance?.QuestList?.Get(quest)!=null;
                 if(action=="accept"?started:!started&&chat&&!chat.ConditionalDialogues.Contains(condition)){
                     QueueConfirmation(ack);

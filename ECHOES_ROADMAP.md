@@ -2,6 +2,9 @@
 
 ## Inbox
 
+- [ ] Keep incidental resident voices quiet throughout private and group Talk and the spoken end of a generated quest offer. Resume ambient reactions when the conversation ends.
+  On 2026-11-23 a copied game reproduced a resident greeting and a toddler call overlapping Echoes speech. Mirthwood 1.1.10 has 36 chat voice events and six random baby and toddler calls. The candidate filters their playback during player conversations. Copied-game checks of the fix are pending.
+
 ## In progress
 
 ## Completed
