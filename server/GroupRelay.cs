@@ -11,10 +11,17 @@ internal static class GroupRelay
     static readonly Regex SourceQuestion=new(@"^(?:(?:so|and|then) )?(?:(?:who|whom|where|how)\b.{0,70}\b(?:tell|told|mention(?:ed)?|say|said|hear|heard|learn(?:ed)?|know|source)|(?:did|have|has|was|were|is)\b.{0,90}\b(?:hear|heard|mention(?:ed)?|told|tell|firsthand|yourself|there in person))\b",Options);
     static readonly Regex Confidence=new(@"\b(?:privat\w*|secret\w*|confiden\w*|between (?:us|you and me)|keep (?:quiet|it to)|(?:only|just) (?:tell|between)|(?:don.t|do not|never) (?:want|tell|say|share|repeat|mention))\b",Options);
     static readonly Regex Words=new(@"[^\p{L}\p{Nd}]+");
-    static readonly Regex Reported=new(@"^(?:said|says|reported|told me|tells me|mentioned)(?: that)? (?:he|she|they|i) ",Options);
+    static readonly Regex Reported=new(@"^(?:said|says|reported|told me|tells me|mentioned)(?: that)? (?:he|she|they) ",Options);
     static readonly Regex Pastime=new(@"^(?<activity>.+) is (?:one of )?my (?:favou?rite )?(?:hobb(?:y|ies)|pastimes?|interests?)$",Options);
     static readonly Regex Sight=new(@"^(?:saw|spotted|noticed|observed|caught sight of) ",Options);
     static readonly Regex Proximity=new(@"\b(?:by|beside|near|close to|next to) (?=(?:a|an|the|that|this) )",Options);
+    static readonly Regex Negative=new(@"\b(?:no|not|never|neither|none|nothing|nobody|[a-z]+n t)\b",Options);
+    static readonly Regex DeniedSight=new(@"^(?:(?:did not|didn t|could not|couldn t) (?:see|spot|notice|observe)|never (?:saw|spotted|noticed|observed)) ",Options);
+    static readonly Regex AskedAboutSight=new(@"\b(?:see|saw|seen|spot|spotted|observe|observed)\b",Options);
+    static readonly Regex OtherObservation=new(@"^(?:heard|found|met|visited|watched|witnessed) ",Options);
+    static readonly Regex Interest=new(@"^i (?:collect|enjoy|like|love|study|play|read|paint|grow) .+$",Options);
+    static readonly Regex ExtraClause=new(@"\b(?:and|but|or|unless|until|though|although|because|however|if|when|whether|please|you|your|must|should|might|would|could|may)\b",Options);
+    enum Attribution { Unrelated, Unresolved, Teller, NamedAccount, DeniedSighting }
 
     internal static JsonObject? Source(string question,JsonArray pairs)
     {
@@ -23,11 +30,16 @@ internal static class GroupRelay
         JsonObject? match=null;
         foreach(var pair in pairs.OfType<JsonObject>()){
             var recipient=Plain((string)pair["recipient"]!);
-            if(!questions.Any(line=>SourceQuestion.IsMatch(WithoutAddress(line,recipient)))||!RequestedAccount(pair))continue;
-            if(match!=null)return null;
+            var inquiry=questions.Where(line=>SourceQuestion.IsMatch(WithoutAddress(line,recipient))).ToArray();
+            if(inquiry.Length==0)continue;
+            var attribution=RequestedAccount(pair,string.Join(" ",inquiry));
+            if(attribution==Attribution.Unrelated)continue;
+            if(attribution==Attribution.Unresolved || match!=null)return null;
             match=new JsonObject{["source"]=pair["source"]!.DeepClone(),["heardFrom"]=pair["teller"]!.DeepClone(),
-                ["addressedToYou"]=true,["subjectInCurrentLine"]=pair["subjects"]!.DeepClone(),
-                ["inReplyTo"]=new JsonObject{["source"]=pair["original"]!.DeepClone(),["speaker"]=pair["claimant"]!.DeepClone()}};
+                ["addressedToYou"]=true,["subjectInCurrentLine"]=pair["subjects"]!.DeepClone()};
+            if(attribution is Attribution.NamedAccount or Attribution.DeniedSighting)
+                match["inReplyTo"]=new JsonObject{["source"]=pair["original"]!.DeepClone(),["speaker"]=pair["claimant"]!.DeepClone()};
+            if(attribution==Attribution.DeniedSighting)match["reportedSighting"]="denied";
         }
         return match;
     }
@@ -43,6 +55,16 @@ internal static class GroupRelay
 
     static string[] Sentences(string words)=>Sentence.Split(Action.Replace(words," "))
         .Select(Plain).Where(text=>text.Length>0).ToArray();
+
+    static bool HasUnboundClause(string words,string addressee,string trailingCourtesy)
+    {
+        // Remove only an actual vocative and a terminal courtesy. Keep internal clause
+        // boundaries before normalizing words; a directive can follow an innocuous preface.
+        string who=Regex.Escape(addressee);
+        var address=$@"^\s*{who}\s*[,:—–]\s*|,\s*(?:{who}|{trailingCourtesy})\s*$";
+        return Sentence.Split(Action.Replace(words," ")).Any(line=>
+            Regex.Replace(line,address,"",Options).IndexOfAny([',',':','—','–'])>=0);
+    }
 
     static string Account(string predicate)
     {
@@ -76,29 +98,56 @@ internal static class GroupRelay
         return false;
     }
 
-    static bool RequestedAccount(JsonObject pair)
+    static Attribution RequestedAccount(JsonObject pair,string inquiry)
     {
         string teller=Plain((string)pair["teller"]!),recipient=Plain((string)pair["recipient"]!),claimant=Plain((string)pair["claimant"]!);
         string request=(string)pair["request"]!,delivered=(string)pair["delivered"]!;
         var player=Sentences(request);
         var resident=Sentences(delivered);
         // The unqualified invitation applies to the immediately preceding first-person statement.
-        if(teller.Length==0||recipient.Length==0||claimant.Length==0||player.Length<2||resident.Length is <1 or >2||
-            Confidence.IsMatch(request)||Confidence.IsMatch(delivered)||delivered.Contains('?'))return false;
-        if(resident.Length==2 && !RepeatsPlayerDetail(resident[1],claimant,player[..^2].Select(line=>WithoutAddress(line,teller))))return false;
+        if(teller.Length==0||recipient.Length==0||claimant.Length==0||player.Length<2)return Attribution.Unrelated;
         var name=Regex.Escape(recipient);
         var invitation=WithoutAddress(player[^1],teller);
         const string subject=@"(?:it|this|that|the news|what i (?:saw|heard|found|noticed|said))";
         string transfer=$@"(?:tell {name} (?:about {subject}|{subject})|let {name} know(?: about {subject})?|(?:pass|relay) {subject}(?: along| on)? to {name}|share {subject} with {name})";
-        if(!Regex.IsMatch(invitation,$@"^(?:(?:will|would|can|could) you (?:please )?|please )?{transfer}(?: please)?$",Options))return false;
+        if(!Regex.IsMatch(invitation,$@"^(?:(?:will|would|can|could) you (?:please )?|please )?{transfer}(?: please)?$",Options))return Attribution.Unrelated;
         var original=WithoutAddress(player[^2],teller);
-        if(!original.StartsWith("i ",StringComparison.Ordinal))return false;
+        if(!original.StartsWith("i ",StringComparison.Ordinal))return Attribution.Unrelated;
+        var preface=player[..^2].Select(line=>WithoutAddress(line,teller)).ToArray();
+        // Another permitted account of the subject remains a possible rival even when its
+        // wording is too uncertain or private to identify its teller to the larger circle.
+        if(resident.Length is <1 or >2 || Confidence.IsMatch(request)||Confidence.IsMatch(delivered)||delivered.Contains('?'))return Attribution.Unresolved;
+        if(HasUnboundClause(request,(string)pair["teller"]!,"please") ||
+           HasUnboundClause(delivered,(string)pair["recipient"]!,"you know"))return Attribution.Unresolved;
+        // Account for the whole request before identifying either person to a new audience.
+        // A single-clause self-description can accompany the request. Other directions or
+        // qualifications have unknown disclosure scope, even when the final invitation is clear.
+        if(preface.Any(line=>ExtraClause.IsMatch(line)|| !(Pastime.IsMatch(line)||Interest.IsMatch(line))))return Attribution.Unresolved;
         var retold=WithoutAddress(resident[0],recipient);
-        if(!retold.StartsWith(claimant+" ",StringComparison.Ordinal))return false;
-        // The addressed cue and its preceding request identify both speakers. Bind the
-        // reported subject independently, retaining its complete object, location and
-        // qualifications through ordinary paraphrases of a visual observation.
-        string account=Reported.Replace(retold[(claimant.Length+1)..],"",1);
-        return Account(account)==Account(original[2..]);
+        bool named=retold.StartsWith(claimant+" ",StringComparison.Ordinal);
+        var expected=Account(original[2..]);
+        bool denied=Negative.IsMatch(expected);
+        if(denied!=Negative.IsMatch(inquiry))return Attribution.Unresolved;
+        if(denied){
+            var denial=DeniedSight.Match(expected);
+            if(!denial.Success||ExtraClause.IsMatch(expected[denial.Length..]))return Attribution.Unresolved;
+        }else if(ExtraClause.IsMatch(expected) || !Sight.IsMatch(expected) &&
+            (AskedAboutSight.IsMatch(inquiry)||!OtherObservation.IsMatch(expected)))return Attribution.Unresolved;
+        string account=named?Account(Reported.Replace(retold[(claimant.Length+1)..],"",1)):retold;
+        if(resident.Length==2){
+            // Resolve one indefinite object only if the resulting whole report agrees.
+            if(named && (account=="saw something"||account.StartsWith("saw something ",StringComparison.Ordinal)) &&
+                resident[1].StartsWith("it was ",StringComparison.Ordinal))
+                account="saw "+resident[1][7..]+account["saw something".Length..];
+            else if(!RepeatsPlayerDetail(resident[1],claimant,preface))
+                return Attribution.Unresolved;
+        }
+        if(named && account==expected)return denied?Attribution.DeniedSighting:Attribution.NamedAccount;
+        if(named || denied)return Attribution.Unresolved;
+        // An uncredited description can identify who told this listener without identifying
+        // anyone as the witness. The complete observed object and place must still agree.
+        var exists=Regex.Match(account,@"^there (?:was|were) (.+)$",Options);
+        if(exists.Success && expected=="saw "+Proximity.Replace(exists.Groups[1].Value,"near "))return Attribution.Teller;
+        return Attribution.Unresolved;
     }
 }

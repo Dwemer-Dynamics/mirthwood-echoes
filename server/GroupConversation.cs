@@ -34,10 +34,11 @@ public sealed partial class Conversation
         SELECT jsonb_build_object('common',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY seq),'[]') FROM common c),
             'pairs',(SELECT coalesce(jsonb_agg(to_jsonb(p) || jsonb_build_object('subjects',
                 ARRAY(SELECT word FROM focus ORDER BY word LIMIT 4)) ORDER BY p.seq DESC),'[]') FROM pairs p
-                CROSS JOIN LATERAL regexp_match(regexp_replace(p.delivered,'\*[^*]+\*','','g'),'([[:alnum:]][^.!?…;\r\n]*)') report
+                CROSS JOIN LATERAL (SELECT part FROM regexp_split_to_table(regexp_replace(p.request,'\*[^*]+\*','','g'),
+                    '[.!?…;\r\n]+') WITH ORDINALITY sentence(part,n) WHERE btrim(part)<>'' ORDER BY n DESC OFFSET 1 LIMIT 1) claim
                 WHERE EXISTS(SELECT FROM focus) AND NOT EXISTS(SELECT FROM focus
-                    WHERE NOT to_tsvector('english',report[1]) @@ term OR NOT
-                        to_tsvector('english',p.claimant||' '||regexp_replace(p.request,'\*[^*]+\*','','g')) @@ term)))::text
+                    WHERE NOT to_tsvector('english',p.claimant||' '||claim.part) @@ term OR NOT
+                        to_tsvector('english',regexp_replace(p.delivered,'\*[^*]+\*','','g')) @@ term)))::text
         """;
 
     async Task<JsonObject> GenerateGroupReply(JsonObject input,CancellationToken ct)
@@ -115,8 +116,10 @@ public sealed partial class Conversation
         var output=new StringBuilder();
         string sourceGuidance=memory.ContainsKey("earlierGroupSource") ? """
 
-            Respond to the source question from earlierGroupSource. At the player's request, heardFrom told you the account originally given by inReplyTo.speaker.
-            Name the teller and credit the original account in your own voice. Only its subject has been raised again here. Speak to who told you, and claim personal sight only with your own evidence.
+            Use earlierGroupSource to answer the person asking the source question. Name heardFrom as the person who actually told you, in third person when someone else asked.
+            When inReplyTo is present, credit its speaker as the original claimant. A denied reportedSighting means that person said they had not seen it.
+            Otherwise, when only a teller is named, the teller left the observer unidentified.
+            Only the subject has been raised again here. Speak to who told you, and claim personal sight only with your own evidence.
             """ : "";
         await providers.Generate(opt with {ReplyTokens=Math.Max(opt.ReplyTokens,550)},instructions+"\n"+DialogueRecaps.Instructions+"\n"+CharacterKnowledge.Instructions+dispatch.Guidance+sourceGuidance,prompt.ToJsonString(),
             part=>{if(output.Length+part.Length>5000)throw new UserError("The group reply was too long.",502);output.Append(part);return Task.CompletedTask;},ct,dispatch:dispatch);

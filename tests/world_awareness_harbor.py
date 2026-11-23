@@ -183,14 +183,21 @@ def named_witness(call, player, day):
     ship = re.compile(r"\b(?:trade ship|trader)\b", re.IGNORECASE)
     name = re.compile(rf"(?<!\w){re.escape(player)}(?!\w)", re.IGNORECASE)
     sources = {w["source"] for w in primary + other if w.get("source") and ship.search(w["description"])}
+    qualified = re.compile(r"\b(?:not|no|never|neither|maybe|might|perhaps|uncertain|unsure)\b|n['’]t\b", re.IGNORECASE)
 
-    def names_player(w):
-        same_event = w.get("source") in sources or ship.search(w["description"])
-        return same_event and (name.search(w["description"]) or w.get("sawPlayerBeforePreviousTalk") is True)
+    def ship_source(w):
+        return w.get("source") in sources or ship.search(w["description"])
+
+    def affirmed(w):
+        if not ship_source(w):
+            return False
+        statements = [s for s in re.split(r"[.!?;]+", w["description"]) if name.search(s)]
+        return bool(statements) and all(not qualified.search(s) for s in statements)
 
     prior_company = previous.get("day") == day and any(
         sight.get("title") == SHIP and sight.get("sawPlayer") is True for sight in previous.get("firsthand", []))
-    return any(map(names_player, primary)), prior_company or any(map(names_player, primary + other))
+    previously_seen = any(ship_source(w) and w.get("sawPlayerBeforePreviousTalk") is True for w in primary)
+    return any(map(affirmed, primary)), prior_company or previously_seen or any(map(affirmed, primary + other))
 
 
 def run(directory):
@@ -319,6 +326,11 @@ def self_test():
     assert company("Graham") == (False, False)
     account["description"] = "Michael stood by the trader."
     assert company() == (True, True) and company("Micha") == (False, False)
+    account["description"] = "I saw Trade Ship underway. I did not see Michael there. I saw a trader."
+    assert company() == (False, False)
+    assert company(daily=[dict(account, kind="worldEvent", description="Michael stood by the trader.")]) == (False, True)
+    account["description"] = "I might have seen Michael by the trader."
+    assert company() == (False, False)
     account["description"] = "I saw Trade Ship underway. I saw a trader."
     assert company() == (False, False)
     leak = dict(account, kind="worldEvent", description="Michael stood on the planks.")

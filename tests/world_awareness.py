@@ -570,12 +570,20 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
          "Test player saw a copper streamer by the field. Please keep it between us."),
         ("Keep this in confidence. I saw a copper streamer by the field. Could you tell Miller what I saw?",
          "Test player saw a copper streamer by the field."),
+        ("Linn, leave my name out of it in front of the others. I saw a copper streamer by the field. Could you tell Miller what I saw?",
+         "Test player saw a copper streamer by the field."),
+        ("Linn, I collect pennies, leave my name out of it in front of the others. I saw a copper streamer by the field. Please tell Miller about it.",
+         "Test player saw a copper streamer by the field."),
+        ("I might have seen a copper streamer by the field. Please tell Miller about it.",
+         "Test player said he might have seen a copper streamer by the field."),
         ("I saw a copper streamer by the field. Could you tell Miller what I saw?",
          "Test player did not see a copper streamer by the field."),
         ("I spotted a copper streamer by the field. Could you tell Miller what I saw?",
          "Test player saw a silver streamer near the field."),
         ("I spotted a copper streamer by the field. Could you tell Miller what I saw?",
          "Test player saw a copper streamer near the mill."),
+        ("I saw a copper streamer by the field. Could you tell Miller what I saw?",
+         "Test player says I saw a copper streamer by the field."),
         ("I collect pennants. I saw a copper streamer by the field. Could you tell Miller what I saw?",
          "Test player saw a copper streamer by the field. He collects wages for the reeve.")):
         world["cueHead"] = before_relay
@@ -587,7 +595,9 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         ("Collecting Grand Joust pennants is my favorite pastime. I saw a copper streamer by the field. Could you tell Miller what I saw?",
          "Miller, Test player says he saw a copper streamer by the field. He collects Grand Joust pennants, you know."),
         ("I spotted a copper streamer by the field. Please tell Miller about it.",
-         "Miller, Test player says he saw a copper streamer near the field.")):
+         "Miller, Test player says he saw a copper streamer near the field."),
+        ("I saw a copper streamer by the field. Please tell Miller about it.",
+         "Miller, Test player spotted something by the field. It was a copper streamer.")):
         world["cueHead"] = before_relay
         player_source = group_line(1, "player", visitor, original_listeners, claim)
         teller_source = group_line(2, visitor, speaker, original_listeners, relay)
@@ -595,11 +605,30 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         assert selected["source"] == teller_source and selected["inReplyTo"]["source"] == player_source
         assert relay_question(4, speaker, "Who told you about the Grand Joust pennants?")[2] is None
     world["cueHead"] = before_relay
+    group_line(1, "player", visitor, original_listeners, "I saw a copper streamer by the field. Please tell Miller about it.")
+    unnamed = group_line(2, visitor, speaker, original_listeners, "Miller, there was a copper streamer by the field.")
+    teller_only = relay_question(3, speaker, source_question)[2]
+    assert teller_only == dict(source=unnamed, heardFrom="Linn", addressedToYou=True, subjectInCurrentLine=["streamer"])
+    assert relay_question(4, speaker, "Who told you there was no streamer by the field?")[2] is None
+    world["cueHead"] = before_relay
+    group_line(1, "player", visitor, original_listeners, "I did not see a copper streamer by the field. Please tell Miller about it.")
+    denied = group_line(2, visitor, speaker, original_listeners, "Miller, Test player did not see a copper streamer by the field.")
+    assert relay_question(3, speaker, "Who told you Test player saw the streamer by the field?")[2] is None
+    denial = relay_question(4, speaker, "Who told you Test player did not see the streamer by the field?")[2]
+    assert denial["source"] == denied and denial["reportedSighting"] == "denied"
+    world["cueHead"] = before_relay
     for seq, color in ((1, "blue"), (3, "red")):
         group_line(seq, "player", visitor, original_listeners, f"I saw a {color} streamer. Please tell Miller about it.")
         group_line(seq+1, visitor, speaker, original_listeners, f"Miller, Test player said they saw a {color} streamer.")
     assert relay_question(5, speaker, "Who told you about the streamer?")[2] is None
     assert relay_question(6, speaker, "Who told you about the blue streamer?")[2]["heardFrom"] == "Linn"
+    world["cueHead"] = before_relay
+    group_line(1, "player", visitor, original_listeners, "I saw a white streamer. Please tell Miller about it.")
+    group_line(2, visitor, speaker, original_listeners, "Test player saw a white streamer.")
+    group_line(3, "player", visitor, original_listeners, "I saw a blue streamer. Please tell Miller about it.")
+    group_line(4, visitor, speaker, original_listeners, "Test player could have seen a blue streamer.")
+    assert relay_question(5, speaker, "Who told you about the streamer?")[2] is None
+    assert relay_question(6, speaker, "Who told you about the white streamer?")[2]["heardFrom"] == "Linn"
     world["cueHead"] = before_relay
     beat()
     checked("a group hearer retains the relay's source after a late join, with separate claimant, private words, replay and rewind")
