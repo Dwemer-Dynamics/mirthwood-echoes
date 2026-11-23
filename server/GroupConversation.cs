@@ -19,7 +19,7 @@ public sealed partial class Conversation
                 '\m(did|could)n[''’]t\M','\1 not','g'),'[^[:alnum:]]+') word
             WHERE l.speaker='player' AND l.addressed IN (@a,'group') AND length(word)>1
               AND numnode(plainto_tsquery('english',word))>0
-              AND NOT to_tsvector('english','can could would did anyone someone somebody yourself firsthand personally see saw seen hear heard say said tell told know knew mention source account story earlier remember recall')
+              AND NOT to_tsvector('english','can could would did anyone someone somebody yourself firsthand personally actually see saw seen hear heard say said tell told know knew mention source account story earlier remember recall')
                       @@ plainto_tsquery('english',word)
               AND NOT EXISTS(SELECT FROM actors person WHERE person.campaign=@c AND person.key=@a
                   AND to_tsvector('simple',person.name) @@ plainto_tsquery('simple',word))

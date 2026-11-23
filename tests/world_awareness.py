@@ -634,8 +634,13 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     for inquiry, eligible in (
         ("Miller, who told you about the streamer by the field? Did you see it yourself?", True),
         ("Who told you about the streamer by the field, and did you see it yourself?", True),
+        ("Who told you about the streamer by the field? Did you see it personally?", True),
+        ("Who told you about the streamer by the field? Did you personally see it?", True),
+        ("Have you seen it personally? Who told you about the streamer by the field?", True),
+        ("Who told you about the streamer? Did you actually see it yourself?", True),
         ("Who told you about the streamer? Did you see the streamer yourself?", True),
         ("Who told you about the streamer by the field? Did you see the field yourself?", False),
+        ("Did you see the field personally? Who told you about the streamer by the field?", False),
         ("Who told you about the streamer? Didn't you see it yourself?", False),
         ("Who told you about the streamer, and who told you about the field?", False),
         ("Who told you about the streamer? Where is the field?", False),
@@ -651,6 +656,30 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         else:
             assert selected is None, inquiry
         assert relay_question(4, twin, inquiry)[2] is None
+    # A volunteered eyewitness account belongs to its original speaker, including when the
+    # listener asks about the act of witnessing as well as the event itself.
+    world["cueHead"] = before_relay
+    claim = group_line(1, "player", visitor, original_listeners, "I witnessed a duel by the field. Please tell Miller what I said.")
+    delivered = group_line(2, visitor, speaker, original_listeners, "Miller, Test player witnessed a duel by the field.")
+    for seq, inquiry in enumerate(("Who told you I witnessed the duel by the field?",
+                                   "Who told you about the duel by the field?",
+                                   "Did you personally witness it? Who told you I witnessed the duel?"), 3):
+        selected = relay_question(seq, speaker, inquiry)[2]
+        assert selected["source"] == delivered and selected["heardFrom"] == "Linn"
+        assert selected["inReplyTo"] == dict(source=claim, speaker="Test player") and "reportedSighting" not in selected
+    assert relay_question(6, speaker, "Who told you that you witnessed the duel by the field?")[2] is None
+    assert relay_question(7, speaker, "Who told you I witnessed a race by the field?")[2] is None
+    assert relay_question(8, twin, "Who told you I witnessed the duel by the field?")[2] is None
+    world["cueHead"] = before_relay
+    group_line(1, "player", visitor, original_listeners, "I heard a duel by the field. Please tell Miller what I said.")
+    group_line(2, visitor, speaker, original_listeners, "Miller, Test player heard a duel by the field.")
+    assert relay_question(3, speaker, "Who told you about the duel by the field? Did you personally see it?")[2] is None
+    world["cueHead"] = before_relay
+    claim = group_line(1, "player", visitor, original_listeners, "I found a notice by the field. Please tell Miller what I found.")
+    delivered = group_line(2, visitor, speaker, original_listeners, "Miller, Test player found a notice by the field.")
+    found = relay_question(3, speaker, "Who told you about the notice by the field?")[2]
+    assert found["source"] == delivered and found["inReplyTo"] == dict(source=claim, speaker="Test player")
+    assert relay_question(4, speaker, "Who told you about the notice? Did you personally notice it?")[2] is None
     world["cueHead"] = before_relay
     group_line(1, "player", visitor, original_listeners, "I saw a copper streamer by the field. Please tell Miller about it.")
     unnamed = group_line(2, visitor, speaker, original_listeners, "Miller, there was a copper streamer by the field.")

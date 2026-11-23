@@ -12,7 +12,13 @@ internal static class GroupRelay
     const string QuestionWord=@"(?:who|whom|whose|where|when|why|what|which|how|do|does|did|have|has|is|are|was|were|can|could|will|would|should)";
     static readonly Regex QuestionStart=new(@"^(?:(?:so|and|or|then|but) )?"+QuestionWord+@"\b",Options);
     static readonly Regex JoinedQuestion=new(@"(?:,\s*(?:(?:and|or|but)\s+)?|\s+(?:and|or|but)\s+)(?="+QuestionWord+@"\b)",Options);
-    static readonly Regex OwnSight=new(@"^(?:did you (?:personally |actually )?(?:see|observe|witness)|have you (?:personally |actually )?(?:seen|observed|witnessed)) (?<object>.+?)(?: yourself| firsthand| in person)?$",Options);
+    const string SightVerb=@"(?:see|spot|notice|observe|witness|catch sight of)";
+    const string OtherSightPast=@"spotted|noticed|observed|witnessed|caught sight of";
+    const string SightPast=@"(?:saw|"+OtherSightPast+")";
+    const string SightPerfect=@"(?:seen|"+OtherSightPast+")";
+    const string EvidenceModifier=@"(?:personally|yourself|firsthand|in person|actually)";
+    static readonly Regex OwnSight=new(@"^(?:did you (?:"+EvidenceModifier+" )?"+SightVerb+@"|have you (?:"+EvidenceModifier+" )?"+SightPerfect+
+        @") (?<object>.+?)(?: "+EvidenceModifier+")?$",Options);
     static readonly Regex EvidenceOnly=new(@"^(?:were you there(?: yourself| in person)?|did you (?:just |only )?hear (?:about )?(?:it|this|that)(?: here)?)$",Options);
     static readonly Regex Confidence=new(@"\b(?:privat\w*|secret\w*|confiden\w*|between (?:us|you and me)|keep (?:quiet|it to)|(?:only|just) (?:tell|between)|(?:don.t|do not|never) (?:want|tell|say|share|repeat|mention))\b",Options);
     // A stated preference about disclosure qualifies the invitation even when phrased as a pastime.
@@ -28,14 +34,18 @@ internal static class GroupRelay
         @")?|(?i:playing) "+InterestNoun+@"|(?i:jousting|(?:staying|being|keeping) (?:active|fit|outdoors)|keeping (?:bees|livestock)))";
     static readonly Regex Pastime=new(@"^(?<activity>"+Activity+
         @") (?i:is (?:one of )?my (?:favou?rite )?(?:hobb(?:y|ies)|pastimes?|interests?))$",RegexOptions.CultureInvariant);
-    static readonly Regex Sight=new(@"^(?:saw|spotted|noticed|observed|caught sight of) ",Options);
+    static readonly Regex Sight=new("^"+SightPast+" ",Options);
+    static readonly Regex CitedSight=new(@"\b"+SightPast+@"\b",Options);
     static readonly Regex Proximity=new(@"\b(?:by|beside|near|close to|next to) (?=(?:a|an|the|that|this) )",Options);
     static readonly Regex ContractedNegative=new(@"\b(did|could)n['’]t\b",Options);
     static readonly Regex Negative=new(@"\b(?:no|not|never|neither|none|nothing|nobody|[a-z]+n t)\b",Options);
-    static readonly Regex DeniedSight=new(@"\b(?:(?<scope>did not|could not) (?:see|spot|notice|observe)|(?<scope>never) (?:saw|spotted|noticed|observed))\b",Options);
+    static readonly Regex DeniedSight=new(@"\b(?:(?<scope>did not|could not) "+SightVerb+@"|(?<scope>never) "+SightPast+@")\b",Options);
     static readonly Regex ReportSubject=new(@"\b(?:told|tell|said|say|mention(?:ed)?|hear|heard|learn(?:ed)?|know) (?:you |me )?(?:that )?(?<observer>.+)$",Options);
-    static readonly Regex AskedAboutSight=new(@"\b(?:see|saw|seen|spot|spotted|observe|observed|witness|witnessed)\b",Options);
-    static readonly Regex OtherObservation=new(@"^(?:heard|found|met|visited|watched|witnessed) ",Options);
+    // A notice and a witness can also be the subject of the news. A base-form verb needs
+    // a subject or auxiliary before it to ask about the act of seeing.
+    static readonly Regex AskedAboutSight=new(@"\b(?:"+SightPast+"|"+SightPerfect+@"|(?:i|you|we|they|to|can|could|did|do|does|not|never) (?:"+
+        EvidenceModifier+" )?"+SightVerb+@")\b",Options);
+    static readonly Regex OtherObservation=new(@"^(?:heard|found|met|visited|watched) ",Options);
     static readonly Regex Interest=new(@"^(?i:i )(?:(?i:collect|study|read|paint|grow) "+HobbyObject+
         @"|(?i:play) "+InterestNoun+@"|(?i:enjoy|like|love) (?:"+Activity+"|"+InterestNoun+"))$",RegexOptions.CultureInvariant);
     static readonly Regex ExtraClause=new(@"\b(?:and|but|or|unless|until|though|although|because|however|if|when|whether|please|you|your|must|should|might|would|could|may)\b",Options);
@@ -182,8 +192,17 @@ internal static class GroupRelay
             string before=inquiry[..asked.Index].TrimEnd(),after=inquiry[(asked.Index+asked.Length)..];
             var observer=ReportSubject.Match(before).Groups["observer"].Value;
             if(Negative.IsMatch(before)||Negative.IsMatch(after)||(observer!="i"&&observer!=claimant))return Attribution.Unresolved;
-        }else if(ExtraClause.IsMatch(expected) || !Sight.IsMatch(expected) &&
-            (asksAboutSight||!OtherObservation.IsMatch(expected)))return Attribution.Unresolved;
+        }else{
+            if(ExtraClause.IsMatch(expected) || !Sight.IsMatch(expected) &&
+                (asksAboutSight||!OtherObservation.IsMatch(expected)))return Attribution.Unresolved;
+            // A question attributing the sight to someone else cannot identify the teller of this claim.
+            var cited=CitedSight.Match(inquiry);
+            if(cited.Success){
+                var observer=ReportSubject.Match(inquiry[..cited.Index].TrimEnd()).Groups["observer"];
+                if(observer.Success && observer.Value!="about" && !observer.Value.StartsWith("about ",StringComparison.Ordinal) &&
+                   observer.Value!="i" && observer.Value!=claimant)return Attribution.Unresolved;
+            }
+        }
         string account=named?Account(Reported.Replace(retold[(claimant.Length+1)..],"",1)):retold;
         if(resident.Length==2){
             // Resolve one indefinite object only if the resulting whole report agrees.

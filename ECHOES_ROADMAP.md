@@ -6,6 +6,7 @@
 
 - [ ] Give each speaking resident their current place, calendar, nearby people, weather and landmarks. Include every knowable event today and the next public notice in private Talk, passing remarks, groups and generated quest dialogue. Preserve interrupted activities, the source of local news, privacy, and evidence of what happened after an earlier plan.
   On 2026-11-22 the native and server implementation entered qualification. The copied-save checks cover posted dates and actual starts and ends, individual witnesses, divergent saves, retries, player-led conversations and the original quest choices.
+  On 2026-11-23, after Graham joined a copied-game conversation, Drystan remembered that Averil had relayed Michael’s sighting and said he had not seen the streamer himself. Graham recalled hearing Drystan’s answer. In three further visits, Drystan preserved Michael’s account that he could not see the streamer, withheld a name when Michael asked for discretion and said he lacked evidence about what both of them could see. The privacy check for an indirect request still needs its follow-up with a resident who was absent.
 
 ## Completed
 
