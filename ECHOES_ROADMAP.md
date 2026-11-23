@@ -2,6 +2,9 @@
 
 ## Inbox
 
+- [ ] Keep incidental resident voices quiet throughout private and group Talk, including text-only conversations, and during generated quest offers. Protect spoken passing replies and the overhead quest farewell until the last word. Resume ambient reactions when the conversation ends.
+  On 2026-11-23 a copied game reproduced a resident greeting and a toddler call overlapping Echoes speech. On the candidate, private and group speakers and a nearby bystander stayed quiet across 16 audible clips. Native greetings resumed after Talk. The generated quest farewell is still under test.
+
 ## In progress
 
 ## Completed

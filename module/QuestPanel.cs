@@ -22,6 +22,8 @@ namespace Mirthwood.Echoes
     {
         static Plugin host;
         internal static QuestPanel Current {get;private set;}
+        static bool choosing;
+        internal static bool Active => Current != null || choosing;
         static readonly System.Reflection.FieldInfo ShownData=AccessTools.Field(typeof(DialogueView),"_dialogueData");
         readonly DialogueView view;
         readonly DialogueData data;
@@ -85,6 +87,7 @@ namespace Mirthwood.Echoes
             var panel=new QuestPanel(v,d,entry,brain,resident,JObject.FromObject(world),yes,no);
             if(!panel.Eligible())return;
             Current=panel;
+            Plugin.Voices?.StopPlayingReactions();
             v.choiceButtons[yes].interactable=false;
             v.choiceButtons[yes].GetComponentInChildren<TextMeshProUGUI>(true).text="One moment…";
             v.choiceButtons[no].gameObject.SetActive(false);
@@ -93,7 +96,7 @@ namespace Mirthwood.Echoes
         QuestPanel(DialogueView v,DialogueData d,ConditionalDialogue entry,NPCChatController brain,NPCController resident,JObject w,int yes,int no)
         {
             view=v;data=d;condition=entry;quest=entry.quest;chat=brain;npc=resident;world=w;
-            speech=new ConversationSpeech(host);
+            speech=new ConversationSpeech(host,Address+"voices/speech");
             accept=yes;decline=no;acceptLabel=v.choiceButtons[yes].GetComponentInChildren<TextMeshProUGUI>(true).text;
             key=quest.Uid();nativeId=npc.CharacterInfo.id;owner=Plugin.Owner(npc);
             string terms=d.Dialogue.Replace("{origin}",PlayerCharacterController.Instance.CharacterInfo.origin.ToString());
@@ -191,7 +194,10 @@ namespace Mirthwood.Echoes
                 if(opening||spent){Fallback();yield break;}
                 spent=true;
                 // The original listener owns the quest journal, marker/spawn work, relationship and portrait close.
-                view.choiceButtons[action=="accept"?accept:decline].onClick.Invoke();
+                choosing=true;
+                try{view.choiceButtons[action=="accept"?accept:decline].onClick.Invoke();}
+                catch{speech.Stop();throw;}
+                finally{choosing=false;}
                 bool started=MirthwoodPlayer.Instance?.QuestList?.Get(quest)!=null;
                 if(action=="accept"?started:!started&&chat&&!chat.ConditionalDialogues.Contains(condition)){
                     QueueConfirmation(ack);

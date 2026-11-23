@@ -25,6 +25,9 @@ namespace Mirthwood.Echoes
             public bool CanReply;
         }
         PassingLine passing;
+        // The generated offer closes before the overhead farewell can enqueue its first word.
+        internal bool PassingVoicePending => passing != null &&
+            ((passing.Kind == "quest" && passing.Bubble == null) || passing.Speech?.Busy == true);
         int addressRequest;
         UnityWebRequest pendingAddress;
 
@@ -77,6 +80,7 @@ namespace Mirthwood.Echoes
             DismissPassingLine();
             passing=new PassingLine{Speaker=npc,Id=id,EventId=kind=="address"?null:id,Kind=kind,Line=line,Session=NativeCues.Session,
                 ReadyAt=Time.time+delay,Expires=Time.unscaledTime+12f,Speech=queued,CanReply=canReply};
+            if(PassingVoicePending)Plugin.Voices?.StopPlayingReactions();
             return true;
         }
 
@@ -117,6 +121,7 @@ namespace Mirthwood.Echoes
                         if(remark.EventId!=null)NativeCues.Recent(remark.Speaker,remark.EventId,remark.Kind,remark.Line);
                     }
                 });
+                if(remark.Speech.Busy)Plugin.Voices?.StopPlayingReactions();
                 passing.Expires=Time.unscaledTime+ReadTime(remark.Line);
                 passing.Frame=Time.frameCount;
                 if(passing.CanReply&&passing.Kind!="address")NativeCues.Recent(passing.Speaker,passing.EventId,passing.Kind,passing.Line);
