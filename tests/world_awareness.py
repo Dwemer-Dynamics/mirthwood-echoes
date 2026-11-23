@@ -574,6 +574,10 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
          "Test player saw a copper streamer by the field."),
         ("Linn, I collect pennies, leave my name out of it in front of the others. I saw a copper streamer by the field. Please tell Miller about it.",
          "Test player saw a copper streamer by the field."),
+        ("Linn, I enjoy surprises so keep my name out of it. I saw a copper streamer by the field. Please tell Miller about it.",
+         "Test player saw a copper streamer by the field."),
+        ("I enjoy surprises so keep my name out of it in front of the others. I saw a copper streamer by the field. Please tell Miller about it.",
+         "Test player saw a copper streamer by the field."),
         ("I might have seen a copper streamer by the field. Please tell Miller about it.",
          "Test player said he might have seen a copper streamer by the field."),
         ("I saw a copper streamer by the field. Could you tell Miller what I saw?",
@@ -592,6 +596,8 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         inquiry = "Who mentioned the locket?" if "locket" in relay else "Has anyone mentioned a streamer by the field?"
         assert relay_question(3, speaker, inquiry)[2] is None
     for claim, relay in (
+        ("I enjoy surprises. I saw a copper streamer by the field. Please tell Miller about it.",
+         "Test player saw a copper streamer by the field."),
         ("Collecting Grand Joust pennants is my favorite pastime. I saw a copper streamer by the field. Could you tell Miller what I saw?",
          "Miller, Test player says he saw a copper streamer by the field. He collects Grand Joust pennants, you know."),
         ("I spotted a copper streamer by the field. Please tell Miller about it.",
@@ -616,6 +622,30 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     assert relay_question(3, speaker, "Who told you Test player saw the streamer by the field?")[2] is None
     denial = relay_question(4, speaker, "Who told you Test player did not see the streamer by the field?")[2]
     assert denial["source"] == denied and denial["reportedSighting"] == "denied"
+    for original, delivered, inquiry in (
+        ("did not", "didn’t", "did not"), ("didn't", "did not", "didn’t"),
+        ("could not", "couldn't", "couldn’t"), ("couldn’t", "could not", "couldn't")):
+        world["cueHead"] = before_relay
+        claim_id = group_line(1, "player", visitor, original_listeners, f"I {original} see a copper streamer by the field. Please tell Miller about it.")
+        delivered_id = group_line(2, visitor, speaker, original_listeners, f"Test player says he {delivered} see a copper streamer by the field.")
+        question = f"Who told you I {inquiry} see the streamer by the field?"
+        expected = dict(source=delivered_id, heardFrom="Linn", addressedToYou=True, subjectInCurrentLine=["field", "streamer"],
+                        inReplyTo=dict(source=claim_id, speaker="Test player"), reportedSighting="denied")
+        assert relay_question(3, speaker, question)[2] == expected
+        other_scope = "could not" if original.startswith("did") else "did not"
+        assert relay_question(4, speaker, f"Who told you Test player {other_scope} see the streamer by the field?")[2] is None
+    # Return to the final denial after 15 intervening lines. Its teller and original
+    # claimant still belong to the original hearer alone on this branch.
+    for seq in range(5, 20):
+        group_line(seq, "player", speaker, expanded_circle, "Thank you for your company.")
+    request, response, denied = relay_question(20, speaker, question)
+    assert denied == expected and without_generation("/api/dialogue/group", request) == response
+    assert relay_question(21, speaker, "Who told you Test player saw the streamer by the field?")[2] is None
+    assert relay_question(22, speaker, "Who didn't tell you Test player couldn't see the streamer by the field?")[2] is None
+    assert relay_question(23, speaker, "Who told you that you couldn't see the streamer by the field?")[2] is None
+    assert relay_question(24, twin, question)[2] is None
+    world["cueHead"] = before_relay
+    assert relay_question(1, speaker, question)[2] is None
     world["cueHead"] = before_relay
     for seq, color in ((1, "blue"), (3, "red")):
         group_line(seq, "player", visitor, original_listeners, f"I saw a {color} streamer. Please tell Miller about it.")

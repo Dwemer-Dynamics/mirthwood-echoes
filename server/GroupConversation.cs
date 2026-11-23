@@ -15,7 +15,8 @@ public sealed partial class Conversation
             SELECT seq,source AS id,speaker,name,addressed,words FROM circle WHERE audience @> @listeners ORDER BY seq DESC LIMIT 14
         ), latest AS (SELECT * FROM common ORDER BY seq DESC LIMIT 1), focus AS (
             SELECT DISTINCT word,plainto_tsquery('english',word) AS term FROM latest l
-            CROSS JOIN LATERAL regexp_split_to_table(lower(regexp_replace(l.words,'\*[^*]+\*','','g')),'[^[:alnum:]]+') word
+            CROSS JOIN LATERAL regexp_split_to_table(regexp_replace(lower(regexp_replace(l.words,'\*[^*]+\*','','g')),
+                '\m(did|could)n[''’]t\M','\1 not','g'),'[^[:alnum:]]+') word
             WHERE l.speaker='player' AND l.addressed IN (@a,'group') AND length(word)>1
               AND numnode(plainto_tsquery('english',word))>0
               AND NOT to_tsvector('english','can could would did anyone someone somebody yourself firsthand personally see saw seen hear heard say said tell told know knew mention source account story earlier remember recall')
@@ -117,7 +118,8 @@ public sealed partial class Conversation
         string sourceGuidance=memory.ContainsKey("earlierGroupSource") ? """
 
             Use earlierGroupSource to answer the person asking the source question. Name heardFrom as the person who actually told you, in third person when someone else asked.
-            When inReplyTo is present, credit its speaker as the original claimant. A denied reportedSighting means that person said they had not seen it.
+            When inReplyTo is present, credit its speaker as the original claimant. A denied reportedSighting confirms their reported words about their own sight.
+            Preserve whether the person said they did not see it, could not see it or never saw it. The object could still have been there.
             Otherwise, when only a teller is named, the teller left the observer unidentified.
             Only the subject has been raised again here. Speak to who told you, and claim personal sight only with your own evidence.
             """ : "";
