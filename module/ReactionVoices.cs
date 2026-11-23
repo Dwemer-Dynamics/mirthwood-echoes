@@ -255,10 +255,14 @@ namespace Mirthwood.Echoes
             }
 
             // Leave each emitter's native timing and random selection in place.
-            static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) =>
-                Transpilers.MethodReplacer(instructions,
-                    AccessTools.Method(typeof(SoundEvent), nameof(SoundEvent.Play), new[] { typeof(Transform) }),
-                    AccessTools.Method(typeof(ChildSounds), nameof(Play)));
+            static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase __originalMethod)
+            {
+                var body = instructions.ToList();
+                var native = AccessTools.Method(typeof(SoundEvent), nameof(SoundEvent.Play), new[] { typeof(Transform) });
+                if (native == null || body.Count(instruction => instruction.Calls(native)) != 1)
+                    throw new InvalidOperationException("Expected one Sonity playback call in " + __originalMethod.DeclaringType.Name + "." + __originalMethod.Name);
+                return Transpilers.MethodReplacer(body, native, AccessTools.Method(typeof(ChildSounds), nameof(Play)));
+            }
 
             static void Play(SoundEvent cue, Transform owner)
             {

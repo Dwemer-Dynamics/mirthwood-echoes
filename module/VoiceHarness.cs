@@ -8,6 +8,8 @@ using HarmonyLib;
 using Newtonsoft.Json.Linq;
 using Sonity;
 using UnityEngine;
+using UnityEngine.AI;
+using _Mirthwood.Scripts.Demo;
 using _Mirthwood.Scripts.Demo.AI;
 using _Mirthwood.Scripts.Demo.Chat;
 using _Mirthwood.Scripts.Demo.Combat;
@@ -173,11 +175,17 @@ namespace Mirthwood.Echoes
                     yield return new WaitForEndOfFrame();
                     report["audioFallback"]=speech.LastError!=null && failedClips.Count==0 &&
                         npcBubble.ReadRenderedText()==new BubbleText(offline,false).Plain && npcBubble.Styled("nod",true);
+                    report["unavailableQuiet"]=VoiceHarness.CheckSound(chat,VoiceHarness.Playback.Quiet);
+                    const string silent="The mill opens at dawn.";
+                    speech=new ConversationSpeech(host,Address+"voices/speech",()=>false);
+                    DisplayTalk("voice-disabled",silent,null);
+                    yield return new WaitForEndOfFrame();
+                    report["disabledQuiet"]=!speech.Busy&&npcBubble.ReadRenderedText()==silent&&
+                        VoiceHarness.CheckSound(chat,VoiceHarness.Playback.Quiet);
                     Close();
                     report["voiceResumed"]=VoiceHarness.CheckSound(chat,VoiceHarness.Playback.Cast);
-                    yield return CheckPassingFarewell(npc,report);
-                    DismissPassingLine();
                     yield return CheckedProbe(report,CheckChildCalls(npc,report));
+                    yield return CheckedProbe(report,CheckPassingFarewell(npc,report));
                 }
             }finally{Close();if(npc)npc.transform.position=previous;}
         }
@@ -186,20 +194,56 @@ namespace Mirthwood.Echoes
         {
             const string line="Thank you, and safe travels.";
             var clips=new JArray();
-            var queued=new ConversationSpeech(host,Address+"voices/speech"){Witness=clips.Add};
-            if(!OfferPassingLine(npc,"voice-probe/quest","quest",line,0,queued,false))yield break;
+            var result=new JObject{["clips"]=clips};report["questFarewell"]=result;
+            // A resolved portrait returns the player to unpaused Gameplay. The voice fixture can start in a menu.
+            yield return DismissGroupTestCards();
+            GameState.SetCurrentGeneralState(GameState.State.Gameplay);
+            GameState.SetCurrentState(1,GameState.State.Gameplay,false);
+            GameState.UnPause();
+            float clock=Time.time;
+            yield return Await(()=>GameState.GetCurrentState(1)==GameState.State.Gameplay&&!GameState.IsPaused&&Time.time>clock,
+                "The copied game did not resume for the overhead farewell.",5);
+            result["gameplay"]=true;
+            var player=PlayerCharacterController.Instance;
+            var agent=npc.GetComponent<NavMeshAgent>();
+            bool follow=agent&&agent.updatePosition;
             var chat=npc.GetComponent<NPCChatController>();
-            bool pending=VoiceHarness.CheckSound(chat,VoiceHarness.Playback.Quiet),during=false,checkedWord=false;
-            float until=Time.realtimeSinceStartup+65;
-            while(passing!=null&&Time.realtimeSinceStartup<until){
-                if(passing.Bubble!=null&&!queued.Busy)break;
-                if(!checkedWord&&passing.Bubble?.SpokenWordMarked()==true){
-                    checkedWord=true;during=VoiceHarness.CheckSound(chat,VoiceHarness.Playback.Quiet);
+            try{
+                // Keep the copied resident on camera while testing the audio boundary.
+                if(agent)agent.updatePosition=false;
+                npc.transform.position=player.transform.position+Vector3.right*1.5f;
+                var queued=new ConversationSpeech(host,Address+"voices/speech"){Witness=clips.Add};
+                if(!Plugin.QuestFarewell(npc,"voice-probe/quest",line,queued))yield break;
+                result["queuedQuiet"]=VoiceHarness.CheckSound(chat,VoiceHarness.Playback.Quiet);
+                float until=Time.realtimeSinceStartup+65;
+                while(passing!=null&&Time.realtimeSinceStartup<until){
+                    if(passing.Bubble!=null&&!queued.Busy)break;
+                    if(result["speakingQuiet"]==null&&passing.Bubble?.SpokenWordMarked()==true)
+                        result["speakingQuiet"]=VoiceHarness.CheckSound(chat,VoiceHarness.Playback.Quiet);
+                    yield return null;
                 }
-                yield return null;
+                result["completedCaption"]=!queued.Busy&&passing?.Bubble?.ReadRenderedText()==line;
+                result["resumed"]=VoiceHarness.CheckSound(chat,VoiceHarness.Playback.Cast);
+                result["speechError"]=queued.LastError;
+
+                var silentClips=new JArray();
+                var disabled=new ConversationSpeech(host,Address+"voices/speech",()=>false){Witness=silentClips.Add};
+                if(!Plugin.QuestFarewell(npc,"voice-probe/disabled",line,disabled))yield break;
+                yield return Await(()=>passing==null||passing.Bubble!=null,"The silent farewell did not reach its bubble.",5);
+                result["disabledResumed"]=!disabled.Busy&&silentClips.Count==0&&passing?.Bubble?.ReadRenderedText()==line&&
+                    VoiceHarness.CheckSound(chat,VoiceHarness.Playback.Cast);
+
+                // Delay the first word past the native passing-line deadline to exercise expiry before playback.
+                if(!OfferPassingLine(npc,"voice-probe/expired","quest",line,30,queued,false))yield break;
+                float expires=passing.Expires;
+                int prior=clips.Count;
+                yield return Await(()=>passing==null,"The pending farewell did not expire.",16);
+                result["expiredResumed"]=Time.unscaledTime>=expires&&!queued.Busy&&clips.Count==prior&&
+                    VoiceHarness.CheckSound(chat,VoiceHarness.Playback.Cast);
+            }finally{
+                DismissPassingLine();
+                if(agent)agent.updatePosition=follow;
             }
-            report["questFarewellQuiet"]=pending&&during&&clips.Count>0&&(float?)clips.Last["mixPeak"]>.0001f&&
-                !queued.Busy&&passing?.Bubble?.ReadRenderedText()==line&&VoiceHarness.CheckSound(chat,VoiceHarness.Playback.Cast);
         }
 
         IEnumerator CheckChildCalls(NPCController npc,JObject report)

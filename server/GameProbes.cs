@@ -139,8 +139,20 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
             Check("Native interface sound",input["unrelatedPreserved"]?.GetValue<bool>()==true,"The chat icon kept its native sound.");
             Check("Incidental chat during Talk",new[]{"carryInStopped","draftQuiet","waitingQuiet","farewellQuiet","interfaceDuringTalk","voiceResumed"}
                 .All(key=>input[key]?.GetValue<bool>()==true),"Checked the active greeting, draft, wait, audible farewell, interface cue and next greeting.");
-            Check("Generated quest farewell after the portrait closes",input["questFarewellQuiet"]?.GetValue<bool>()==true,
-                "Chat reactions resumed after the overhead farewell finished playing.");
+            Check("Text-only Talk",new[]{"unavailableQuiet","disabledQuiet","voiceResumed"}.All(key=>input[key]?.GetValue<bool>()==true),
+                "Greetings during a failed speech request's text fallback, with speech disabled and after Talk closed.");
+            var farewell=input["questFarewell"];
+            bool FarewellCheck(string key)=>farewell?[key]?.GetValue<bool>()==true;
+            var farewellClips=farewell?["clips"]?.AsArray().OfType<JsonObject>().ToArray()??[];
+            Check("Queued quest farewell",FarewellCheck("gameplay")&&FarewellCheck("queuedQuiet"),
+                "Unpaused gameplay and a greeting before the first word.");
+            Check("Audible overhead quest farewell",FarewellCheck("speakingQuiet")&&FarewellCheck("completedCaption")&&
+                farewellClips.Any(c=>c.I("positionMs")>0&&(c["mixPeak"]?.GetValue<double>()??0)>.0001),
+                farewell?.S("speechError") is {Length:>0} error?error:$"{farewellClips.Length} measured clips.");
+            Check("Greeting after the last spoken word",FarewellCheck("completedCaption")&&farewellClips.Length>0&&FarewellCheck("resumed"),
+                "Greeting with the finished caption still visible.");
+            Check("Silent quest farewell",FarewellCheck("disabledResumed"),"Complete text and a greeting with playback disabled.");
+            Check("Expired quest farewell",FarewellCheck("expiredResumed"),"A greeting after the unspoken line expired.");
             Check("Random child calls during Talk",input["PlaySoundsRandomly"]?.GetValue<bool>()==true&&input["ToddlerAI"]?.GetValue<bool>()==true,
                 "Both native emitters kept their timers and played again after Talk.");
             var clips=input["speech"]?.AsArray().OfType<JsonObject>().ToArray()??[];
@@ -301,7 +313,7 @@ public sealed class GameProbes(CharacterJournal journal,NativeProfile native,Pro
         if(p.Mode=="voices"){
             result["reactions"]=input["voiceRows"]?.DeepClone();result["speech"]=input["speech"]?.DeepClone();result["error"]=input["probeError"]?.DeepClone();
             foreach(string key in new[]{"playerPartial","npcPartial","speechComplete","speakerAnchor","actionItalic","playerCaptions","npcCaptions","playerCapture","residentCapture","audioFallback",
-                "carryInStopped","draftQuiet","waitingQuiet","farewellQuiet","interfaceDuringTalk","voiceResumed","questFarewellQuiet","PlaySoundsRandomly","ToddlerAI"})
+                "carryInStopped","draftQuiet","waitingQuiet","farewellQuiet","interfaceDuringTalk","unavailableQuiet","disabledQuiet","voiceResumed","questFarewell","PlaySoundsRandomly","ToddlerAI"})
                 result[key]=input[key]?.DeepClone();
         }
         if(p.Mode=="interactions"){foreach(var key in new[]{"cases","conversation","restoredHead","liveAfterReload","postLoadEvents","giftReference","giftFollowUp","events","hooks","probeError","turns","path","passingGestures","quickMenuPages","quickReference","quickCapture","openers","walkAway","guardWarning","pairedCapture","passingCapture"})result[key]=input[key]?.DeepClone();}

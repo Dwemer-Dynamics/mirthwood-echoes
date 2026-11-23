@@ -96,7 +96,7 @@ namespace Mirthwood.Echoes
         QuestPanel(DialogueView v,DialogueData d,ConditionalDialogue entry,NPCChatController brain,NPCController resident,JObject w,int yes,int no)
         {
             view=v;data=d;condition=entry;quest=entry.quest;chat=brain;npc=resident;world=w;
-            speech=new ConversationSpeech(host);
+            speech=new ConversationSpeech(host,Address+"voices/speech");
             accept=yes;decline=no;acceptLabel=v.choiceButtons[yes].GetComponentInChildren<TextMeshProUGUI>(true).text;
             key=quest.Uid();nativeId=npc.CharacterInfo.id;owner=Plugin.Owner(npc);
             string terms=d.Dialogue.Replace("{origin}",PlayerCharacterController.Instance.CharacterInfo.origin.ToString());
@@ -196,6 +196,7 @@ namespace Mirthwood.Echoes
                 // The original listener owns the quest journal, marker/spawn work, relationship and portrait close.
                 choosing=true;
                 try{view.choiceButtons[action=="accept"?accept:decline].onClick.Invoke();}
+                catch{speech.Stop();throw;}
                 finally{choosing=false;}
                 bool started=MirthwoodPlayer.Instance?.QuestList?.Get(quest)!=null;
                 if(action=="accept"?started:!started&&chat&&!chat.ConditionalDialogues.Contains(condition)){
