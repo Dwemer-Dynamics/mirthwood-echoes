@@ -125,6 +125,7 @@ namespace Mirthwood.Echoes
             if(gathering.Guests.Count<2){
                 gathering.Close();gathering=null;host.StartCoroutine(GroupNotice("Two available residents are needed nearby."));return false;
             }
+            Plugin.Voices?.StopPlayingReactions();
             return true;
         }
         IEnumerator GroupNotice(string message)

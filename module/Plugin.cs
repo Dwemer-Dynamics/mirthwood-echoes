@@ -40,6 +40,8 @@ namespace Mirthwood.Echoes
         BepInEx.Configuration.ConfigEntry<BepInEx.Configuration.KeyboardShortcut> groupKey;
         private ReactionVoices reactionVoices;
         internal static ReactionVoices Voices => instance && instance.isActiveAndEnabled ? instance.reactionVoices : null;
+        internal static bool TalkActive => instance.dialogue.Visible || instance.dialogue.GroupActive ||
+            QuestPanel.Active || instance.dialogue.PassingVoicePending;
         private string probing,completedProbe,completedPacket;
         private IsolatedGameRun isolated;
         private JArray testObservations;
@@ -56,7 +58,9 @@ namespace Mirthwood.Echoes
             if(ReplacesTalk)instance.dialogue?.UseSpokenGift(npc,id,line);
         }
         internal static bool QuestFarewell(NPCController npc,string id,string line,ConversationSpeech speech) =>
-            ReplacesTalk&&IsolatedGameRun.Active==null&&Voices?.Enabled==true&&instance.dialogue?.OfferPassingLine(npc,id,"quest",line,0,speech,false)==true;
+            ReplacesTalk&&Voices?.Enabled==true&&
+            (IsolatedGameRun.Active==null||speech?.Witness!=null&&IsolatedGameRun.Active.PrivateDiagnostics&&IsolatedGameRun.Active.PathsMatch())&&
+            instance.dialogue?.OfferPassingLine(npc,id,"quest",line,0,speech,false)==true;
 
         private void Awake()
         {
@@ -69,7 +73,10 @@ namespace Mirthwood.Echoes
             dialogue = new NativeConversation(this);
             groupKey=Config.Bind("Controls","GroupTalk",new BepInEx.Configuration.KeyboardShortcut(KeyCode.T),"Gather nearby residents for a group conversation.");
             reactionVoices = new ReactionVoices(Config.Bind("Audio","OriginalVoices",true,"Play the Echoes cast for resident and player chat reactions."),Logger);
-            hooks.CreateClassProcessor(typeof(ReactionVoices.NativeSound)).Patch();
+            foreach(var patch in new[]{typeof(ReactionVoices.NativeSound),typeof(ReactionVoices.ChildSounds)}){
+                try{hooks.CreateClassProcessor(patch).Patch();}
+                catch(Exception error){Logger.LogWarning(patch.Name+": "+error.GetBaseException().Message);}
+            }
             QuestPanel.Install(this,hooks);
             NativeCues.Start(this);
             InteractionHooks.Install(hooks,Logger);

@@ -101,6 +101,7 @@ namespace Mirthwood.Echoes
             root=SpeechSurface("Mirthwood Echoes • Conversation",true);
             var surface=(RectTransform)root.transform;npcBubble=OverheadSpeech.Create(npc,surface);playerBubble=OverheadSpeech.Create(npc,surface,player);
             if(npcBubble==null||playerBubble==null){Close();return false;}
+            if(!GroupActive)Plugin.Voices?.StopPlayingReactions();
             speech=new ConversationSpeech(host);
             playerBubble.CreateEditor(Submit);
             previousSelection=EventSystem.current?.currentSelectedGameObject;previousState=GameState.GetCurrentState(1);controlsGame=true;

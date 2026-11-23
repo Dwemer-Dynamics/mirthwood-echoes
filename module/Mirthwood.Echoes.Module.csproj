@@ -14,6 +14,8 @@
     <Reference Include="Assembly-CSharp" HintPath="$(GameManaged)\Assembly-CSharp.dll" Private="false" />
     <Reference Include="FMODUnity" HintPath="$(GameManaged)\FMODUnity.dll" Private="false" />
     <Reference Include="Fluid.BehaviorTree" HintPath="$(GameManaged)\Fluid.BehaviorTree.dll" Private="false" />
+    <Reference Include="Sonity.Public.Runtime" HintPath="$(GameManaged)\Sonity.Public.Runtime.dll" Private="false" />
+    <Reference Include="Sonity.Runtime" HintPath="$(GameManaged)\Sonity.Runtime.dll" Private="false" />
     <Reference Include="System.IO.Compression" />
     <Reference Include="Assembly-CSharp-firstpass" HintPath="$(GameManaged)\Assembly-CSharp-firstpass.dll" Private="false" />
     <Reference Include="Febucci.TextAnimator.Runtime" HintPath="$(GameManaged)\Febucci.TextAnimator.Runtime.dll" Private="false" />

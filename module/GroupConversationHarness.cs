@@ -107,6 +107,8 @@ namespace Mirthwood.Echoes
                 GameState.SetCurrentState(1,GameState.State.Gameplay,false);
                 Require(StartGroup(),"Could not start the approach cancellation check.");
                 var approaching=gathering.Guests.ToArray();
+                Require(VoiceHarness.CheckSound(approaching[0].Chat,VoiceHarness.Playback.Quiet),
+                    "A chat voice played on the walk to the circle.");
                 Close();
                 Require(!GroupActive&&approaching.All(g=>!GroupGathering.Holds(g.Chat)&&g.Agent.isStopped==g.WasStopped),
                     "Cancelling the approach did not release native movement.");
@@ -190,6 +192,10 @@ namespace Mirthwood.Echoes
                 Require(NavMesh.SamplePosition(center.position+Vector3.forward*3f,out lateSpot,.65f,NavMesh.AllAreas),"No third approach in the clearing.");
                 StageGuest(late,lateSpot.position);
                 awareness?.Record("before-invite",groupSequence,late);
+                report["groupVoices"]=new JArray(new[]{first.Npc,other.Npc,late}.Select(n=>new JObject{
+                    ["actor"]=n.CharacterInfo.name,["member"]=gathering.Guests.Any(g=>g.Npc==n),
+                    ["distance"]=Vector3.Distance(n.transform.position,player.transform.position),
+                    ["quiet"]=VoiceHarness.CheckSound(n.GetComponent<NPCChatController>(),VoiceHarness.Playback.Quiet)}));
                 Require(IsolatedGameRun.PostGroupKey(true),"Could not invite a late arrival.");
                 yield return new WaitForSecondsRealtime(.15f);IsolatedGameRun.PostGroupKey(false);
                 float lateUntil=Time.unscaledTime+14;

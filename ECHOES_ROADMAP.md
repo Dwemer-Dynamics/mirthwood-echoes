@@ -9,6 +9,9 @@
 
 ## Completed
 
+- [x] Keep incidental resident voices quiet throughout private and group Talk, including text-only conversations, and during generated quest offers. Protect spoken passing replies and the overhead quest farewell until the last word. Resume ambient reactions when the conversation ends.
+  On 2026-11-23 a copied game reproduced a resident greeting and a toddler call interrupting Echoes speech. All 23 voice checks passed on the standalone audio build. Private and group farewells played through, and speakers and a nearby bystander stayed quiet across 16 audible clips. When Michael declined Averil’s job, the native offer closed and she said “I understand, friend. Goodbye!” overhead. Normal greetings resumed after the farewell.
+
 - [x] Keep 30 in-game days of ordinary dialogue, compact closed days by listener and preserve character knowledge, promises and major moments. On 2026-11-21 the copied slot kept Michael’s words through day 30. On day 31 Averil remembered plum tart after the original exchange expired. The journal and database checks covered who heard a disclosure, corrected preferences, replay and save rewinds.
   On 2026-11-21 the retention rule changed. Exact dialogue is kept for the current game day. The next day’s journal shows a compact, attributed recap. Searchable recaps last 30 elapsed game days including the day of the conversation. Promises and learned details are available on the day they are spoken.
 
