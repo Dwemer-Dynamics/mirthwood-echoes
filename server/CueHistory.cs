@@ -9,6 +9,7 @@ public static class CueHistory
         CREATE TABLE IF NOT EXISTS cue_events (
             campaign text REFERENCES campaigns, id uuid, parent uuid, payload jsonb NOT NULL,
             PRIMARY KEY(campaign,id), FOREIGN KEY(campaign,parent) REFERENCES cue_events(campaign,id));
+        ALTER TABLE cue_events ADD COLUMN IF NOT EXISTS witness_load uuid;
         ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS cue_saved uuid;
         ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS cue_live uuid;
         ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS cue_seen timestamptz;
@@ -50,11 +51,11 @@ public static class CueHistory
         """;
     // Scoped CTEs leave legacy journals readable. A compacted page is visible only when every contributing source is visible.
     public const string Scope = """
-        WITH RECURSIVE ancestry(id,parent) AS (
-            SELECT e.id,e.parent FROM cue_events e JOIN campaigns c ON c.id=e.campaign
+        WITH RECURSIVE ancestry(id,parent,depth) AS (
+            SELECT e.id,e.parent,0 FROM cue_events e JOIN campaigns c ON c.id=e.campaign
             WHERE e.campaign=@c AND e.id=CASE WHEN @explicit THEN @head::uuid
                 WHEN c.cue_seen>now()-interval '35 seconds' THEN c.cue_live ELSE c.cue_saved END
-            UNION ALL SELECT e.id,e.parent FROM cue_events e JOIN ancestry t ON e.id=t.parent WHERE e.campaign=@c
+            UNION ALL SELECT e.id,e.parent,t.depth+1 FROM cue_events e JOIN ancestry t ON e.id=t.parent WHERE e.campaign=@c
         ), turn_receipts AS (
             SELECT * FROM public.turns WHERE campaign=@c AND (cue_anchor IS NULL OR cue_anchor IN (SELECT id FROM ancestry))
         ), turns AS (SELECT * FROM turn_receipts t WHERE NOT dialogue_expired AND NOT EXISTS(SELECT FROM dialogue_clock d
@@ -101,12 +102,13 @@ public static class CueHistory
 public sealed partial class Conversation
 {
     static readonly HashSet<string> CueKinds = new(StringComparer.Ordinal) {
-        "gift","hire","collection","social","work","household","funeral","letter","quest","warning","talk","address","group"
+        "gift","hire","collection","social","work","household","funeral","letter","quest","warning","worldEvent","talk","address","group"
     };
     public async Task ObserveCue(JsonNode n)
     {
         var world=n["world"];string c=World(world);var id=n.Id();var parent=CueHistory.OptionalId(n["parent"]);
         var kind=n.Required("kind",24);
+        Guid? witnessLoad=kind=="worldEvent" && Guid.TryParseExact(world.S("memorySession"),"D",out var load) && load!=Guid.Empty?load:null;
         if(!CueKinds.Contains(kind)||parent==id||n["people"] is not JsonArray people||people.Count>2 ||
             (kind is "talk" or "group"?people.Count!=0:people.Count==0))throw new UserError("Invalid native event.");
         var canonical=new JsonObject{["day"]=world.I("day"),["kind"]=kind,["people"]=people.DeepClone()};
@@ -149,14 +151,14 @@ public sealed partial class Conversation
             if(!Equals(await order.ExecuteScalarAsync(),true))throw new UserError("This group line does not follow the saved conversation.",409);
         }
         await using(var insert=Database.Command(conn,"""
-            INSERT INTO cue_events(campaign,id,parent,payload) VALUES(@c,@id,@p::uuid,@j::jsonb) ON CONFLICT(campaign,id) DO NOTHING
-            """,("c",c),("id",id),("p",parent),("j",canonical.ToJsonString())))await insert.ExecuteNonQueryAsync();
+            INSERT INTO cue_events(campaign,id,parent,payload,witness_load) VALUES(@c,@id,@p::uuid,@j::jsonb,@load::uuid) ON CONFLICT(campaign,id) DO NOTHING
+            """,("c",c),("id",id),("p",parent),("j",canonical.ToJsonString()),("load",witnessLoad)))await insert.ExecuteNonQueryAsync();
         await using(var fill=Database.Command(conn,"""
             WITH RECURSIVE path(id,parent) AS (SELECT id,parent FROM cue_events WHERE campaign=@c AND id=@p::uuid
                 UNION ALL SELECT e.id,e.parent FROM cue_events e JOIN path h ON h.parent=e.id WHERE e.campaign=@c)
-            UPDATE cue_events SET parent=@p::uuid,payload=@j::jsonb WHERE campaign=@c AND id=@id AND payload ? 'unresolved'
+            UPDATE cue_events SET parent=@p::uuid,payload=@j::jsonb,witness_load=@load::uuid WHERE campaign=@c AND id=@id AND payload ? 'unresolved'
                 AND NOT EXISTS(SELECT FROM path WHERE id=@id)
-            """,("c",c),("id",id),("p",parent),("j",canonical.ToJsonString())))await fill.ExecuteNonQueryAsync();
+            """,("c",c),("id",id),("p",parent),("j",canonical.ToJsonString()),("load",witnessLoad)))await fill.ExecuteNonQueryAsync();
         await using(var match=Database.Command(conn,"SELECT EXISTS(SELECT FROM cue_events WHERE campaign=@c AND id=@id AND parent IS NOT DISTINCT FROM @p::uuid AND payload=@j::jsonb)",
             ("c",c),("id",id),("p",parent),("j",canonical.ToJsonString())))
             if(!Equals(await match.ExecuteScalarAsync(),true))throw new UserError("The native event ID already has different evidence.",409);

@@ -1,0 +1,502 @@
+{
+  "survey": {
+    "resident": "Averil",
+    "readPosters": true,
+    "turns": [
+      {
+        "words": "I've lost track of the days. What season is it, and is it early or late where we are?",
+        "check": "Compare the answer with the game's clock, season and part of day.",
+        "capture": true
+      },
+      {
+        "words": "Whereabouts are we? What's one landmark I could use to find my way back?",
+        "check": "Use only speaker-local and independently located landmarks."
+      },
+      {
+        "words": "Did I catch you in the middle of something?",
+        "check": "Name the activity at approach if observed. Leave an unverified errand open."
+      },
+      {
+        "words": "Have you seen a notice for the next festival or joust? What does the notice actually say?",
+        "check": "Distinguish the advertised date and location from today's activity."
+      },
+      {
+        "words": "I miss the afternoons I used to spend with my brother. Would you sit with me a moment?",
+        "check": "Stay with grief. Avoid an unsolicited calendar recital."
+      },
+      {
+        "words": "Thank you for listening. I should go. Goodbye, Averil.",
+        "check": "Close on Michael's parting.",
+        "capture": true
+      }
+    ]
+  },
+  "festival-followup": {
+    "resident": "Averil",
+    "startingDesire": "eager",
+    "readPosters": true,
+    "compareFallPosters": true,
+    "turns": [
+      { "words": "When is the next joust on the notice?", "check": "On Fall 9 the opened Grand Joust poster gives Fall 12." },
+      { "words": "And what about the next festival?", "check": "In the same conversation use the seasonal poster. All Hallows Eve is on Fall 17.", "capture": true },
+      { "words": "Did you actually see me at that celebration, or is it still to come?", "check": "A future notice cannot establish anyone's attendance." }
+    ]
+  },
+  "interrupted-work": {
+    "resident": "Baldwin",
+    "startingDesire": "eager",
+    "turns": [
+      { "words": "Did I catch you on your way to something? I can walk with you.", "calendar": { "season": "Fall", "day": 9, "time": 0.32 }, "watchResidentWalk": true, "check": "Compare independently observed movement and the running native task before Talk with the accepted and spoken activity.", "capture": true },
+      { "words": "What were you headed to do before we stopped to talk?", "check": "Keep the observed errand available on the second turn, after the resident has stopped walking.", "capture": true },
+      { "words": "No need to stop on my account. I'll let you get on.", "check": "Do not invent completion of the interrupted job." }
+    ]
+  },
+  "visitor": {
+    "resident": "Anastasia",
+    "turns": [
+      { "words": "I want to find my way to Brightoak. What landmark can you point out from here?", "check": "Compare this Crossroads resident's actual position and familiar or visible landmarks before giving directions.", "capture": true },
+      { "words": "Do you know which date is on Brightoak's jousting notice, or is that still news to you?", "check": "A visitor needs a personally reached notice or an attributed public report." }
+    ]
+  },
+  "spring-joust": {
+    "resident": "Graham",
+    "startingDesire": "eager",
+    "readPosters": true,
+    "turns": [
+      {
+        "words": "I might come to the next joust. When do the notices say it's meant to be?",
+        "calendar": {
+          "season": "Spring",
+          "day": 13,
+          "time": 0.42
+        },
+        "check": "Compare the next posted date against the opened Grand Joust notice.",
+        "capture": true
+      },
+      {
+        "words": "I lost a good friend last spring. I still reach for his cup when I brew tea.",
+        "check": "Stay with grief. The applicable next notice remains in the input without an unsolicited switch."
+      },
+      {
+        "words": "A friend offered to visit. What could I do to make it easier to talk about him?",
+        "check": "Develop the same topic and refrain from repeating already volunteered event news."
+      },
+      {
+        "words": "What’s on in town today? Has anything actually started?",
+        "calendar": {
+          "season": "Spring",
+          "day": 14,
+          "time": 0.43
+        },
+        "check": "Distinguish posted for today from an active story. Include all applicable public entries.",
+        "capture": true
+      },
+      {
+        "words": "Were you there when it started, or is that what the poster says?",
+        "check": "Give the witnessed or public source. Avoid inventing attendance."
+      },
+      {
+        "words": "Do you know the date for the next one, if I miss this?",
+        "check": "Give the following independently advertised date."
+      },
+      {
+        "words": "The joust was on the notice. Did you see me there yesterday?",
+        "calendar": {
+          "season": "Spring",
+          "day": 15,
+          "time": 0.44
+        },
+        "check": "A previous statement of intent and a posted date do not establish attendance.",
+        "capture": true
+      },
+      {
+        "words": "Thanks for telling me what you know. I'll be on my way.",
+        "check": "Honor the player's departure."
+      }
+    ]
+  },
+  "posted-dates": {
+    "resident": "Graham",
+    "readPosters": true,
+    "turns": [
+      {
+        "words": "I'd like to see the joust. When do the notices say the next one will be?",
+        "calendar": { "season": "Spring", "day": 13, "time": 0.42 },
+        "check": "Give the actual posted date. A plan to go leaves attendance open.",
+        "capture": true
+      },
+      {
+        "words": "Is the joust on today? Do you know if it has started?",
+        "calendar": { "season": "Spring", "day": 14, "time": 0.43 },
+        "check": "Distinguish the posted date from a local observation of the active story.",
+        "capture": true
+      },
+      {
+        "words": "You remember I wanted to go. Did you actually see me at the joust yesterday?",
+        "calendar": { "season": "Spring", "day": 15, "time": 0.44 },
+        "check": "A stated intention and the poster cannot establish either person's attendance.",
+        "capture": true
+      }
+    ]
+  },
+  "circle": {
+    "mode": "grouptalk",
+    "resident": "Group",
+    "startingDesire": "eager",
+    "privateTerms": ["thimble", "2 flour"],
+    "hearingQuestion": "Did you hear Averil talk about the Grand Joust earlier? What did she say, if you were there?",
+    "turns": [
+      {
+        "words": "Please keep this between us, Averil. I'm worried I lost my sister's silver thimble.",
+        "calendar": { "season": "Spring", "day": 14, "time": 0.45 },
+        "check": "Confirm the private exchange and keep it out of every group prompt."
+      },
+      {
+        "words": "Averil, collecting Grand Joust pennants is my favorite pastime. I saw a copper streamer by the field. Could you tell Drystan what I saw?",
+        "check": "Averil heard the player's report. Graham has not joined."
+      },
+      {
+        "words": "Drystan, did you see the streamer yourself, or did you hear about it here?",
+        "check": "Credit the actual speaker. Graham can hear this exchange but has no earlier firsthand memory."
+      },
+      {
+        "words": "Graham, what did you hear about the field after you joined us?",
+        "check": "Limit Graham to the part he heard, and retain his native decision to leave."
+      },
+      {
+        "words": "Averil, I'm new to this stretch of road. Is there a landmark you can point out to me?",
+        "check": "Use verified directions and account for the people currently in the circle."
+      },
+      {
+        "words": "Thank you both for talking. I'll be on my way. Goodbye.",
+        "check": "Part without sharing the private worry or private work collection."
+      }
+    ]
+  },
+  "greetings": {
+    "mode": "residentdialogue",
+    "resident": "Averil",
+    "retryAddress": true,
+    "turns": [
+      {
+        "words": "I miss my brother. We used to mend fishing nets together. What would you do with his old net?",
+        "calendar": { "season": "Spring", "day": 21, "time": 0.53 },
+        "check": "Let the player talk about his brother despite a public festival today."
+      },
+      {
+        "words": "It's the quiet by the water that I miss most. Could we sit with that a moment?",
+        "check": "Continue the personal subject."
+      },
+      {
+        "words": "Let's talk about something lighter. Tell me a joke about the tavern cook.",
+        "check": "Answer the invitation. Verify subsequent native joke and flirt openers use their own scene."
+      }
+    ]
+  },
+  "quest": {
+    "resident": "Averil",
+    "repeatUnrelatedOffer": true,
+    "questDecision": "Yes, I'll gather {items} on the original terms. By the way, when is the Grand Joust?",
+    "questQuestion": "Before I decide about the job, what time of year is it here and is anything announced for today?",
+    "turns": [
+      {
+        "words": "Good morning, Averil. I'd like to see what work needs doing in town. I'll let you get on.",
+        "calendar": { "season": "Summer", "day": 21, "time": 0.43 },
+        "check": "Answer about the season and public notice. The original offer, reward, eligibility and decision remain native."
+      }
+    ]
+  },
+  "quest-decline": {
+    "resident": "Averil",
+    "questDecision": "I'll attend the Grand Joust, but I won't gather {items} for this job.",
+    "questQuestion": "Before I decide about work, what do the notices say about the Grand Joust today?",
+    "declineQuest": true,
+    "turns": [
+      {
+        "words": "Good morning. I'll let you get back to work, Averil.",
+        "calendar": { "season": "Spring", "day": 14, "time": 0.46 },
+        "check": "Use the native offer. Keep a statement about attending the joust separate from a subsequent declined job."
+      }
+    ]
+  },
+  "doorway": {
+    "resident": "Averil",
+    "turns": [
+      {
+        "calendar": { "season": "Fall", "day": 9, "time": 0.22 },
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside" },
+        "words": "How does the weather look from where you're standing?",
+        "check": "Sample the speaker and the weather in the actual open air. Compare the rendered inn and present company.",
+        "capture": true
+      },
+      {
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "inside", "playerSide": "outside" },
+        "words": "Can you see what the weather's doing from where you are?",
+        "check": "Use the resident's side of the doorway. Do not assume the player's outdoor sightline or claim to hear rain without evidence.",
+        "capture": true
+      },
+      {
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "inside" },
+        "words": "What's one landmark I could use to find my way back here?",
+        "check": "Check the direction against the physical landmark and speaker coordinates. The player stands across the doorway.",
+        "capture": true
+      }
+    ]
+  },
+  "weather": {
+    "resident": "Averil",
+    "startingDesire": "eager",
+    "turns": [
+      {
+        "calendar": { "season": "Fall", "day": 9, "time": 0.88 },
+          "nativePrecipitation": false,
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside", "openSky": true },
+        "words": "It's late. How does the weather look to you out here?",
+        "check": "Compare the native night and actual weather at the resident. A fair-weather condition at night is not daylight.", "capture": true
+      },
+      {
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside", "openSky": true },
+        "nativePrecipitation": true,
+        "words": "I left my cloak behind. What's the weather doing out here now?",
+        "check": "Use the resident's actual native outdoor precipitation in the spoken reply.", "capture": true
+      },
+      {
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "inside", "playerSide": "outside" },
+        "words": "Can you actually see what the weather's doing now from inside the inn?",
+        "check": "Use the speaker's own indoor sightline and distinguish any earlier outdoor observation.", "capture": true
+      }
+    ]
+  },
+  "inn-side-door": {
+    "resident": "Averil",
+    "turns": [
+      {
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Door Trigger Side Variant", "speakerSide": "outside", "playerSide": "outside" },
+        "words": "Are we inside the inn or out in the open here? Can you see what the weather is doing?",
+        "check": "Compare both characters at the side entrance with native door membership, the exterior sprites and the rendered scene.", "capture": true
+      },
+      {
+        "doorway": { "building": "Bog & Briar Inn", "entrance": "Door Trigger Side Variant", "speakerSide": "inside", "playerSide": "inside" },
+        "words": "What changed when we went through the door?",
+        "check": "Compare the other side of the same native door with the first observation and the current room.", "capture": true
+      }
+    ]
+  },
+  "witness-and-rewind": {
+    "resident": "Graham",
+    "attendanceEvent": "Grand Joust",
+    "turns": [
+      {
+        "calendar": { "season": "Spring", "day": 14, "time": 0.44 },
+        "snapshot": true,
+          "attendance": "unknown",
+        "words": "I'm thinking of going to the joust. Have you seen me at it yet, or only heard me talk about it?",
+        "check": "Source the posted event and leave unobserved attendance open."
+      },
+      {
+        "venue": { "title": "Grand Joust", "landmark": "Dummy Juggler" },
+          "attendance": "witnessed",
+        "words": "What can you actually see here? Who's with you at the joust gathering?",
+        "check": "Pair the event's own visible performers in Brightoak, both people and the spoken words with the firsthand cue.",
+        "capture": true
+      },
+      {
+        "venue": { "title": "Grand Joust", "landmark": "Dummy Juggler", "end": true },
+          "attendance": "witnessed",
+        "words": "Did you see the jousting stop, or does the notice just give today's date?",
+        "check": "Only a direct witness of the actual end can call it finished.",
+        "capture": true
+      },
+      {
+        "calendar": { "season": "Spring", "day": 15, "time": 0.42 },
+        "words": "Did you see me at the joust yesterday?",
+          "attendance": "witnessed",
+        "check": "Recover attested earlier attendance from this save branch."
+      },
+      {
+        "rewind": true,
+        "words": "Did you see me at the joust, and do you know if it has ended?",
+          "attendance": "unknown",
+        "check": "The earlier same-date save lacks the future witness and ending. The public notice still applies.",
+        "capture": true
+      }
+    ]
+  },
+  "season-turn": {
+    "resident": "Averil",
+    "turns": [
+      {
+        "calendar": { "season": "Spring", "day": 25, "time": 0.94 },
+        "words": "Is this the last night of the season? What's the next public event?",
+        "check": "Reconcile the HUD and the next advertised Summer event."
+      },
+      {
+        "calendar": { "season": "Summer", "day": 1, "time": 0.32 },
+        "words": "Which season did we wake up to this morning?",
+        "check": "Refresh the speaker's date, season, time of day and next notice at native rollover.",
+        "capture": true
+      }
+    ]
+  },
+  "public-and-local": {
+    "resident": "Graham",
+    "turns": [
+      {
+        "calendar": { "season": "Fall", "day": 12, "time": 0.48 },
+        "words": "I'm hoping to trade. Is there a notice that says when the traveling merchant will come?",
+        "check": "Keep an unannounced merchant schedule unknown. The local Grand Joust notice is due today."
+      },
+      {
+        "venue": { "title": "Traveling Merchant", "landmark": "Shop Character" },
+        "words": "Who have we come across? Is there also something on the public notice today?",
+        "check": "Supply both the live local merchant sighting and the simultaneous public joust notice.", "capture": true
+      },
+      {
+        "returnFromVenue": "Traveling Merchant",
+        "words": "What did you see earlier? Do you know if the merchant is still there now?",
+        "check": "Attribute the earlier encounter and avoid firsthand knowledge of the remote departure."
+      }
+    ]
+  },
+  "ordinary": {
+    "resident": "Averil",
+    "turns": [
+      {
+        "words": "I woke before dawn. Is it still night here?",
+        "calendar": {
+          "season": "Spring",
+          "day": 20,
+          "time": 0.08
+        },
+        "check": "Use the speaker's verified native time of day."
+      },
+      {
+        "words": "Now that it’s getting light, what’s different outside?",
+        "calendar": {
+          "season": "Spring",
+          "day": 20,
+          "time": 0.33
+        },
+        "check": "Refresh clock and observable weather for this speaker."
+      },
+      {
+        "words": "Will a traveling merchant come here next week? Do you know on which day?",
+        "check": "Leave an unscheduled visit unknown unless the speaker has a dated public source."
+      },
+      {
+        "words": "What do the notices say about the Festival of Blossoms?",
+        "calendar": {
+          "season": "Spring",
+          "day": 21,
+          "time": 0.48
+        },
+        "check": "Distinguish the advertised festival from proof of active festivities."
+      },
+      {
+        "words": "I have to go. Take care.",
+        "check": "End naturally."
+      }
+    ]
+  },
+  "joust-blocked": {
+    "resident": "Drystan",
+    "startingDesire": "eager",
+    "turns": [
+      {
+        "calendar": {"season": "Spring", "day": 14, "time": 0.44},
+        "doorway": {"building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside", "openSky": true},
+        "words": "I'm thinking of going to the joust. Have you seen me there yet?",
+        "check": "An intention and a public date do not establish attendance."
+      },
+      {
+        "venue": {"title": "Grand Joust", "landmark": "Dummy Juggler", "view": "blocked"},
+        "words": "What can you actually see here? Can you tell who is at the gathering?",
+        "check": "Compare the blocked performer, visible player and separate stock notice with the spoken answer.",
+        "capture": true
+      }
+    ]
+  },
+  "joust-witness-only": {
+    "resident": "Drystan",
+    "startingDesire": "eager",
+    "attendanceEvent": "Grand Joust",
+    "turns": [
+      {
+        "calendar": {"season": "Spring", "day": 14, "time": 0.44},
+        "doorway": {"building": "Bog & Briar Inn", "entrance": "Exterior/Door Trigger", "speakerSide": "outside", "playerSide": "outside", "openSky": true},
+        "attendance": "unknown",
+        "words": "I'm thinking of going to the joust. Have you seen me there yet?",
+        "check": "The resident has the public notice and the player's intention before seeing the gathering."
+      },
+      {
+        "venue": {"title": "Grand Joust", "landmark": "Dummy Juggler", "view": "event-only"},
+        "returnFromVenue": "Grand Joust",
+        "keepVenueActive": true,
+        "words": "From back here, what did you see at the joust? Did you see me there with the performers?",
+        "check": "Ask away from the still active venue after the resident saw the juggler with Michael behind him.",
+        "capture": true
+      },
+      {
+        "venue": {"title": "Grand Joust", "landmark": "Dummy Juggler"},
+        "attendance": "witnessed",
+        "words": "Now that we're here together, what can you see? Am I here with you this time?",
+        "check": "A later shared view establishes the player's attendance after the first conversation.",
+        "capture": true
+      },
+      {
+        "returnFromVenue": "Grand Joust",
+        "attendance": "witnessed",
+        "words": "Back in town, do you remember seeing me there? Can you still tell if the joust is going on?",
+        "check": "Remember the later shared visit and leave the remote ending unknown."
+      }
+    ]
+  },
+  "solstice": {
+    "resident": "Averil",
+    "turns": [
+      {
+        "words": "What does the village notice say is coming tomorrow?",
+        "calendar": {
+          "season": "Summer",
+          "day": 20,
+          "time": 0.72
+        },
+        "check": "Compare next notice to Summer Solstice on Summer 21."
+      },
+      {
+        "words": "I’m trying to mend things with a friend. Can you stay with me a little?",
+        "calendar": {
+          "season": "Summer",
+          "day": 21,
+          "time": 0.44
+        },
+        "check": "Today's public notice is in the prompt while the spoken reply follows the personal disclosure."
+      },
+      {
+        "words": "What did you mean by that? I want to understand.",
+        "check": "Deepen the preceding topic."
+      },
+      {
+        "words": "Shall we change the subject? What’s happening in town?",
+        "check": "Answer the invitation with relevant information."
+      },
+      {
+        "words": "Did you see it yourself?",
+        "check": "Distinguish the public date, an active event and personal attendance."
+      },
+      {
+        "words": "How about today? Is the celebration still happening?",
+        "calendar": {
+          "season": "Summer",
+          "day": 22,
+          "time": 0.4
+        },
+        "check": "Remove stale due-today status. Use native evidence for a continuing, ended or unknown event."
+      },
+      {
+        "words": "You've answered my questions. Goodbye.",
+        "check": "Close Talk."
+      }
+    ]
+  }
+}

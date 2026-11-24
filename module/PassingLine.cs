@@ -15,7 +15,7 @@ namespace Mirthwood.Echoes
         sealed class PassingLine
         {
             public NPCController Speaker;
-            public string Id, Kind, Line, Session, EventId;
+            public string Id, Kind, Line, Session, EventId, Owner, NativeId;
             public bool Heard;
             public float ReadyAt, Expires;
             public int Frame;
@@ -35,35 +35,48 @@ namespace Mirthwood.Echoes
         {
             if(!InReplyRange(npc)||Visible||GroupActive||GameState.GetCurrentState(1)!=GameState.State.Gameplay||
                 (IsolatedGameRun.Active!=null&&IsolatedGameRun.Active.TalkAddress==null))return;
-            var world=Plugin.World();
+            var awareness=WorldAwareness.Capture(npc);
+            var world=awareness?["world"];
+            if(world==null&&Plugin.World() is object current)world=JObject.FromObject(current);
             if(world==null||npc.CharacterInfo==null||string.IsNullOrEmpty(Plugin.Owner(npc)))return;
-            var target=new{world,owner=Plugin.Owner(npc),nativeId=npc.CharacterInfo.id};
+            var target=new JObject{["world"]=world,["owner"]=Plugin.Owner(npc),["nativeId"]=npc.CharacterInfo.id};
             NativeCues.Recent(npc,null,"card",cue);
             pendingAddress?.Abort();
-            string head=NativeCues.Head;
-            host.StartCoroutine(GenerateAddress(npc,new{target,card,cue,head=string.IsNullOrEmpty(head)?null:head},++addressRequest,NativeCues.Session,card!="Farewell"));
+            var payload=new JObject{["id"]=Guid.NewGuid().ToString(),["target"]=target,["card"]=card,["cue"]=cue,
+                ["head"]=world["cueHead"],["worldAwareness"]=awareness};
+            host.StartCoroutine(GenerateAddress(npc,payload,++addressRequest,NativeCues.Session,card!="Farewell"));
         }
 
-        IEnumerator GenerateAddress(NPCController npc,object payload,int ticket,string session,bool canReply)
+        bool CanDeliverAddress(NPCController npc,int ticket,string session)=>
+            ticket==addressRequest&&session==NativeCues.Session&&!Visible&&!GroupActive&&InReplyRange(npc);
+
+        IEnumerator GenerateAddress(NPCController npc,JObject payload,int ticket,string session,bool canReply)
         {
-            using(var req=Post(Address+"dialogue/address",payload)){
-                pendingAddress=req;
-                req.timeout=80;
-                var operation=req.SendWebRequest();
-                while(!operation.isDone){
-                    if(ticket!=addressRequest||session!=NativeCues.Session||Visible||!InReplyRange(npc)){
-                        req.Abort();break;
+            float deadline=Time.unscaledTime+90;
+            bool retriedConnection=false;
+            while(CanDeliverAddress(npc,ticket,session)&&Time.unscaledTime<deadline){
+                using(var req=Post(Address+"dialogue/address",payload)){
+                    pendingAddress=req;
+                    req.timeout=Mathf.Clamp(Mathf.CeilToInt(deadline-Time.unscaledTime),1,80);
+                    var operation=req.SendWebRequest();
+                    while(!operation.isDone){
+                        if(!CanDeliverAddress(npc,ticket,session)){req.Abort();break;}
+                        yield return null;
                     }
-                    yield return null;
+                    if(pendingAddress==req)pendingAddress=null;
+                    if(!CanDeliverAddress(npc,ticket,session)||GameState.GetCurrentState(1)!=GameState.State.Gameplay||
+                       npc.CharacterInfo?.id!=(string)payload["target"]["nativeId"]||Plugin.Owner(npc)!=(string)payload["target"]["owner"])yield break;
+                    if(req.responseCode==425&&Time.unscaledTime<deadline){yield return new WaitForSecondsRealtime(.25f);continue;}
+                    if(req.responseCode==0&&!retriedConnection){
+                        retriedConnection=true;yield return new WaitForSecondsRealtime(.5f);continue;
+                    }
+                    if(req.responseCode!=200){Debug.LogWarning(Error(req,"Echoes could not prepare the passing remark."));yield break;}
+                    string line;
+                    try{line=(string)JObject.Parse(req.downloadHandler.text)["line"];}
+                    catch(JsonException){yield break;}
+                    OfferPassingLine(npc,(string)payload["id"],"address",line,0,canReply:canReply);
+                    yield break;
                 }
-                if(pendingAddress==req)pendingAddress=null;
-                if(ticket!=addressRequest||session!=NativeCues.Session||Visible||!InReplyRange(npc)||
-                   GameState.GetCurrentState(1)!=GameState.State.Gameplay)yield break;
-                if(req.responseCode!=200){Debug.LogWarning(Error(req,"Echoes could not prepare the passing remark."));yield break;}
-                string line;
-                try{line=(string)JObject.Parse(req.downloadHandler.text)["line"];}
-                catch(JsonException){yield break;}
-                OfferPassingLine(npc,Guid.NewGuid().ToString(),"address",line,0,canReply:canReply);
             }
         }
 
@@ -79,7 +92,7 @@ namespace Mirthwood.Echoes
             if(Visible||GroupActive||!InReplyRange(npc)||string.IsNullOrWhiteSpace(line)||passing?.Id==id)return false;
             DismissPassingLine();
             passing=new PassingLine{Speaker=npc,Id=id,EventId=kind=="address"?null:id,Kind=kind,Line=line,Session=NativeCues.Session,
-                ReadyAt=Time.time+delay,Expires=Time.unscaledTime+12f,Speech=queued,CanReply=canReply};
+                Owner=Plugin.Owner(npc),NativeId=npc.CharacterInfo?.id,ReadyAt=Time.time+delay,Expires=Time.unscaledTime+12f,Speech=queued,CanReply=canReply};
             if(PassingVoicePending)Plugin.Voices?.StopPlayingReactions();
             return true;
         }
@@ -95,7 +108,8 @@ namespace Mirthwood.Echoes
         internal void TickPassingLine()
         {
             if(passing==null)return;
-            if(!InReplyRange(passing.Speaker)||passing.Session!=NativeCues.Session){
+            if(!InReplyRange(passing.Speaker)||passing.Session!=NativeCues.Session||passing.Speaker.CharacterInfo?.id!=passing.NativeId||
+               Plugin.Owner(passing.Speaker)!=passing.Owner){
                 DismissPassingLine();return;
             }
             if(Time.unscaledTime>=passing.Expires&&(passing.Bubble==null||passing.Speech?.Busy!=true)){
@@ -117,7 +131,7 @@ namespace Mirthwood.Echoes
                     remark.Expires=Time.unscaledTime+ReadTime(remark.Line);
                     if(remark.Kind=="address"&&!remark.Heard){
                         remark.Heard=true;
-                        remark.EventId=NativeCues.Fact(remark.Speaker,"address",remark.Line,false,new JObject{["conversation"]=remark.Id});
+                        remark.EventId=NativeCues.Fact(remark.Speaker,"address",remark.Line,false,new JObject{["conversation"]=remark.Id},remark.Id);
                         if(remark.EventId!=null)NativeCues.Recent(remark.Speaker,remark.EventId,remark.Kind,remark.Line);
                     }
                 });

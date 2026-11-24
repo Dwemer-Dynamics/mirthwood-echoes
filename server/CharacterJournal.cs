@@ -5,12 +5,15 @@ using Microsoft.AspNetCore.WebUtilities;
 
 public sealed class CharacterJournal(Database db, NativeProfile native, Providers providers, MemoryCompactor compactor)
 {
-    public async Task<JsonObject> Actor(string campaign,string actor) =>
+    public async Task<JsonObject> Actor(string campaign,string actor,string? load=null) =>
         (await db.One("""
-          SELECT jsonb_build_object('name',a.name,'kind',a.kind,'job',a.job,'town',a.town,'raw',a.raw,'day',c.day)::text
+          SELECT jsonb_build_object('name',a.name,'kind',a.kind,'job',a.job,'town',a.town,'raw',a.raw,'day',c.day,
+            'owner',a.owner,'nativeId',a.native_id,'retiredLoad',@load::text=ANY(d.retired_loads),
+            'lastDayOnLoad',CASE WHEN @load=d.load_id THEN d.day END)::text
           FROM actors a JOIN campaigns c ON c.id=a.campaign JOIN slots s ON s.campaign=c.id
+          LEFT JOIN dialogue_clock d ON d.campaign=c.id AND @load::text IS NOT NULL
           WHERE a.campaign=@c AND a.key=@a AND a.present
-          """,("c",campaign),("a",actor)))?.AsObject()??throw new UserError("This character is absent from the selected save.",404);
+          """,("c",campaign),("a",actor),("load",load)))?.AsObject()??throw new UserError("This character is absent from the selected save.",404);
 
     public async Task<JsonObject> Profile(string c,string a)
     {

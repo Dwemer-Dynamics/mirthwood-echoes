@@ -2,12 +2,16 @@
 
 ## Inbox
 
-- [ ] Keep incidental resident voices quiet throughout private and group Talk, including text-only conversations, and during generated quest offers. Protect spoken passing replies and the overhead quest farewell until the last word. Resume ambient reactions when the conversation ends.
-  On 2026-11-23 a copied game reproduced a resident greeting and a toddler call overlapping Echoes speech. On the candidate, private and group speakers and a nearby bystander stayed quiet across 16 audible clips. Native greetings resumed after Talk. The generated quest farewell is still under test.
-
 ## In progress
 
 ## Completed
+
+- [x] Give each speaking resident their current place, calendar, nearby people, weather and landmarks. Include every knowable event today and the next public notice in private Talk, passing remarks, groups and generated quest dialogue. Preserve interrupted activities, the source of local news, privacy, and evidence of what happened after an earlier plan.
+  Copied-save checks covered the Fall 12 joust and Fall 17 festival notices, actual event starts and ends, local weather and company, interrupted work, player-led topics, quest choices and retries on divergent saves.
+  On 2026-11-23, Drystan credited Averil for relaying Michael’s streamer and duel accounts. Graham recalled only the exchange he heard after joining. Drystan preserved Michael’s denial and declined to speak for both of them. When Michael said he liked lying low, Drystan withheld the source in the wider group and recalled Averil’s line in private. Anastasia had been absent and said she did not hear Averil.
+
+- [x] Keep incidental resident voices quiet throughout private and group Talk, including text-only conversations, and during generated quest offers. Protect spoken passing replies and the overhead quest farewell until the last word. Resume ambient reactions when the conversation ends.
+  On 2026-11-23 a copied game reproduced a resident greeting and a toddler call interrupting Echoes speech. All 23 voice checks passed on the standalone audio build. Private and group farewells played through, and speakers and a nearby bystander stayed quiet across 16 audible clips. When Michael declined Averil’s job, the native offer closed and she said “I understand, friend. Goodbye!” overhead. Normal greetings resumed after the farewell.
 
 - [x] Keep 30 in-game days of ordinary dialogue, compact closed days by listener and preserve character knowledge, promises and major moments. On 2026-11-21 the copied slot kept Michael’s words through day 30. On day 31 Averil remembered plum tart after the original exchange expired. The journal and database checks covered who heard a disclosure, corrected preferences, replay and save rewinds.
   On 2026-11-21 the retention rule changed. Exact dialogue is kept for the current game day. The next day’s journal shows a compact, attributed recap. Searchable recaps last 30 elapsed game days including the day of the conversation. Promises and learned details are available on the day they are spoken.

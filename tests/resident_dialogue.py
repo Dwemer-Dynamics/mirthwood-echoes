@@ -27,6 +27,11 @@ def write(path, value):
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def opener_journal_id(opener):
+    source = hashlib.md5((opener["id"]+"/"+opener["actor"]).encode(), usedforsecurity=False)
+    return str(uuid.UUID(bytes=source.digest()))
+
+
 def api(path, data=None, method=None):
     body = None if data is None else json.dumps(data).encode()
     req = Request("http://127.0.0.1:17864/api/"+path, data=body, method=method,
@@ -59,6 +64,18 @@ def serve(token, saves, package, output):
     app = (Path(package)/"app").resolve(strict=True)
     if work.name!=uuid.UUID(hex=token).hex or not (work/"game").is_dir() or not (Path(saves)/"Slot0.savegame").is_file():
         raise ValueError("Missing private game or save")
+    installed = Path(saves).parent / "installed-loader"
+    if installed.is_file():
+        if installed.read_text() != token:
+            raise ValueError("The installed-runtime marker belongs to another test.")
+        release = Path("/opt/mirthwood-echoes/current").resolve(strict=True)
+        if release.parent != Path("/opt/mirthwood-echoes/releases"):
+            raise ValueError("The active server has no installed release directory.")
+        def inventory(directory):
+            return {p.relative_to(directory).as_posix(): digest(p) for p in directory.rglob("*") if p.is_file()}
+        if inventory(release) != inventory(app):
+            raise RuntimeError("The active server files differ from the qualified package.")
+        app = release
     free_port()
     account = pwd.getpwnam("mirthwood_echoes")
     database = "echoes_talk_"+token
@@ -70,11 +87,15 @@ def serve(token, saves, package, output):
                        MIRTHWOOD_ECHOES_DB="Host=/var/run/postgresql;Username=mirthwood_echoes;Database="+database,
                        MIRTHWOOD_ECHOES_PORT="17864",MIRTHWOOD_ECHOES_HARNESS_ID=token,MIRTHWOOD_ECHOES_STATE=temp,
                        MIRTHWOOD_ECHOES_CAPTURE_RECALL="1" if (Path(saves).parent/"memory-clock-test").is_file() else "0",
+                       MIRTHWOOD_ECHOES_CAPTURE_AWARENESS="1" if (Path(saves).parent/"world-awareness.json").is_file() else "0",
                        MIRTHWOOD_ECHOES_GAME=str((work/"game").resolve()),MIRTHWOOD_ECHOES_SAVES=saves)
             with (work/"server.log").open("w") as log:
                 process = subprocess.Popen(["/usr/bin/dotnet",str(app/"Mirthwood.Echoes.Server.dll")],cwd=app,env=env,
                                            user=account.pw_uid,group=account.pw_gid,extra_groups=[],stdout=log,stderr=log)
                 try:
+                    if installed.is_file():
+                        write(work/"installed-server.json",dict(pid=process.pid,release=str(app),uid=account.pw_uid,
+                              assembly=digest(app/"Mirthwood.Echoes.Server.dll"),copies=saves,database=database,port=17864))
                     end=time.monotonic()+(2220 if (Path(saves).parent/"resident.txt").exists() else 720)
                     while process.poll() is None and not (work/"stop-server").exists() and time.monotonic()<end:
                         time.sleep(.3)
@@ -84,6 +105,13 @@ def serve(token, saves, package, output):
                       talk->>'flow' AS flow,talk->'deliveredContinuation' AS delivered_continuation,
                       first_ms,total_ms FROM turns ORDER BY started) t"""
                     write(work/"turns.json",json.loads(postgres("psql","-XAt","-d",database,"-c",query)))
+                    if (Path(saves).parent/"world-awareness.json").is_file():
+                        clock = """SELECT jsonb_build_object(
+                          'clocks', (SELECT coalesce(jsonb_agg(to_jsonb(d)), '[]') FROM dialogue_clock d),
+                          'turns', (SELECT coalesce(jsonb_agg(jsonb_build_object('id',id,'day',day,
+                            'age',dialogue_age,'expired',dialogue_expired,'state',state,'binding',cue_binding)
+                            ORDER BY started), '[]') FROM turns))"""
+                        write(work/"private-clock.json",json.loads(postgres("psql","-XAt","-d",database,"-c",clock)))
                 finally:
                     if process.poll() is None:
                         process.send_signal(signal.SIGINT)
@@ -116,7 +144,7 @@ def send_line(token, words):
         tmp.unlink(missing_ok=True)
 
 
-def run(package, mode, resident=None, starting_desire=None, knowledge=False):
+def run(package, mode, resident=None, starting_desire=None, knowledge=False, awareness=None, installed=False):
     import winreg
     token=uuid.uuid4().hex
     free_port()
@@ -126,6 +154,16 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
         steam=winreg.QueryValueEx(key,"SteamExe")[0]
     real=Path(os.environ.get("MIRTHWOOD_ECHOES_STEAM_GAME",r"C:\SteamLibrary\steamapps\common\Mirthwood"))
     module=Path("BepInEx/plugins/MirthwoodEchoes/Mirthwood.Echoes.dll")
+    preloader = Path("BepInEx/core/BepInEx.Preloader.dll")
+    if installed:
+        import configparser
+        config = configparser.ConfigParser()
+        config.read(real/"doorstop_config.ini", encoding="utf-8-sig")
+        if not awareness or not config.getboolean("General","enabled") or (real/config.get("General","target_assembly")).resolve() != (real/preloader).resolve():
+            raise RuntimeError("The installed game needs the normal enabled preloader for this isolated smoke test.")
+        for rel in (module,preloader):
+            if digest(real/rel) != digest(package/"app/bundle"/rel):
+                raise RuntimeError("The installed file differs from the qualified package: " + str(rel))
     original=Path(os.environ["USERPROFILE"])/"AppData/LocalLow/Bad Ridge Games/Mirthwood/SaveData"
     files=[p for p in (original/name for name in ("Slot0.savegame","Slot0.metadata","Slot0.savegame.b","Slot0.metadata.b")) if p.exists()]
     baseline={str(p):digest(p) for p in [*files,real/module]}
@@ -138,6 +176,11 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
         assert digest(saves/p.name)==baseline[str(p)]
     write(session/"harness.json",dict(id=token,sourceSlot=0,sha256=digest(saves/"Slot0.savegame"),talkPort=17864,privateDiagnostics=True))
     if knowledge:(session/"memory-clock-test").touch()
+    if awareness:
+        write(session/"world-awareness.json",awareness.plan)
+        write(work/"world-awareness-plan.json",awareness.plan)
+    if installed:
+        (session/"installed-loader").write_text(token)
     if resident:
         (session/"resident.txt").write_text(resident,encoding="utf-8")
         if starting_desire:
@@ -162,25 +205,35 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
             except OSError: pass
             time.sleep(.4)
         else: raise RuntimeError("The private server did not index the copied save")
-        if mode not in ("interface","voices"):
+        if awareness:
+            awareness.configure(token,work)
+        elif mode not in ("interface","voices"):
             api("providers/codex_subscription",dict(defaultModel="gpt-6.1-terra",conversation="gpt-6.1-terra",
                                                     conversationEffort="medium",codexHost="windows"),"PUT")
             api("options",dict(provider="codex_subscription",replyTokens=96,dailyDays=2),"PUT")
         assert api("module/check",{})["status"]=="ready"
         assert digest(game/module)==digest(package/"app/bundle"/module)
         probe=api("diagnostics/probes",dict(mode=mode,run=token))
-        subprocess.Popen([steam,"-applaunch","2272900","-echoes-harness",token,"--doorstop-target-assembly",
-                          str(game/"BepInEx/core/BepInEx.Preloader.dll")])
+        command = [steam,"-applaunch","2272900","-echoes-harness",token]
+        if not installed:
+            command += ["--doorstop-target-assembly",str(game/"BepInEx/core/BepInEx.Preloader.dll")]
+        if awareness:
+            write(work/"steam-launch.json",dict(command=command,installed=installed,sourceSlot=0))
+        subprocess.Popen(command)
         launched=True;last=None;end=time.monotonic()+(2080 if resident else 590)
         seen_ready=0;seen_reply=0
         while time.monotonic()<end:
             probe=api("diagnostics/probes/"+probe["id"])
+            if awareness:
+                awareness.observe(work,session)
             if resident:
                 reply_file=session/f"reply-{seen_reply}.json"
                 if reply_file.is_file():
                     row=json.loads(reply_file.read_text(encoding="utf-8-sig"))
                     print(f"{resident}: {row['reply']}",flush=True);seen_reply+=1
                 if (session/f"ready-{seen_ready}").is_file():
+                    if awareness:
+                        send_line(token,awareness.words(seen_ready))
                     if knowledge:
                         words=[
                             "I like fishing. Plum tart is my favorite food. We landed a speckled trout beneath the alder footbridge.",
@@ -220,6 +273,15 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
         write(work/"probe.json",probe)
         for check in (probe["result"] or {}).get("checks",[]):print(check,flush=True)
         if probe["state"]!="passed":raise RuntimeError(mode+" check "+probe["state"])
+        if awareness:
+            awareness.verify(token,work,probe)
+            if installed:
+                modules = json.loads((session/"awareness-evidence/loaded-module.json").read_bytes())
+                for name, rel in (("Mirthwood.Echoes",module),("BepInEx.Preloader",preloader)):
+                    item, = [m for m in modules if m["name"] == name]
+                    if Path(item["path"]).resolve() != (real/rel).resolve() or item["sha256"] != digest(real/rel):
+                        raise RuntimeError("The running game loaded a different " + name)
+            return
         if mode in ("interface","voices"):return
         if mode=="grouptalk":
             result=probe["result"]
@@ -256,8 +318,7 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
         expected={r["id"]:r["reply"] for r in (result["turns"][-1:] if knowledge else result["turns"])}
         for r in result["openers"]:
             if knowledge and r["id"]!=result["turns"][-1]["id"]:continue
-            source=hashlib.md5((r["id"]+"/"+r["actor"]).encode(),usedforsecurity=False).hexdigest()
-            expected[str(uuid.UUID(hex=source))]=r["line"]
+            expected[opener_journal_id(r)]=r["line"]
         end=time.monotonic()+15
         while True:
             entries=[r for r in api(path)["items"] if r["id"] in expected]
@@ -281,12 +342,18 @@ def run(package, mode, resident=None, starting_desire=None, knowledge=False):
             while owned() and time.monotonic()<end:time.sleep(.7)
         (work/"stop-server").touch()
         server.wait(timeout=45)
+        if awareness and (session/"awareness-evidence").is_dir():
+            shutil.copytree(session/"awareness-evidence", work/"awareness-evidence")
         after={f:digest(Path(f)) for f in baseline}
         receipt=dict(run=token,before=baseline,after=after,unchanged=after==baseline,closed=not owned(),
                      databaseRemoved=server.returncode==0,module=digest(game/module) if (game/module).exists() else None)
         write(work/"isolation.json",receipt)
         if not all(receipt[k] for k in ("unchanged","closed","databaseRemoved")):raise RuntimeError("Isolation check failed")
         if (game/"BepInEx/LogOutput.log").exists():shutil.copyfile(game/"BepInEx/LogOutput.log",work/"game-module.log")
+        if installed:
+            log=real/"BepInEx/LogOutput.log"
+            if log.is_file() and log.stat().st_mtime >= (session/"harness.json").stat().st_mtime:
+                shutil.copyfile(log,work/"installed-module.log")
         pattern="latest-group-*.png" if mode=="grouptalk" else "latest-roleplay-*.png" if resident else "latest-averil-*.png"
         patterns=("latest-native-overhead.png","latest-player-draft.png","latest-interface.png","latest-full-*.png","latest-named-player-speech.png","latest-compact-*.png") if mode=="interface" else (pattern,)
         if mode=="voices":patterns=("voice-player.png","voice-resident.png")

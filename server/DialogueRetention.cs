@@ -88,6 +88,11 @@ internal static class DialogueRetention
     internal static async Task<List<DialogueRecaps.Source>> Maintain(Database db,CancellationToken ct)
     {
         await db.Run("""
+            DELETE FROM resident_reply_cache r WHERE r.reply IS NOT NULL AND (
+                r.created<now()-interval '1 hour' AND (r.load_id IS NULL OR
+                    NOT EXISTS(SELECT FROM cue_events e WHERE (e.campaign,e.id)=(r.campaign,r.id))) OR
+                EXISTS(SELECT FROM dialogue_clock d WHERE d.campaign=r.campaign AND r.load_id=ANY(d.retired_loads)) OR
+                EXISTS(SELECT FROM cue_events e WHERE e.campaign=r.campaign AND e.id=r.id AND e.dialogue_expired));
             UPDATE personality_turning_points p SET evidence=echoes_marked_observation(e.id,p.reason)
               FROM daily_events e WHERE p.source_type='event' AND e.id=p.source_id AND p.evidence IS NULL AND e.description<>'';
             INSERT INTO dialogue_clock(campaign,day,load_id) SELECT c.id,c.day,'' FROM campaigns c JOIN slots s ON c.id=s.campaign
@@ -219,6 +224,7 @@ internal static class DialogueRetention
               quest_offer=t.quest_offer-'line'-'evidence'-'learned'
               FROM old_turns x WHERE t.id=x.id;
             UPDATE daily_events d SET description='' FROM old_addresses x WHERE d.id=x.id;
+            DELETE FROM resident_reply_cache r USING old_cues x WHERE (r.campaign,r.id)=(x.campaign,x.id);
             DELETE FROM cue_unindexed_people p USING old_cues x WHERE p.campaign=x.campaign AND p.event=x.id AND p.kind='address';
             UPDATE cue_events e SET packet_digest=coalesce(packet_digest,sha256(convert_to(e.payload::text,'UTF8'))),
               payload=jsonb_set(e.payload,'{line}',(e.payload->'line')-'learned'-'priorPromise'-'proposal')
