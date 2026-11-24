@@ -6,8 +6,6 @@ using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Text;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
@@ -16,6 +14,7 @@ using FMOD.Studio;
 using FMODUnity;
 using HarmonyLib;
 using Lowscope.Saving;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Sonity;
 using UnityEngine;
@@ -108,21 +107,38 @@ namespace Mirthwood.Echoes
             var owner = actor == player ? "player" : Plugin.Owner(actor);
             var native = actor.CharacterInfo.id;
             if (string.IsNullOrEmpty(owner) || string.IsNullOrEmpty(native)) return null;
-            var birth = SaveMaster.GetSaveCreationTime().ToString("yyyy-MM-ddTHH:mm:ss",CultureInfo.InvariantCulture);
+            var created = SaveMaster.GetSaveCreationTime();
+            if (actor != player && (created == default || string.IsNullOrWhiteSpace(player.CharacterInfo.id))) return null;
+            var birth = created.ToString("yyyy-MM-ddTHH:mm:ss",CultureInfo.InvariantCulture);
             var group = actor.CharacterInfo.isMale ? male : female;
-            var assigned=group[VoiceAssignment.Index(birth,player.CharacterInfo.id,owner,native,group.Length,out pitch)];
-            if(actor!=player)return assigned;
-            using (var sha = SHA256.Create())
+            int index = VoiceAssignment.Index(birth,player.CharacterInfo.id,owner,native,group.Length,out pitch);
+            int slot = IsolatedGameRun.Active?.SourceSlot ?? SaveMaster.GetActiveSlot();
+            string campaign = VoiceAssignment.Key(slot.ToString(CultureInfo.InvariantCulture), birth, player.CharacterInfo.id);
+            if (actor == player)
             {
                 RefreshSettings();
-                int slot = IsolatedGameRun.Active?.SourceSlot ?? SaveMaster.GetActiveSlot();
-                var seed = string.Join("\0",slot.ToString(CultureInfo.InvariantCulture),birth,player.CharacterInfo.id);
-                var campaign = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(seed)),0,16).Replace("-","").ToLowerInvariant();
-                var setting = voiceSettings?["players"]?[campaign] ?? voiceSettings?["default"];
-                pitch = Math.Max(-2,Math.Min(2,(int?)setting?["pitch"] ?? 0));
-                string selected = (string)setting?["voice"];
-                return selected != null && (male.Contains(selected) || female.Contains(selected)) ? selected : assigned;
+                return PlayerVoice(voiceSettings, campaign, group[index], male, female, out pitch);
             }
+            try
+            {
+                var storage = IsolatedGameRun.Active?.Root ?? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MirthwoodEchoes");
+                return ResidentVoicePool.Assign(storage, campaign, actor.CharacterInfo.isMale, owner, native, group);
+            }
+            catch (Exception error) when (error is IOException || error is InvalidDataException ||
+                                          error is UnauthorizedAccessException || error is JsonException)
+            {
+                Warn("resident-pool", "Could not read or save a resident voice. " + error.GetBaseException().Message);
+                return null;
+            }
+        }
+
+        static string PlayerVoice(JObject settings, string campaign, string automatic, string[] male, string[] female, out int pitch)
+        {
+            var setting = settings?["players"]?[campaign] ?? settings?["default"];
+            pitch = Math.Max(-2,Math.Min(2,(int?)setting?["pitch"] ?? 0));
+            string selected = (string)setting?["voice"];
+            return selected != null && (male.Contains(selected) || female.Contains(selected)) ? selected : automatic;
         }
 
         internal int Played { get; private set; }
