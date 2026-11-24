@@ -13,6 +13,7 @@
     <Reference Include="0Harmony" HintPath="$(LoaderCore)\0Harmony.dll" Private="false" />
     <Reference Include="Assembly-CSharp" HintPath="$(GameManaged)\Assembly-CSharp.dll" Private="false" />
     <Reference Include="FMODUnity" HintPath="$(GameManaged)\FMODUnity.dll" Private="false" />
+    <Reference Include="Fluid.BehaviorTree" HintPath="$(GameManaged)\Fluid.BehaviorTree.dll" Private="false" />
     <Reference Include="Sonity.Public.Runtime" HintPath="$(GameManaged)\Sonity.Public.Runtime.dll" Private="false" />
     <Reference Include="Sonity.Runtime" HintPath="$(GameManaged)\Sonity.Runtime.dll" Private="false" />
     <Reference Include="System.IO.Compression" />
@@ -21,6 +22,7 @@
     <Reference Include="Assembly-ComponentSaveSystem" HintPath="$(GameManaged)\Assembly-ComponentSaveSystem.dll" Private="false" />
     <Reference Include="Newtonsoft.Json" HintPath="$(GameManaged)\Newtonsoft.Json.dll" Private="false" />
     <Reference Include="spine-csharp" HintPath="$(GameManaged)\spine-csharp.dll" Private="false" />
+    <Reference Include="spine-unity" HintPath="$(GameManaged)\spine-unity.dll" Private="false" />
     <Reference Include="UnityEngine" HintPath="$(GameManaged)\UnityEngine.dll" Private="false" />
     <Reference Include="UnityEngine.CoreModule" HintPath="$(GameManaged)\UnityEngine.CoreModule.dll" Private="false" />
     <Reference Include="UnityEngine.AIModule" HintPath="$(GameManaged)\UnityEngine.AIModule.dll" Private="false" />

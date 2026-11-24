@@ -111,19 +111,24 @@ public sealed partial class Conversation
         return beat.Length==0||answer.EndsWith(beat,StringComparison.OrdinalIgnoreCase)?answer:answer+" "+beat;
     }
 
-    public async Task<JsonObject> AddressPlayer(JsonObject input,CancellationToken ct)
+    public Task<JsonObject> AddressPlayer(JsonObject input,CancellationToken ct) =>
+        ResidentLine(input,"address",ct,token=>GenerateAddress(input,token));
+
+    async Task<JsonObject> GenerateAddress(JsonObject input,CancellationToken ct)
     {
         var target=await Resolve(input["target"]);
         string c=target.S("campaign"),a=target.S("actor"),card=input.Required("card",96),cue=input.Required("cue",600);
-        var (actor,day)=await ActorDay(c,a);
+        var (actor,dispatch)=await Speaker(input,c,a,"address");
+        int day=dispatch.Day;
         var opt=await providers.Options();
         var head=CueHistory.OptionalId(input["head"]);
         var profile=await journal.DialogueProfile(c,a,day,actor.AsObject(),true,head);
-        var recall=await Recall(c,a,day,opt,cue,true,head,recentTurns:4,topics:card);
+        var recall=await Recall(c,a,day,opt,cue,true,head,groupOnly:true,topics:card,awareness:dispatch.Awareness);
         var context=new JsonObject{["resident"]=profile,["recall"]=recall,["card"]=card,["cue"]=cue};
+        if(dispatch.Awareness!=null)context["worldAwareness"]=dispatch.Awareness;
         var line=new StringBuilder();
-        await providers.Generate(opt,SpokenStyle+"\n"+ConversationFlow+"\nA suitable characterKnowledge entry can help you open naturally. Speak about a personal detail only when it belongs here.\nYou are addressing the player first. Express the supplied native cue in one brief original line. An earlier exchange may have finished. Open with the card's specific new subject, or offer a fresh detail if the subject is familiar. A genuinely physical card can be a gesture. Never invent a player response, a promise, a quest or a change to game state. Return plain dialogue only.",
-            context.ToJsonString(),part=>{if(line.Length+part.Length>460)throw new UserError("The remark was too long.",502);line.Append(part);return Task.CompletedTask;},ct,residentOpener:true);
+        await providers.Generate(opt,SpokenStyle+"\n"+ConversationFlow+dispatch.Guidance+"\nYou are addressing the player in passing. Express the supplied native cue in one brief original line. Open with the card's specific subject or a fresh local detail that suits it. A genuinely physical card can be a gesture. Keep private history for a private conversation. Never invent a player response, a promise, a quest or a change to game state. Return plain dialogue only.",
+            context.ToJsonString(),part=>{if(line.Length+part.Length>460)throw new UserError("The remark was too long.",502);line.Append(part);return Task.CompletedTask;},ct,residentOpener:true,dispatch:dispatch);
         string spoken=CharacterLine(line.ToString(),actor.S("name"),cue);
         if(spoken.Length==0)throw new UserError("The resident returned no words or gesture.",502);
         return new JsonObject{["line"]=spoken};

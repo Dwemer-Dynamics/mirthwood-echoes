@@ -14,8 +14,14 @@ namespace Mirthwood.Echoes
             var target=JObject.FromObject(targetIdentity);var world=Plugin.World();
             if(world==null)return false;
             var now=JObject.FromObject(world);
-            return new[]{"slot","created","player"}.All(key=>JToken.DeepEquals(now[key],target["world"]?[key]))&&
+            return new[]{"slot","created","player","memorySession"}.All(key=>JToken.DeepEquals(now[key],target["world"]?[key]))&&
                 (string)target["owner"]==Plugin.Owner(resident)&&(string)target["nativeId"]==resident.CharacterInfo.id;
+        }
+        void CapturePlayerTurn(string words)
+        {
+            if((string)submittedTurn?["text"]==words)return;
+            submittedTurn=new JObject{["text"]=words,["context"]=NativeCues.Binding(freshCue,resident,conversationId),
+                ["worldAwareness"]=WorldAwareness.Capture(resident,interruption?.AtStart)};
         }
         void Retry(string message,string note){busy=false;accepted=null;Edit(message,note);}
         void RecoverTalk(string original,string note)
@@ -41,7 +47,11 @@ namespace Mirthwood.Echoes
         {
             if(!SameResident(epoch)){if(epoch==generation)Close();yield break;}
             var outbox=exchange;JObject turn=null;
-            try{turn=outbox.Accept(message,positiveRun,NativeCues.Binding(freshCue,resident,conversationId),resident);freshCue=null;}catch(Exception){Retry(message,"Could not save this exchange. Enter to retry.");}
+            try{
+                CapturePlayerTurn(message);
+                turn=outbox.Accept(message,positiveRun,submittedTurn["context"] as JObject,resident,submittedTurn["worldAwareness"] as JObject);
+                submittedTurn=turn;freshCue=null;
+            }catch(Exception){Retry(message,"Could not save this exchange. Enter to retry.");}
             if(turn==null)yield break;
             string id=(string)turn["id"],original=(string)turn["text"];
             if(original!=message){Retry(original,"An earlier exchange is pending. Enter to recover your original words.");yield break;}
@@ -51,6 +61,7 @@ namespace Mirthwood.Echoes
             while(SameResident(epoch)){
                 var values=resident.CharacterInfo.personality?.values;
                 var payload=new {id,campaign,actor,text=message,context=turn["context"],reaction=result?.Reaction,handoff=result?.Handoff,supportsSpokenFarewells=true,
+                    worldAwareness=stage=="prepare"?turn["worldAwareness"]:null,
                     returnCues=stage=="prepare"?turn["returnCues"]:null,playerImpression=stage=="prepare"?turn["playerImpression"]:null,
                     socialDesire=stage=="prepare"&&values?.Length>5?(float?)values[5]:null,
                     liveTopicFit=stage=="prepare"?TopicFit(resident,true):null};
@@ -74,10 +85,10 @@ namespace Mirthwood.Echoes
                         Close();yield break;
                     case "complete":
                         try{positiveRun=outbox.Acknowledge(id);}catch(Exception){RecoverTalk(message,"Your reply was saved. Enter to recover it.");yield break;}
-                        busy=false;accepted=null;DisplayTalk(id,(string)answer["reply"],answer["handoff"] as JObject,(bool?)answer["playerLeaves"]==true);yield break;
+                        busy=false;accepted=null;submittedTurn=null;DisplayTalk(id,(string)answer["reply"],answer["handoff"] as JObject,(bool?)answer["playerLeaves"]==true);yield break;
                     case "failed":case "interrupted":
                         try{outbox.Acknowledge(id);}catch(Exception){Retry(message,"Could not close the interrupted exchange.");yield break;}
-                        Retry(message,((string)answer["error"]??"The reply was interrupted.")+" Enter to start a new exchange.");yield break;
+                        submittedTurn=null;Retry(message,((string)answer["error"]??"The reply was interrupted.")+" Enter to start a new exchange.");yield break;
                     case "ready":
                         try{
                             var choices=(JObject)answer["choices"];
