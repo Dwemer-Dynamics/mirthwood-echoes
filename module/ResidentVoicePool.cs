@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -28,7 +29,7 @@ namespace Mirthwood.Echoes
             if (cast.Length == 0) return null;
             var folder = Path.Combine(root, "ResidentVoices");
             var path = Path.Combine(folder, campaign + (male ? "-male.json" : "-female.json"));
-            var resident = JsonConvert.SerializeObject(new[] { owner, native });
+            var resident = Serialize(new[] { owner, native });
             var lockName = @"Global\mirthwood.echoes.voices." + VoiceAssignment.Key(Path.GetFullPath(path).ToUpperInvariant());
             using (var mutex = new Mutex(false, lockName))
             {
@@ -64,10 +65,22 @@ namespace Mirthwood.Echoes
             string json;
             try { json = File.ReadAllText(path); }
             catch (FileNotFoundException) { return new CastState(); }
-            var state = JsonConvert.DeserializeObject<CastState>(json);
+            CastState state;
+            using (var reader = new JsonTextReader(new StringReader(json)))
+                state = new JsonSerializer { CheckAdditionalContent = true }.Deserialize<CastState>(reader);
             if (state == null || state.Assignments.Values.Any(string.IsNullOrWhiteSpace) || state.IssuedThisRound.Any(string.IsNullOrWhiteSpace))
                 throw new InvalidDataException("Unreadable resident voice pool.");
             return state;
+        }
+
+        // Local serializers keep saved keys and round files independent of other mods' JSON defaults.
+        static string Serialize(object value)
+        {
+            using (var writer = new StringWriter(CultureInfo.InvariantCulture))
+            {
+                new JsonSerializer().Serialize(writer, value);
+                return writer.ToString();
+            }
         }
 
         static void Write(string path, CastState state)
@@ -75,7 +88,7 @@ namespace Mirthwood.Echoes
             var tmp = path + ".tmp";
             using (var file = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
             {
-                byte[] bytes = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(state));
+                byte[] bytes = Encoding.UTF8.GetBytes(Serialize(state));
                 file.Write(bytes, 0, bytes.Length);
                 file.Flush(true);
             }

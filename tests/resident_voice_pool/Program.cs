@@ -61,6 +61,7 @@ internal static class Program
                 TestRounds(root, male, female);
                 TestIdentities(root);
                 TestRosterChanges(root);
+                TestSerializerIsolation(root);
                 TestWriteFailure(root);
                 TestParallel(root, args[0], args[1], game);
                 TestPlayer(male, female);
@@ -140,6 +141,42 @@ internal static class Program
         Require(Next("second", "replacement", "added", "old") == "added" &&
                 Next("first", "old", "added", "replacement") == "replacement", "Reintroduced or reordered roster recast an assigned resident.");
         Console.WriteLine("PASS Mid-round additions, removals, duplicates, reorder and reintroduction.");
+    }
+
+    static void TestSerializerIsolation(string root)
+    {
+        var storage = Path.Combine(root, "json-settings");
+        string DrawFor(string native) => assign(storage, Campaign(), true, "résident", native, Nine);
+        const string firstKey = "[\"résident\",\"first\\\"id\"]", secondKey = "[\"résident\",\"second\"]";
+        var originalSettings = JsonConvert.DefaultSettings;
+        try
+        {
+            JsonConvert.DefaultSettings = null;
+            var first = DrawFor("first\"id");
+            var path = Directory.GetFiles(Path.Combine(storage, "ResidentVoices"), "*.json").Single();
+            var original = File.ReadAllText(path);
+            Require((string)JObject.Parse(original)["Assignments"][firstKey] == first, "Original compact identity key changed.");
+
+            JsonConvert.DefaultSettings = () => new JsonSerializerSettings { Formatting = Formatting.Indented, StringEscapeHandling = StringEscapeHandling.EscapeNonAscii };
+            Require(DrawFor("first\"id") == first && File.ReadAllText(path) == original, "Process JSON settings recast a known resident.");
+            var second = DrawFor("second");
+            var written = File.ReadAllText(path);
+            var state = JObject.Parse(written);
+            var rows = (JObject)state["Assignments"];
+            var issued = (JArray)state["IssuedThisRound"];
+            Require(first != second && rows.Count == 2 && issued.Count == 2 && (string)rows[firstKey] == first &&
+                    (string)rows[secondKey] == second && written == state.ToString(Formatting.None), "External JSON settings changed the on-disk format or spent another voice.");
+
+            JsonConvert.DefaultSettings = () => throw new InvalidOperationException("The pool consulted process-wide JSON settings.");
+            var third = DrawFor("third");
+            var committed = File.ReadAllText(path);
+            JsonConvert.DefaultSettings = null;
+            Require(new[] { first, second, third }.Distinct().Count() == 3 && DrawFor("first\"id") == first &&
+                    DrawFor("second") == second && DrawFor("third") == third && File.ReadAllText(path) == committed,
+                "Restoring process JSON settings changed saved voices or round state.");
+        }
+        finally { JsonConvert.DefaultSettings = originalSettings; }
+        Console.WriteLine("PASS Compact identity and round files under default, overridden and restored process-wide JSON settings.");
     }
 
     static void TestWriteFailure(string root)

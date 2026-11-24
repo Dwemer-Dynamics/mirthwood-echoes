@@ -4,6 +4,7 @@
 
 - [ ] Assign each resident a random matching voice in their campaign. Use every voice in each cast before the next round, keep assignments across reloads and save changes, and give replacements their own draw.
   On 2026-11-23 the offline regression covered three rounds for each 16-voice cast, player overrides, roster changes, concurrent draws and recovery after a failed write. Separate processes using Mirthwood’s Mono runtime reopened the same assignments.
+  On 2026-11-23 independent review reproduced a second draw for the same resident when another mod changed JSON formatting. The voice pool now controls how it reads and writes resident keys and cast files.
 
 ## In progress
 
