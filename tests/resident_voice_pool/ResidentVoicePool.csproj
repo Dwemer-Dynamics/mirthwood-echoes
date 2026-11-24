@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <GameDir Condition="'$(GameDir)' == ''">C:\SteamLibrary\steamapps\common\Mirthwood</GameDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Newtonsoft.Json" HintPath="$(GameDir)\Mirthwood_Data\Managed\Newtonsoft.Json.dll" />
+  </ItemGroup>
+</Project>
