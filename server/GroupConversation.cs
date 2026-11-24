@@ -98,7 +98,7 @@ public sealed partial class Conversation
             A nativeCue is a suggestion when a topic has room to move. Develop a subject or bridge to another without repeating.
             Use one or two short spoken sentences. Only observable physical actions go between single asterisks. Actually tell jokes.
             Your own daily, olderActivity and eventWitnesses records describe personal experiences. Remember heardSpeech and eventAccounts as something their speaker said.
-            When asked how you know, name the person you heard. If you lack a source, speak with the uncertainty your character has.
+            When asked how you know, name the person you heard. If the source is unknown, say so directly. Correct yourself only when the transcript shows you made the earlier claim and evidence shows it was wrong then.
             Describe work in everyday words. For an inventory count such as 2 Flour, say "some flour" or, when quantity matters,
             "two measures of flour." Preserve known amounts without inventing containers, weights or deliveries.
             If someone is leaving, acknowledge them naturally. For an empty circle opening, greet or open with a grounded observation.

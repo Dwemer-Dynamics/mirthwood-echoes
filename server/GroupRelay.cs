@@ -47,7 +47,16 @@ internal static class GroupRelay
     static readonly Regex PassivePlace=new(@"^(?:by|beside|near|close to|next to|at|in|on) (?:a|an|the|this|that) ",Options);
     static readonly Regex ObjectQualifier=new(@" (?:of|by|near|at|in|on|off|as|to|from|for|with|without|about|around|along|before|after|above|below|behind|beneath|between|beyond|beside|under|over|across|through|inside|outside|that|which|who|whose)\b",Options);
     static readonly Regex LeadingArticle=new(@"^(?:a|an|the) ",Options);
-    static readonly Regex ModifiedNoun=new(@"^\p{L}+ (?<noun>\p{L}+)$",Options);
+    const string Colour=@"red|blue|green|yellow|white|black|brown|grey|gray|purple|orange|pink";
+    const string Material=@"copper|silver|gold|iron|brass|bronze|steel|wooden|silk|linen|leather";
+    static readonly Regex DescriptiveNoun=new(@"^(?:(?:"+Colour+@"|spotted|striped|speckled|small|large|tall|short) (?<noun>\p{L}+)|(?:"+
+        Material+@") (?<noun>streamer|banner|pennant|ribbon|flag|coin|bell|key|chain|ring|bowl|cup|chest|sword|shield|cloak))$",Options);
+    const string PlaceName=@"(?:brightoak|greyshore|ashmire|crossroads|stormreach|(?:the |a |an |this |that )?(?:(?:"+Colour+
+        @"|old|new|upper|lower|north|south|east|west|stone|wooden) )?(?:fields?|mills?|harbou?rs?|docks?|piers?|bridges?|rivers?|streams?|roads?|paths?|lanes?|farms?|orchards?|woods?|forests?|meadows?|village|town|market|square|inn|arena|coast|shore|bay))";
+    const string PlacePhrase=@"(?:near|by|beside|at|in|on|off|behind|along|across|outside|inside|beyond|over|under) "+PlaceName;
+    static readonly Regex OrdinaryPlaces=new("^(?:"+PlacePhrase+")(?: "+PlacePhrase+")*$",Options);
+    static readonly Regex Representation=new(@"\b(?:map|chart|sketch|drawing|painting|portrait|picture|image|mural|sculpture|statue|model)$",Options);
+    static readonly Regex DepictedPlace=new("^of "+PlaceName+"(?: "+PlacePhrase+")*$",Options);
     static readonly Regex SightMargins=new(@"^(?:"+SightAdverb+@" )+|(?: "+SightAdverb+@")+$",Options);
     static readonly Regex Existence=new(@"^there (?:was|were|is|are) (?<object>.+)$",Options);
     static readonly Regex Located=new(@"^(?<object>.+?) (?:was|were|is|are) (?<place>.+)$",Options);
@@ -160,12 +169,18 @@ internal static class GroupRelay
         var (noun,details)=Parts(asked);
         var (original,qualifiers)=Parts(recorded);
         if(noun.Length==0)return false;
-        if(details.Length>0 && details!=qualifiers &&
-           !(qualifiers.StartsWith(details+" ",StringComparison.Ordinal) &&
-             ObjectQualifier.Match(qualifiers,details.Length).Index==details.Length))return false;
-        // Shorten a simple modifier–noun pair such as "copper streamer". Taking the
-        // last word of a longer, unparsed phrase can turn its setting into its object.
-        return noun==original || ModifiedNoun.Match(original).Groups["noun"].Value==noun;
+        if(details!=qualifiers){
+            if(details.Length>0 && !qualifiers.StartsWith(details+" ",StringComparison.Ordinal))return false;
+            // The wider audience cannot read the original words. It is safe to omit a
+            // physical location, or what place a map depicts. Any other omitted words
+            // may change the claim, e.g. "at the mill in a dream" or "in the painting".
+            string omitted=qualifiers[details.Length..].TrimStart();
+            if(!OrdinaryPlaces.IsMatch(omitted) &&
+               !(details.Length==0 && Representation.IsMatch(original) && DepictedPlace.IsMatch(omitted)))return false;
+        }
+        // An observed color or material can describe the same thing in fewer words.
+        // Dropping a modifier such as "toy" would identify a different kind of object.
+        return noun==original || DescriptiveNoun.Match(original).Groups["noun"].Value==noun;
     }
 
     // In a relative clause the observed object can precede its observer and verb.

@@ -746,6 +746,23 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
                                    "Who said the streamer was by the field?"), 6):
         selected = relay_question(seq, speaker, inquiry)[2]
         assert selected["source"] == unnamed and selected["heardFrom"] == "Linn" and "inReplyTo" not in selected
+    # In a widened group only the current question can carry the scope of a claimed sighting.
+    for account, questions in (
+        ("a joust at the mill in a dream",
+         (("there was a joust at the mill", False), ("there was a joust at the mill in a dream", True), ("about the joust", True))),
+        ("a toy soldier by the field",
+         (("I saw the soldier by the field", False), ("I saw the toy soldier", True))),
+        ("a copper streamer by the field", (("I saw the streamer", True),)),
+    ):
+        world["cueHead"] = before_relay
+        claim = group_line(1, "player", visitor, original_listeners, f"I saw {account}. Please tell Miller what I saw.")
+        delivered = group_line(2, visitor, speaker, original_listeners, f"Miller, Test player saw {account}.")
+        for seq, (subject, eligible) in enumerate(questions, 3):
+            selected = relay_question(seq, speaker, f"Who told you {subject}?")[2]
+            if eligible:
+                assert selected["source"] == delivered and selected["inReplyTo"] == dict(source=claim, speaker="Test player")
+            else:
+                assert selected is None, subject
     world["cueHead"] = before_relay
     group_line(1, "player", visitor, original_listeners, "I did not see a copper streamer by the field. Please tell Miller about it.")
     denied = group_line(2, visitor, speaker, original_listeners, "Miller, Test player did not see a copper streamer by the field.")
