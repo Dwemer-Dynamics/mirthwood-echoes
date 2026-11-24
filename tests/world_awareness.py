@@ -662,7 +662,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     world["cueHead"] = before_relay
     claim = group_line(1, "player", visitor, original_listeners, "I witnessed a duel by the field. Please tell Miller what I said.")
     delivered = group_line(2, visitor, speaker, original_listeners, "Miller, Test player witnessed a duel by the field.")
-    for seq, (inquiry, eligible) in enumerate((
+    inquiries = [
         ("Who told you I witnessed the duel by the field?", True),
         ("Who told you about the duel by the field?", True),
         ("Did you personally witness it? Who told you I witnessed the duel?", True),
@@ -680,7 +680,22 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         ("Who told you that you think I witnessed the duel by the field?", False),
         ("Who told you I witnessed the duel that Miller had seen?", False),
         ("Who told you I witnessed a race by the field?", False),
-    ), 3):
+        ("Who was your source for the duel by the field?", True),
+        ("Who told you the story about the duels?", True),
+    ]
+    # Asking the listener a second question about their own sight cannot change who the
+    # first question says witnessed the event. Compare the same premise in both forms.
+    for premise, eligible in (
+        ("Test player could see the duel by the field", True),
+        ("that you did see the duel by the field", False),
+        ("that you could see the duel by the field", False),
+        ("that the duel by the field was seen by me", True),
+        ("that the duel by the field was seen by you", False),
+        ("about the duel seen by the field", True),
+    ):
+        question = f"Who told you {premise}?"
+        inquiries.extend(((question, eligible), (question+" Did you witness it yourself?", eligible)))
+    for seq, (inquiry, eligible) in enumerate(inquiries, 3):
         selected = relay_question(seq, speaker, inquiry)[2]
         if eligible:
             assert selected["source"] == delivered and selected["heardFrom"] == "Linn"
@@ -688,6 +703,12 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
         else:
             assert selected is None, inquiry
     assert relay_question(seq+1, twin, "Who told you I personally witnessed the duel by the field?")[2] is None
+    late_question = "Who told you the duel by the field was seen by me? Did you witness it yourself?"
+    assert relay_question(seq+2, twin, late_question)[2] is None
+    world["cueHead"] = before_relay
+    group_line(1, "player", visitor, original_listeners, "I like lying low. I witnessed a duel by the field. Please tell Miller what I said.")
+    group_line(2, visitor, speaker, original_listeners, "Miller, Test player witnessed a duel by the field.")
+    assert relay_question(3, speaker, late_question)[2] is None
     world["cueHead"] = before_relay
     group_line(1, "player", visitor, original_listeners, "I heard a duel by the field. Please tell Miller what I said.")
     group_line(2, visitor, speaker, original_listeners, "Miller, Test player heard a duel by the field.")
@@ -704,6 +725,7 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     teller_only = relay_question(3, speaker, source_question)[2]
     assert teller_only == dict(source=unnamed, heardFrom="Linn", addressedToYou=True, subjectInCurrentLine=["streamer"])
     assert relay_question(4, speaker, "Who told you there was no streamer by the field?")[2] is None
+    assert relay_question(5, speaker, "Who told you the streamer by the field was seen by me?")[2] is None
     world["cueHead"] = before_relay
     group_line(1, "player", visitor, original_listeners, "I did not see a copper streamer by the field. Please tell Miller about it.")
     denied = group_line(2, visitor, speaker, original_listeners, "Miller, Test player did not see a copper streamer by the field.")

@@ -36,14 +36,20 @@ internal static class GroupRelay
     static readonly Regex Pastime=new(@"^(?<activity>"+Activity+
         @") (?i:is (?:one of )?my (?:favou?rite )?(?:hobb(?:y|ies)|pastimes?|interests?))$",RegexOptions.CultureInvariant);
     static readonly Regex Sight=new("^"+SightPast+" ",Options);
-    static readonly Regex CitedSight=new(@"\b(?:(?:had|has|have) (?:"+SightAdverb+" )*"+SightPerfect+"|"+SightPast+"|"+SightPerfect+@")\b",Options);
+    static readonly Regex CitedSight=new(@"\b(?:(?:had|has|have) (?:"+SightAdverb+" )*"+SightPerfect+
+        @"|(?:did|do|does|can|could) (?:"+SightAdverb+" )*"+SightVerb+"|"+SightPast+"|"+SightPerfect+@")\b",Options);
     static readonly Regex Proximity=new(@"\b(?:by|beside|near|close to|next to) (?=(?:a|an|the|that|this) )",Options);
     static readonly Regex Article=new(@"\b(?:a|an|the)\b *",Options);
+    static readonly Regex Plural=new(@"(\p{L}{2,}[^\Ws])s\b",Options);
+    static readonly Regex TopicIntro=new(@"^(?:about |(?:the |a |an )(?:story|account|report|news) (?:about|of) )",Options);
+    static readonly Regex ClauseWord=new(@"\b(?:i|me|myself|you|yourself|we|us|they|them|he|him|she|her|someone|somebody|who|whom|which|both|am|is|are|was|were|have|has|had|do|does|did|can|could|will|would|may|might|shall|should|must)\b",Options);
+    static readonly Regex PassiveSight=new(@"\b(?:(?:(?:that|which) )?(?:was |were |had been |has been |have been ))?"+SightPerfect+@"\b",Options);
+    static readonly Regex PassivePlace=new(@"^(?:by|beside|near|close to|next to|at|in|on) (?:a|an|the|this|that) ",Options);
     static readonly Regex ContractedNegative=new(@"\b(did|could)n['’]t\b",Options);
     static readonly Regex Negative=new(@"\b(?:no|not|never|neither|none|nothing|nobody|[a-z]+n t)\b",Options);
     static readonly Regex DeniedSight=new(@"\b(?:(?<scope>did not|could not) (?:"+SightAdverb+" )*"+SightVerb+
         @"|(?<scope>never) (?:"+SightAdverb+" )*"+SightPast+@")\b",Options);
-    static readonly Regex ReportSubject=new(@"\b(?:told|tell|said|say|mention(?:ed)?|hear|heard|learn(?:ed)?|know) (?:you |me )?(?:that )?(?<observer>.+)$",Options);
+    static readonly Regex ReportSubject=new(@"\b(?:(?:told|tell|said|say|mention(?:ed)?|hear|heard|learn(?:ed)?|know) (?:you |me )?(?:that )?|source (?:for|of|on|about) )(?<observer>.+)$",Options);
     // A notice and a witness can also be the subject of the news. A base-form verb needs
     // a subject or auxiliary before it to ask about the act of seeing.
     static readonly Regex AskedAboutSight=new(@"\b(?:"+SightPast+"|"+SightPerfect+@"|(?:i|you|we|they|to|can|could|did|do|does|not|never) (?:"+
@@ -130,7 +136,7 @@ internal static class GroupRelay
 
     static bool ContainsTopic(string account,string topic)
     {
-        static string Terms(string text)=>Article.Replace(Proximity.Replace(text,"near "),"").Trim();
+        static string Terms(string text)=>Plural.Replace(Article.Replace(Proximity.Replace(text,"near "),""),"$1").Trim();
         string words=Terms(topic);
         return words.Length>0 && (" "+Terms(account)+" ").Contains(" "+words+" ",StringComparison.Ordinal);
     }
@@ -157,14 +163,41 @@ internal static class GroupRelay
     static bool UnqualifiedObject(string words,string account)=>!ExtraClause.IsMatch(words) &&
         (!CitedSight.IsMatch(words) || DescribesTopic(words,account));
 
-    static bool ReportedSightAgrees(string inquiry,string claimant,string account)
+    static bool RecordedTopic(string topic,string recordedObject)=>!ClauseWord.IsMatch(topic) &&
+        UnqualifiedObject(topic,recordedObject) && ContainsTopic(recordedObject,topic);
+
+    // A passive can leave out the observer or explicitly name one. Bind an explicit
+    // agent to the credited claimant and preserve the reported object and location.
+    static bool ReportTopic(string words,string account,string claimant,bool named)
+    {
+        string topic=TopicIntro.Replace(words,"",1),recordedObject=account[(account.IndexOf(' ')+1)..];
+        if(RecordedTopic(topic,recordedObject))return true;
+        var passive=PassiveSight.Match(topic);
+        if(!Sight.IsMatch(account) || !passive.Success || passive.Index==0)return false;
+        string subject=topic[..passive.Index].TrimEnd(),place=topic[(passive.Index+passive.Length)..].TrimStart();
+        if(place.StartsWith("by ",StringComparison.Ordinal)){
+            var agent=Regex.Match(place,@"^by (?:me(?: myself)?|"+Regex.Escape(claimant)+@"(?: (?:himself|herself|themself|themselves))?)(?: "+SightAdverb+@")*(?: (?<place>.+))?$",Options);
+            if(agent.Success){
+                if(!named)return false;
+                place=agent.Groups["place"].Value;
+            }
+        }
+        if(place.Length>0 && !PassivePlace.IsMatch(place))return false;
+        string described=(subject+" "+place).TrimEnd();
+        return RecordedTopic(described,recordedObject);
+    }
+
+    static bool ReportedAccountAgrees(string inquiry,string claimant,string account,bool named)
     {
         var reported=ReportSubject.Match(inquiry).Groups["observer"];
-        if(!reported.Success)return !CitedSight.IsMatch(inquiry) || OwnSight.IsMatch(inquiry);
+        if(!reported.Success)return OwnSight.IsMatch(inquiry) || EvidenceOnly.IsMatch(inquiry);
         string clause=reported.Value;
-        var verbs=CitedSight.Matches(clause);
-        if(verbs.Count==0)return true;
-        if(clause.StartsWith("about ",StringComparison.Ordinal) && DescribesTopic(clause[6..],account))return true;
+        if(ReportTopic(clause,account,claimant,named))return true;
+        if(!named)return false;
+        // Every explicit assertion needs an identified claimant and a corroborated kind of
+        // observation. An unfamiliar verb or auxiliary cannot vouch for another witness.
+        var verbs=Sight.IsMatch(account)?CitedSight.Matches(clause):
+            Regex.Matches(clause,@"\b"+Regex.Escape(account.Split(' ')[0])+@"\b",Options);
         return verbs.Any(verb=>ClaimantSubject(clause[..verb.Index].TrimEnd(),claimant,account) &&
             UnqualifiedObject(clause[(verb.Index+verb.Length)..],account));
     }
@@ -240,7 +273,7 @@ internal static class GroupRelay
         }else{
             if(ExtraClause.IsMatch(expected) || !Sight.IsMatch(expected) &&
                 (asksAboutSight||!OtherObservation.IsMatch(expected)))return Attribution.Unresolved;
-            if(!ReportedSightAgrees(inquiry,claimant,expected))return Attribution.Unresolved;
+            if(!ReportedAccountAgrees(inquiry,claimant,expected,named))return Attribution.Unresolved;
         }
         string account=named?Account(Reported.Replace(retold[(claimant.Length+1)..],"",1)):retold;
         if(resident.Length==2){
