@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -16,6 +17,9 @@ using FMODUnity;
 using HarmonyLib;
 using Lowscope.Saving;
 using Newtonsoft.Json.Linq;
+using Sonity;
+using UnityEngine;
+using _Mirthwood.Scripts.Demo.AI;
 using _Mirthwood.Scripts.Demo.Chat;
 using _Mirthwood.Scripts.Demo.Combat;
 
@@ -28,6 +32,8 @@ namespace Mirthwood.Echoes
         readonly ConfigEntry<bool> enabled;
         readonly ManualLogSource log;
         readonly List<(Channel Channel, Sound Sound)> active = new List<(Channel,Sound)>();
+        readonly List<EventInstance> nativeReactions = new List<EventInstance>();
+        readonly List<(SoundEvent Cue, Transform Owner)> childCalls = new List<(SoundEvent,Transform)>();
         readonly HashSet<string> warned = new HashSet<string>();
         ZipArchive pack;
         Dictionary<string,string> events;
@@ -125,13 +131,26 @@ namespace Mirthwood.Echoes
         internal string[] EventPaths => Open() ? events.Keys.OrderBy(s => s,StringComparer.Ordinal).ToArray() : Array.Empty<string>();
         internal bool IsActive => active.Any(p => p.Channel.isPlaying(out bool playing) == RESULT.OK && playing);
 
-        bool TryPlay(ChatController chat, EventInstance original)
+        bool HandleChatSound(ChatController chat, EventInstance original)
         {
-            if (!Enabled || !chat || !original.isValid() ||
-                original.getDescription(out var description) != RESULT.OK ||
+            if (!original.isValid() || original.getDescription(out var description) != RESULT.OK ||
                 description.getPath(out string path) != RESULT.OK || path == null ||
-                !path.StartsWith(ChatPrefix,StringComparison.Ordinal) || !Open() ||
-                !events.TryGetValue(path,out string cue)) return false;
+                !(path.StartsWith(ChatPrefix + "Male/", StringComparison.Ordinal) ||
+                  path.StartsWith(ChatPrefix + "Female/", StringComparison.Ordinal))) return false;
+
+            if (Plugin.TalkActive || TryPlay(chat, original, description, path))
+            {
+                original.release();
+                return true;
+            }
+            // Vanilla starts and releases this instance. Its handle stays valid until playback ends.
+            nativeReactions.Add(original);
+            return false;
+        }
+
+        bool TryPlay(ChatController chat, EventInstance original, EventDescription description, string path)
+        {
+            if (!Enabled || !chat || !Open() || !events.TryGetValue(path,out string cue)) return false;
             string profile = Select(chat.Character,out int pitch);
             if (profile == null) return false;
             string entryName = "voices/" + profile + "/" + cue + ".wav";
@@ -184,6 +203,9 @@ namespace Mirthwood.Echoes
 
         internal void Collect()
         {
+            nativeReactions.RemoveAll(sound => !sound.isValid());
+            childCalls.RemoveAll(call => !call.Cue || !call.Owner ||
+                call.Cue.GetSoundEventState(call.Owner) == SoundEventState.NotPlaying);
             if (active.Count>0 && !Enabled)
             {
                 foreach (var item in active) item.Channel.stop();
@@ -197,6 +219,17 @@ namespace Mirthwood.Echoes
             }
         }
 
+        internal void StopPlayingReactions()
+        {
+            foreach (var item in active) item.Channel.stop();
+            foreach (var original in nativeReactions)
+                if (original.isValid()) original.stop(FMOD.Studio.STOP_MODE.IMMEDIATE);
+            nativeReactions.Clear();
+            foreach (var call in childCalls)
+                if (call.Cue && call.Owner) call.Cue.StopImmediate(call.Owner);
+            childCalls.Clear();
+        }
+
         public void Dispose()
         {
             foreach (var item in active) { item.Channel.stop(); item.Sound.release(); }
@@ -208,10 +241,44 @@ namespace Mirthwood.Echoes
         {
             static bool Prefix(ChatController __instance, EventInstance __0)
             {
-                if (Plugin.Voices?.TryPlay(__instance,__0) != true) return true;
-                __0.release();
-                return false;
+                return Plugin.Voices?.HandleChatSound(__instance, __0) != true;
             }
+        }
+
+        [HarmonyPatch]
+        internal static class ChildSounds
+        {
+            static IEnumerable<MethodBase> TargetMethods()
+            {
+                yield return AccessTools.Method(typeof(PlaySoundsRandomly), "PlayRandomSound");
+                yield return AccessTools.Method(typeof(ToddlerAI), "PlayRandomSound");
+            }
+
+            // Leave each emitter's native timing and random selection in place.
+            static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase __originalMethod)
+            {
+                var body = instructions.ToList();
+                var native = AccessTools.Method(typeof(SoundEvent), nameof(SoundEvent.Play), new[] { typeof(Transform) });
+                if (native == null || body.Count(instruction => instruction.Calls(native)) != 1)
+                    throw new InvalidOperationException("Expected one Sonity playback call in " + __originalMethod.DeclaringType.Name + "." + __originalMethod.Name);
+                return Transpilers.MethodReplacer(body, native, AccessTools.Method(typeof(ChildSounds), nameof(Play)));
+            }
+
+            static void Play(SoundEvent cue, Transform owner)
+            {
+                var voices = Plugin.Voices;
+                if (voices != null && IsChildCall(cue.name))
+                {
+                    if (Plugin.TalkActive) return;
+                    var call = (cue, owner);
+                    if (!voices.childCalls.Contains(call)) voices.childCalls.Add(call);
+                }
+                cue.Play(owner);
+            }
+
+            static bool IsChildCall(string name) =>
+                name == "baby1SE" || name == "baby2SE" || name == "baby3SE" ||
+                name == "toddler1SE" || name == "toddler2SE" || name == "toddler3SE";
         }
     }
 }
