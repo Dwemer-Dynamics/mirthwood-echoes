@@ -16,9 +16,10 @@ internal static class GroupRelay
     const string OtherSightPast=@"spotted|noticed|observed|witnessed|caught sight of";
     const string SightPast=@"(?:saw|"+OtherSightPast+")";
     const string SightPerfect=@"(?:seen|"+OtherSightPast+")";
-    const string EvidenceModifier=@"(?:personally|yourself|firsthand|in person|actually)";
-    static readonly Regex OwnSight=new(@"^(?:did you (?:"+EvidenceModifier+" )?"+SightVerb+@"|have you (?:"+EvidenceModifier+" )?"+SightPerfect+
-        @") (?<object>.+?)(?: "+EvidenceModifier+")?$",Options);
+    const string SightAdverb=@"(?:personally|firsthand|in person|actually)";
+    const string EvidenceModifier=@"(?:"+SightAdverb+"|yourself)";
+    internal const string ListenerSight=@"(?:did you (?:"+EvidenceModifier+" )?"+SightVerb+@"|have you (?:"+EvidenceModifier+" )?"+SightPerfect+")";
+    static readonly Regex OwnSight=new("^"+ListenerSight+@" (?<object>.+?)(?: "+EvidenceModifier+")?$",Options);
     static readonly Regex EvidenceOnly=new(@"^(?:were you there(?: yourself| in person)?|did you (?:just |only )?hear (?:about )?(?:it|this|that)(?: here)?)$",Options);
     static readonly Regex Confidence=new(@"\b(?:privat\w*|secret\w*|confiden\w*|between (?:us|you and me)|keep (?:quiet|it to)|(?:only|just) (?:tell|between)|(?:don.t|do not|never) (?:want|tell|say|share|repeat|mention))\b",Options);
     // A stated preference about disclosure qualifies the invitation even when phrased as a pastime.
@@ -35,11 +36,13 @@ internal static class GroupRelay
     static readonly Regex Pastime=new(@"^(?<activity>"+Activity+
         @") (?i:is (?:one of )?my (?:favou?rite )?(?:hobb(?:y|ies)|pastimes?|interests?))$",RegexOptions.CultureInvariant);
     static readonly Regex Sight=new("^"+SightPast+" ",Options);
-    static readonly Regex CitedSight=new(@"\b"+SightPast+@"\b",Options);
+    static readonly Regex CitedSight=new(@"\b(?:(?:had|has|have) (?:"+SightAdverb+" )*"+SightPerfect+"|"+SightPast+"|"+SightPerfect+@")\b",Options);
     static readonly Regex Proximity=new(@"\b(?:by|beside|near|close to|next to) (?=(?:a|an|the|that|this) )",Options);
+    static readonly Regex Article=new(@"\b(?:a|an|the)\b *",Options);
     static readonly Regex ContractedNegative=new(@"\b(did|could)n['’]t\b",Options);
     static readonly Regex Negative=new(@"\b(?:no|not|never|neither|none|nothing|nobody|[a-z]+n t)\b",Options);
-    static readonly Regex DeniedSight=new(@"\b(?:(?<scope>did not|could not) "+SightVerb+@"|(?<scope>never) "+SightPast+@")\b",Options);
+    static readonly Regex DeniedSight=new(@"\b(?:(?<scope>did not|could not) (?:"+SightAdverb+" )*"+SightVerb+
+        @"|(?<scope>never) (?:"+SightAdverb+" )*"+SightPast+@")\b",Options);
     static readonly Regex ReportSubject=new(@"\b(?:told|tell|said|say|mention(?:ed)?|hear|heard|learn(?:ed)?|know) (?:you |me )?(?:that )?(?<observer>.+)$",Options);
     // A notice and a witness can also be the subject of the news. A base-form verb needs
     // a subject or auxiliary before it to ask about the act of seeing.
@@ -125,6 +128,47 @@ internal static class GroupRelay
         return Proximity.Replace(Sight.Replace(predicate,"saw ",1),"near ");
     }
 
+    static bool ContainsTopic(string account,string topic)
+    {
+        static string Terms(string text)=>Article.Replace(Proximity.Replace(text,"near "),"").Trim();
+        string words=Terms(topic);
+        return words.Length>0 && (" "+Terms(account)+" ").Contains(" "+words+" ",StringComparison.Ordinal);
+    }
+
+    // Match the whole subject before its sight verb. In a relative clause the subject can
+    // follow the name of the thing discussed in the original account.
+    static bool ClaimantSubject(string prefix,string claimant,string account)
+    {
+        var person=@"(?:i(?: myself)?|"+Regex.Escape(claimant)+@"(?: (?:himself|herself|themself|themselves))?)";
+        var subject=Regex.Match(prefix,@"^(?:about (?<topic>.+?) (?:(?:that|which) )?)?(?:"+SightAdverb+" )*"+person+@"(?: "+SightAdverb+")*$",Options);
+        var topic=subject.Groups["topic"];
+        return subject.Success && (!topic.Success || ContainsTopic(account,topic.Value));
+    }
+
+    static bool DescribesTopic(string words,string account)
+    {
+        // A sight word at the head of a verified noun phrase can describe the thing itself,
+        // as in "the spotted owl". A second witness clause supplies a separate premise.
+        string topic=Article.Replace(words,"").Trim();
+        var verbs=CitedSight.Matches(topic);
+        return verbs.Count==1 && verbs[0].Index==0 && verbs[0].Length<topic.Length && ContainsTopic(account,words);
+    }
+
+    static bool UnqualifiedObject(string words,string account)=>!ExtraClause.IsMatch(words) &&
+        (!CitedSight.IsMatch(words) || DescribesTopic(words,account));
+
+    static bool ReportedSightAgrees(string inquiry,string claimant,string account)
+    {
+        var reported=ReportSubject.Match(inquiry).Groups["observer"];
+        if(!reported.Success)return !CitedSight.IsMatch(inquiry) || OwnSight.IsMatch(inquiry);
+        string clause=reported.Value;
+        var verbs=CitedSight.Matches(clause);
+        if(verbs.Count==0)return true;
+        if(clause.StartsWith("about ",StringComparison.Ordinal) && DescribesTopic(clause[6..],account))return true;
+        return verbs.Any(verb=>ClaimantSubject(clause[..verb.Index].TrimEnd(),claimant,account) &&
+            UnqualifiedObject(clause[(verb.Index+verb.Length)..],account));
+    }
+
     // A teller may echo a separate detail volunteered before the report. Validate this whole
     // sentence separately; its words can neither identify the report nor enter the wider circle.
     static bool RepeatsPlayerDetail(string extra,string claimant,IEnumerable<string> earlier)
@@ -191,17 +235,12 @@ internal static class GroupRelay
             // to the original claimant (the player asking), with its scope intact.
             string before=inquiry[..asked.Index].TrimEnd(),after=inquiry[(asked.Index+asked.Length)..];
             var observer=ReportSubject.Match(before).Groups["observer"].Value;
-            if(Negative.IsMatch(before)||Negative.IsMatch(after)||(observer!="i"&&observer!=claimant))return Attribution.Unresolved;
+            if(Negative.IsMatch(before)||Negative.IsMatch(after)||!UnqualifiedObject(after,expected)||
+               !ClaimantSubject(observer,claimant,expected))return Attribution.Unresolved;
         }else{
             if(ExtraClause.IsMatch(expected) || !Sight.IsMatch(expected) &&
                 (asksAboutSight||!OtherObservation.IsMatch(expected)))return Attribution.Unresolved;
-            // A question attributing the sight to someone else cannot identify the teller of this claim.
-            var cited=CitedSight.Match(inquiry);
-            if(cited.Success){
-                var observer=ReportSubject.Match(inquiry[..cited.Index].TrimEnd()).Groups["observer"];
-                if(observer.Success && observer.Value!="about" && !observer.Value.StartsWith("about ",StringComparison.Ordinal) &&
-                   observer.Value!="i" && observer.Value!=claimant)return Attribution.Unresolved;
-            }
+            if(!ReportedSightAgrees(inquiry,claimant,expected))return Attribution.Unresolved;
         }
         string account=named?Account(Reported.Replace(retold[(claimant.Length+1)..],"",1)):retold;
         if(resident.Length==2){

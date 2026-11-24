@@ -4,11 +4,11 @@
 
 ## In progress
 
-- [ ] Give each speaking resident their current place, calendar, nearby people, weather and landmarks. Include every knowable event today and the next public notice in private Talk, passing remarks, groups and generated quest dialogue. Preserve interrupted activities, the source of local news, privacy, and evidence of what happened after an earlier plan.
-  On 2026-11-22 the native and server implementation entered qualification. The copied-save checks cover posted dates and actual starts and ends, individual witnesses, divergent saves, retries, player-led conversations and the original quest choices.
-  On 2026-11-23, after Graham joined a copied-game conversation, Drystan remembered that Averil had relayed Michael’s sighting and said he had not seen the streamer himself. Graham recalled hearing Drystan’s answer. In three further visits, Drystan preserved Michael’s account that he could not see the streamer, withheld a name when Michael asked for discretion and said he lacked evidence about what both of them could see. The privacy check for an indirect request still needs its follow-up with a resident who was absent.
-
 ## Completed
+
+- [x] Give each speaking resident their current place, calendar, nearby people, weather and landmarks. Include every knowable event today and the next public notice in private Talk, passing remarks, groups and generated quest dialogue. Preserve interrupted activities, the source of local news, privacy, and evidence of what happened after an earlier plan.
+  Copied-save checks covered the Fall 12 joust and Fall 17 festival notices, actual event starts and ends, local weather and company, interrupted work, player-led topics, quest choices and retries on divergent saves.
+  On 2026-11-23, Drystan credited Averil for relaying Michael’s streamer and duel accounts. Graham recalled only the exchange he heard after joining. Drystan preserved Michael’s denial and declined to speak for both of them. When Michael said he liked lying low, Drystan withheld the source in the wider group and recalled Averil’s line in private. Anastasia had been absent and said she did not hear Averil.
 
 - [x] Keep incidental resident voices quiet throughout private and group Talk, including text-only conversations, and during generated quest offers. Protect spoken passing replies and the overhead quest farewell until the last word. Resume ambient reactions when the conversation ends.
   On 2026-11-23 a copied game reproduced a resident greeting and a toddler call interrupting Echoes speech. All 23 voice checks passed on the standalone audio build. Private and group farewells played through, and speakers and a nearby bystander stayed quiet across 16 audible clips. When Michael declined Averil’s job, the native offer closed and she said “I understand, friend. Goodbye!” overhead. Normal greetings resumed after the farewell.

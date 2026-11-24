@@ -8,14 +8,16 @@ public sealed partial class Conversation
 
     // ConversationSessions.Lines already requires this speaker to have heard each group cue on this save branch.
     // Only the common transcript supplies quoted words, proposals or social effects.
-    const string GroupHistory = ConversationSessions.Lines + """
+    // Remove the listener's sight verb from the topic search while retaining its object.
+    const string GroupHistory = ConversationSessions.Lines + $$"""
         , circle AS (
             SELECT seq,source,speaker,name,addressed,words,audience,day FROM named WHERE mode='group' AND session=@session
         ), common AS (
             SELECT seq,source AS id,speaker,name,addressed,words FROM circle WHERE audience @> @listeners ORDER BY seq DESC LIMIT 14
         ), latest AS (SELECT * FROM common ORDER BY seq DESC LIMIT 1), focus AS (
             SELECT DISTINCT word,plainto_tsquery('english',word) AS term FROM latest l
-            CROSS JOIN LATERAL regexp_split_to_table(regexp_replace(lower(regexp_replace(l.words,'\*[^*]+\*','','g')),
+            CROSS JOIN LATERAL regexp_split_to_table(regexp_replace(regexp_replace(lower(regexp_replace(l.words,'\*[^*]+\*','','g')),
+                '\m{{GroupRelay.ListenerSight}}\M',' ','g'),
                 '\m(did|could)n[''’]t\M','\1 not','g'),'[^[:alnum:]]+') word
             WHERE l.speaker='player' AND l.addressed IN (@a,'group') AND length(word)>1
               AND numnode(plainto_tsquery('english',word))>0
