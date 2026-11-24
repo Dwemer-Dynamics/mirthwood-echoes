@@ -40,11 +40,11 @@ namespace Mirthwood.Echoes
         }
         static string Clip(string s,int limit)=>string.IsNullOrWhiteSpace(s)?"":s.Length<=limit?s:s.Substring(0,limit);
         internal static string ItemName(_Mirthwood.Scripts.Demo.Items.ItemDataBase item)=>item==null?"":Clip(item.ItemNameLocalized??item.name,100);
-        internal static string Fact(NPCController n,string kind,string description,bool fresh=true,JObject details=null)
+        internal static string Fact(NPCController n,string kind,string description,bool fresh=true,JObject details=null,string fixedId=null)
         {
             var person=Person(n,description);if(person==null)return null;
             if(details!=null)person["details"]=details;
-            string id=Record(kind,new JArray(person));
+            string id=Record(kind,new JArray(person),fixedId);
             if(id!=null&&fresh)Recent(n,id,null,null);
             return id;
         }

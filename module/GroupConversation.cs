@@ -25,6 +25,7 @@ namespace Mirthwood.Echoes
         readonly Dictionary<string,string> groupCues=new Dictionary<string,string>();
         string groupCampaign,groupLastId,groupLastSpeaker,groupTo;
         string invitedAnswer;
+        JObject pendingGroupTurn;
         int groupSequence,groupRevision,groupReplies;
         float nextGroupReply;
         bool groupReady,groupTyping,groupParting;
@@ -143,7 +144,7 @@ namespace Mirthwood.Echoes
         IEnumerator ResolveGuest(GroupGathering.Guest g,GroupGathering group)
         {
             g.Resolving=true;
-            var identity=new {world=Plugin.World(),owner=Plugin.Owner(g.Npc),nativeId=g.Npc.CharacterInfo.id};
+            var identity=new {world=Plugin.World(),owner=g.Owner,nativeId=g.NativeId};
             using(var request=Post(Address+"module/resolve",identity)){
                 request.timeout=6;yield return request.SendWebRequest();
                 if(group!=gathering||!group.Guests.Contains(g))yield break;
@@ -151,7 +152,7 @@ namespace Mirthwood.Echoes
                     JObject result=null;
                     try{result=JObject.Parse(request.downloadHandler.text);}catch(Newtonsoft.Json.JsonException){}
                     string c=(string)result?["campaign"],actor=(string)result?["actor"];
-                    if(!string.IsNullOrEmpty(c)&&!string.IsNullOrEmpty(actor)&&(groupCampaign==null||c==groupCampaign)){
+                    if(g.SameResident&&!string.IsNullOrEmpty(c)&&!string.IsNullOrEmpty(actor)&&(groupCampaign==null||c==groupCampaign)){
                         groupCampaign=c;g.Actor=actor;yield break;
                     }
                 }
@@ -188,7 +189,7 @@ namespace Mirthwood.Echoes
             groupProbe?.Invoke("Submitted player line "+groupSequence);
             playerBubble.Note("");playerBubble.Show(words.Trim());PlayerLine(id,words.Trim());groupReplies=0;BeginGroupReply();
         }
-        string RecordGroupLine(string speaker,string to,string words,string promise,JObject priorPromise,JToken proposal=null,JToken learned=null)
+        string RecordGroupLine(string speaker,string to,string words,string promise,JObject priorPromise,JToken proposal=null,JToken learned=null,string requestId=null)
         {
             var heard=Participants();
             if(heard.Length<2||speaker!="player"&&!heard.Any(g=>g.Actor==speaker)||
@@ -199,8 +200,8 @@ namespace Mirthwood.Echoes
             if(proposal!=null)line["proposal"]=proposal;
             if(learned!=null)line["learned"]=learned;
             if(priorPromise!=null)line["priorPromise"]=priorPromise;
-            string id=NativeCues.Record("group",new JArray(),line:line);
-            if(id!=null){groupSequence++;groupLastId=id;groupLastSpeaker=speaker;groupTo=to;}
+            string id=NativeCues.Record("group",new JArray(),requestId,line);
+            if(id!=null){pendingGroupTurn=null;groupSequence++;groupLastId=id;groupLastSpeaker=speaker;groupTo=to;}
             return id;
         }
         void SelectSpeaker(GroupGathering.Guest g)
@@ -225,12 +226,23 @@ namespace Mirthwood.Echoes
             npcBubble.Note("Enter to speak   •   Esc to leave");
             host.StartCoroutine(GetGroupReply(nextGuest,gathering,++groupRevision));
         }
+        JObject GroupRequest(GroupGathering.Guest guest,GroupGathering group,GroupGathering.Guest[] present)
+        {
+            var audience=new JArray(present.Select(g=>g.Actor));
+            if(pendingGroupTurn!=null&&(string)pendingGroupTurn["actor"]==guest.Actor&&JToken.DeepEquals(pendingGroupTurn["audience"],audience))
+                return pendingGroupTurn;
+            groupCues.TryGetValue(guest.Actor,out var cue);
+            var awareness=WorldAwareness.Capture(guest.Npc,guest.Interruption?.AtStart);
+            string head=awareness==null?NativeCues.Head:(string)awareness["world"]["cueHead"];
+            return pendingGroupTurn=new JObject{["id"]=Guid.NewGuid().ToString(),["campaign"]=groupCampaign,["actor"]=guest.Actor,
+                ["audience"]=audience,["session"]=group.Session,["head"]=string.IsNullOrEmpty(head)?null:head,["cue"]=cue,
+                ["worldAwareness"]=awareness};
+        }
         IEnumerator GetGroupReply(GroupGathering.Guest guest,GroupGathering group,int revision)
         {
-            groupCues.TryGetValue(guest.Actor,out var cue);
-            string head=NativeCues.Head;
-            var payload=new {campaign=groupCampaign,actor=guest.Actor,audience=Participants().Select(g=>g.Actor).ToArray(),
-                session=group.Session,head=string.IsNullOrEmpty(head)?null:head,cue};
+            var present=Participants();
+            if(present.Any(g=>!g.SameResident)){Close();yield break;}
+            var payload=GroupRequest(guest,group,present);
             JObject answer=null;
             float timeout=Time.unscaledTime+95;
             while(group==gathering&&revision==groupRevision){
@@ -239,16 +251,30 @@ namespace Mirthwood.Echoes
                     if(group!=gathering||revision!=groupRevision)yield break;
                     active=null;
                     if(request.responseCode==425&&Time.unscaledTime<timeout){yield return new WaitForSecondsRealtime(.25f);continue;}
+                    answer=null;
                     if(request.responseCode==200){
                         try{answer=JObject.Parse(request.downloadHandler.text);}catch(Newtonsoft.Json.JsonException){}
                     }
-                    if(answer==null){GroupRetry(Error(request,"The speaker lost their train of thought."));yield break;}
+                    if((string)answer?["state"]=="pending"){
+                        if(Time.unscaledTime<timeout){yield return new WaitForSecondsRealtime(.25f);continue;}
+                        GroupRetry("The resident is still thinking.");yield break;
+                    }
+                    if(answer==null){
+                        // A confirmed server error ends this attempt. Tab explicitly starts a new draw.
+                        // A transport loss keeps the accepted ID so its first reply can be recovered.
+                        if(request.responseCode>=400 && request.responseCode!=425)pendingGroupTurn=null;
+                        GroupRetry(Error(request,"The speaker lost their train of thought."));yield break;
+                    }
                 }
                 break;
             }
             if(group!=gathering||revision!=groupRevision)yield break;
             var seated=Participants();
             if(!seated.Contains(guest)){GroupRetry("The speaker has left.");yield break;}
+            if(seated.Any(g=>!g.SameResident)){Close();yield break;}
+            if(!payload["audience"].Values<string>().SequenceEqual(seated.Select(g=>g.Actor))){
+                pendingGroupTurn=null;GroupRetry("The gathering has changed.");yield break;
+            }
             foreach(var g in seated)g.Unique=(bool?)answer["residents"]?.FirstOrDefault(x=>(string)x["key"]==g.Actor)?["uniqueNative"]==true;
             string addressed=(string)answer["to"],words=(string)answer["words"];
             if(string.IsNullOrWhiteSpace(words)){GroupRetry("The resident had nothing to say.");yield break;}
@@ -267,7 +293,7 @@ namespace Mirthwood.Echoes
             JObject prior=answer["previousPromise"]!=null&&groupLastId==(string)answer["previous"]?
                 new JObject{["source"]=groupLastId,["quote"]=(string)answer["previousPromise"]}:null;
             if(prior!=null&&answer["previousProposal"]!=null)prior["proposal"]=answer["previousProposal"];
-            string id=RecordGroupLine(guest.Actor,addressed,words,leaves?null:(string)answer["promise"],prior,leaves?null:answer["proposal"],answer["learned"]);
+            string id=RecordGroupLine(guest.Actor,addressed,words,leaves?null:(string)answer["promise"],prior,leaves?null:answer["proposal"],answer["learned"],(string)payload["id"]);
             if(id==null){GroupRetry("The conversation could not be saved.");yield break;}
             groupParting=playerParting||leaves&&seated.Length==2;
             groupCues.Remove(guest.Actor);
@@ -308,6 +334,7 @@ namespace Mirthwood.Echoes
         {
             if(gathering==null)return;
             groupRevision++;gathering.Close();gathering=null;departingGuest=null;
+            pendingGroupTurn=null;
             groupReady=groupTyping=groupParting=false;groupCampaign=groupLastId=groupLastSpeaker=groupTo=invitedAnswer=null;
             groupReplies=groupSequence=0;nextGroupReply=0;groupRuns.Clear();groupTurns.Clear();groupCues.Clear();
         }

@@ -54,6 +54,7 @@ namespace Mirthwood.Echoes
             bool topicFlow=mode=="dialogueflow",interactive=mode=="roleplay";
             string folder=IsolatedGameRun.Active.Root;
             bool memoryTest=interactive&&File.Exists(Path.Combine(folder,"memory-clock-test"));
+            var awareness=interactive||mode=="residentdialogue"?AwarenessPlaytest.Read():null;
             var cycle=_Mirthwood.Scripts.Demo.Weather.DayNightCycle.Instance;
             int firstDay=Mathf.FloorToInt(cycle.Now);
             string name=interactive?File.ReadAllText(Path.Combine(folder,"resident.txt")).Trim():"Averil";
@@ -82,7 +83,8 @@ namespace Mirthwood.Echoes
                     npc.CharacterInfo.personality.values[5]=condition=="eager"?1f:-1f;
                     report["startingDesire"]=condition;
                 }
-                PlaceResident(player.transform.position+Vector3.right*.8f);
+                if(awareness!=null)yield return awareness.Survey(npc);
+                else PlaceResident(player.transform.position+Vector3.right*.8f);
                 if(replay!=null){
                     replaySpeaker=brain;
                     replay.Patch(AccessTools.Method(typeof(NPCChatController),"PickResponseChatAction"),prefix:new HarmonyMethod(typeof(NativeConversation),nameof(PickReplayCard)));
@@ -101,6 +103,17 @@ namespace Mirthwood.Echoes
                     "Let's talk about something lighter. Tell me a joke about the tavern cook."
                 };
                 for(int i=0;interactive||i<messages.Length;i++){
+                    if(awareness!=null){
+                        if(i>=awareness.TurnCount)break;
+                        if(awareness.ChangesVisit(i))Close();
+                        if(awareness.Reloads(i)){
+                            string owner=Plugin.Owner(npc);
+                            yield return awareness.Reload(npc);
+                            npc=FindResident(owner);brain=npc.GetComponent<NPCChatController>();agent=npc.GetComponent<NavMeshAgent>();
+                            player=PlayerCharacterController.Instance;chat=player.GetComponent<PlayerChat>();
+                        }
+                        yield return awareness.SetScene(i,npc);
+                    }
                     if(memoryTest&&i>=2){
                         if(i>4)break;
                         Close();
@@ -116,7 +129,7 @@ namespace Mirthwood.Echoes
                         }
                         npc.CharacterInfo.personality.values[5]=1f;
                     }
-                    string words=interactive?null:messages[i];
+                    string words=interactive?null:awareness?.Words(i)??messages[i];
                     if(topicFlow){
                         switch(turns.Count){
                             case 0: case 1: case 4: replayLeisureCue="Averil talks about playing chess";break;
@@ -127,7 +140,8 @@ namespace Mirthwood.Echoes
                     }
                     bool opening=!Visible;
                     if(opening){
-                        PlaceResident(player.transform.position+Vector3.right*.8f);
+                        if(awareness!=null)yield return awareness.ApproachSpeaker(i,npc);
+                        else PlaceResident(player.transform.position+Vector3.right*.8f);
                         var world=Plugin.World();
                         using(var check=Post(Address+"module/resolve",new{world,owner=Plugin.Owner(npc),nativeId=npc.CharacterInfo.id})){
                             yield return check.SendWebRequest();
@@ -135,7 +149,8 @@ namespace Mirthwood.Echoes
                         }
                         GameState.SetCurrentGeneralState(GameState.State.Gameplay);GameState.SetCurrentState(1,GameState.State.Gameplay);
                         GameState.AllowInput=true;GameState.UnPause();
-                        ChooseTalkInCopy(npc);
+                        if(awareness!=null)yield return awareness.OpenNativeMenu(npc,i);
+                        else ChooseTalkInCopy(npc);
                         if(!Visible)throw new InvalidOperationException("Native Talk did not open: chatEnabled="+brain.chatEnabled+
                             ", scripted Speak="+(brain.GetDialogueData()!=null)+", game state="+_Mirthwood.Scripts.Demo.GameState.GetCurrentState(1)+
                             ", camera="+Camera.main?.name+", in range="+InReplyRange(npc));
@@ -156,6 +171,7 @@ namespace Mirthwood.Echoes
                         yield return Await(()=>box.Pending()!=null,"Enter did not submit this draft.",6);
                     }else playerBubble.Input.onSubmit.Invoke(words);
                     var intent=box.Pending();string id=(string)intent["id"];
+                    if(awareness!=null)yield return awareness.Submitted(i,npc,intent);
                     yield return Await(()=>phase==Phase.Reading||(!busy&&phase==Phase.Draft),"No answer to "+words);
                     if(phase!=Phase.Reading)throw new InvalidOperationException("The resident returned to editing before speaking: "+words);
                     int firstMs=Mathf.RoundToInt(1000*(Time.realtimeSinceStartup-start));
@@ -177,6 +193,7 @@ namespace Mirthwood.Echoes
                         turns.Add(row);
                         string filename=interactive?(i==0||conversationOver?"latest-roleplay-turn-"+turns.Count:null):"latest-averil-turn-"+turns.Count;
                         yield return ReadResidentBubble(npcBubble,reply,row,filename);
+                        if(awareness!=null)yield return awareness.Delivered(i,npc,row);
                         if(!matched)throw new InvalidOperationException("The on-screen speech differs from the recovered turn.");
                         if(interactive){
                             string output=Path.Combine(folder,"reply-"+i+".json");
@@ -188,19 +205,28 @@ namespace Mirthwood.Echoes
                         yield return new WaitForEndOfFrame();
                         if(!IsolatedGameRun.PostReturn())throw new IOException("Could not accept the resident's reply.");
                         yield return Await(()=>ended?!Visible:Visible&&phase==Phase.Draft,"Enter did not reach the expected state after the reply.",6);
-                        if(ended&&!memoryTest)break;
+                        if(ended&&!memoryTest&&(awareness==null||i+1>=awareness.TurnCount||!awareness.ChangesVisit(i+1)))break;
                     }else Advance();
                 }
                 Close();
+                if(awareness?.QuestQuestion is string question)yield return DiscussWorldDuringOffer(awareness,npc,question);
                 if(topicFlow||interactive)yield break;
                 foreach(string card in new[]{"Funny Joke","Flirt"}){
                     var native=brain.dnaData.chatActions.Single(x=>string.Equals(x.name.Replace(" ",""),card.Replace(" ",""),StringComparison.OrdinalIgnoreCase));
-                    PlaceResident(player.transform.position+Vector3.right*.8f);
+                    if(awareness!=null){
+                        yield return AwarenessPlaytest.Approach(npc.transform.position);
+                        awareness.Record("address-before",openers.Count,npc,new {card});
+                    }else PlaceResident(player.transform.position+Vector3.right*.8f);
+                    float began=Time.realtimeSinceStartup;
                     brain.PrepareForChat(chat);chat.PrepareForChat(brain);brain.SendInteraction(native);
+                    if(awareness?.RetryAddress==true && openers.Count==0)yield return awareness.DisconnectAddress(this,npc);
                     float until=Time.realtimeSinceStartup+80;
                     while(passing?.Heard!=true&&Time.realtimeSinceStartup<until){
                         // Keep the copied actor in hearing range throughout the provider request.
-                        if((npc.transform.position-player.transform.position).sqrMagnitude>4f)PlaceResident(player.transform.position+Vector3.right*.8f);
+                        if((npc.transform.position-player.transform.position).sqrMagnitude>4f){
+                            if(awareness!=null)yield return AwarenessPlaytest.Approach(npc.transform.position);
+                            else PlaceResident(player.transform.position+Vector3.right*.8f);
+                        }
                         yield return null;
                     }
                     if(passing?.Speaker!=npc||passing.Kind!="address"||passing.EventId==null)
@@ -210,6 +236,9 @@ namespace Mirthwood.Echoes
                     bool matched=remark.Bubble.ReadRenderedText()==new BubbleText(line,false).Plain.Trim();
                     var row=JObject.FromObject(new{card,id,line,matched});openers.Add(row);
                     yield return ReadResidentBubble(remark.Bubble,line,row,"latest-averil-opener-"+openers.Count);
+                    awareness?.Record("address-bubble",openers.Count-1,npc,new {
+                        id,card,line,rendered=remark.Bubble.ReadRenderedText(),elapsedMs=Mathf.RoundToInt((Time.realtimeSinceStartup-began)*1000)
+                    });
                     AdvancePassingLine();
                     yield return Await(()=>Ready,"The native opener could not be answered.");
                     row["campaign"]=campaign;row["actor"]=actor;
@@ -234,7 +263,8 @@ namespace Mirthwood.Echoes
             }finally{
                 if(replay!=null){replayLeisureCue=null;replaySpeaker=null;replay.UnpatchSelf();}
                 if(replay!=null||setDesire)npc.CharacterInfo.personality.values[5]=originalDesire;
-                Close();PlaceResident(origin);
+                Close();if(awareness==null)PlaceResident(origin);
+                awareness?.Cleanup();
             }
         }
     }

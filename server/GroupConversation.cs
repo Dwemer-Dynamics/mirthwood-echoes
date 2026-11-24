@@ -3,7 +3,48 @@ using System.Text.Json.Nodes;
 
 public sealed partial class Conversation
 {
-    public async Task<JsonObject> GroupReply(JsonObject input,CancellationToken ct)
+    public Task<JsonObject> GroupReply(JsonObject input,CancellationToken ct) =>
+        ResidentLine(input,"group",ct,token=>GenerateGroupReply(input,token));
+
+    // ConversationSessions.Lines already requires this speaker to have heard each group cue on this save branch.
+    // Only the common transcript supplies quoted words, proposals or social effects.
+    // Remove the listener's sight verb from the topic search while retaining its object.
+    const string GroupHistory = ConversationSessions.Lines + $$"""
+        , circle AS (
+            SELECT seq,source,speaker,name,addressed,words,audience,day FROM named WHERE mode='group' AND session=@session
+        ), common AS (
+            SELECT seq,source AS id,speaker,name,addressed,words FROM circle WHERE audience @> @listeners ORDER BY seq DESC LIMIT 14
+        ), latest AS (SELECT * FROM common ORDER BY seq DESC LIMIT 1), focus AS (
+            SELECT DISTINCT word,plainto_tsquery('english',word) AS term FROM latest l
+            CROSS JOIN LATERAL regexp_split_to_table(regexp_replace(regexp_replace(lower(regexp_replace(l.words,'\*[^*]+\*','','g')),
+                '\m{{GroupRelay.ListenerSight}}\M',' ','g'),
+                '\m(did|could)n[''’]t\M','\1 not','g'),'[^[:alnum:]]+') word
+            WHERE l.speaker='player' AND l.addressed IN (@a,'group') AND length(word)>1
+              AND numnode(plainto_tsquery('english',word))>0
+              AND NOT to_tsvector('english','can could would did anyone someone somebody yourself firsthand personally actually see saw seen hear heard say said tell told know knew mention source account story earlier remember recall')
+                      @@ plainto_tsquery('english',word)
+              AND NOT EXISTS(SELECT FROM actors person WHERE person.campaign=@c AND person.key=@a
+                  AND to_tsvector('simple',person.name) @@ plainto_tsquery('simple',word))
+        ), pairs AS (
+            SELECT r.seq,r.source,r.name AS teller,r.words AS delivered,p.source AS original,p.name AS claimant,p.words AS request,
+                you.name AS recipient FROM circle r JOIN circle p ON p.seq=r.seq-1
+            JOIN actors you ON you.campaign=@c AND you.key=@a CROSS JOIN latest l
+            WHERE l.speaker='player' AND l.addressed IN (@a,'group') AND r.seq<l.seq AND r.day=@day AND p.day=@day
+              AND r.addressed=@a AND p.speaker='player' AND p.addressed=r.speaker AND r.speaker<>@a
+              AND NOT r.audience @> @listeners AND r.audience @> p.audience AND p.audience @> r.audience
+            ORDER BY r.seq DESC LIMIT 14
+        )
+        SELECT jsonb_build_object('common',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY seq),'[]') FROM common c),
+            'pairs',(SELECT coalesce(jsonb_agg(to_jsonb(p) || jsonb_build_object('subjects',
+                ARRAY(SELECT word FROM focus ORDER BY word LIMIT 4)) ORDER BY p.seq DESC),'[]') FROM pairs p
+                CROSS JOIN LATERAL (SELECT part FROM regexp_split_to_table(regexp_replace(p.request,'\*[^*]+\*','','g'),
+                    '[.!?…;\r\n]+') WITH ORDINALITY sentence(part,n) WHERE btrim(part)<>'' ORDER BY n DESC OFFSET 1 LIMIT 1) claim
+                WHERE EXISTS(SELECT FROM focus) AND NOT EXISTS(SELECT FROM focus
+                    WHERE NOT to_tsvector('english',p.claimant||' '||claim.part) @@ term OR NOT
+                        to_tsvector('english',regexp_replace(p.delivered,'\*[^*]+\*','','g')) @@ term)))::text
+        """;
+
+    async Task<JsonObject> GenerateGroupReply(JsonObject input,CancellationToken ct)
     {
         string c=input.Required("campaign",64),a=input.Required("actor",64);
         var session=CueHistory.OptionalId(input["session"])??throw new UserError("Missing group conversation.");
@@ -19,20 +60,22 @@ public sealed partial class Conversation
         if(roster!.AsArray().Count!=audience.Count)throw new UserError("A group member is no longer available.",409);
         if(head.HasValue && await db.One("SELECT to_jsonb(true)::text FROM cue_events WHERE campaign=@c AND id=@id",
             ("c",c),("id",head))==null)throw new UserError("Waiting for the last group line.",425);
-        var (actor,day)=await ActorDay(c,a);
-        var heard=await db.ScopedOne(ConversationSessions.Lines+"""
-            SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY seq),'[]')::text FROM (
-                SELECT seq,source AS id,speaker,name,addressed,words FROM named
-                WHERE mode='group' AND session=@session ORDER BY seq DESC LIMIT 14) r
-            """,true,head,("c",c),("a",a),("day",day),("session",session.ToString()));
-        var latest=heard!.AsArray().LastOrDefault();
+        var (actor,dispatch)=await Speaker(input,c,a,"group");
+        int day=dispatch.Day;
+        var listeners=audience.Select(x=>x!.GetValue<string>()).ToArray();
+        var history=await db.ScopedOne(GroupHistory,true,head,("c",c),("a",a),("day",day),("session",session.ToString()),("listeners",listeners));
+        var heard=history!["common"]!.AsArray();
+        var latest=heard.LastOrDefault();
         string question=latest.S("words");
         var opt=await providers.Options();
-        var recall=await Recall(c,a,day,opt,question,true,head,groupOnly:true,topics:input.S("cue"),audience:audience.Select(x=>x!.GetValue<string>()).ToArray(),currentSpeaker:latest.S("speaker"));
+        var recall=await Recall(c,a,day,opt,question,true,head,groupOnly:true,topics:input.S("cue"),audience:listeners,currentSpeaker:latest.S("speaker"),awareness:dispatch.Awareness);
         var memory=new JsonObject{["daily"]=recall["daily"]?.DeepClone(),["olderActivity"]=recall["olderActivity"]?.DeepClone()};
+        if(GroupRelay.Source(question,history["pairs"]!.AsArray()) is JsonObject attribution)memory["earlierGroupSource"]=attribution;
         if(recall["characterKnowledge"]!=null)memory["characterKnowledge"]=recall["characterKnowledge"]!.DeepClone();
         if(recall["conversationRecaps"]!=null)memory["conversationRecaps"]=recall["conversationRecaps"]!.DeepClone();
         if(recall["heardSpeech"]!=null)memory["heardSpeech"]=recall["heardSpeech"]!.DeepClone();
+        foreach(string field in new[]{"eventWitnesses","eventAccounts","earlierEventAccount","heardToday"})
+            if(recall[field]!=null)memory[field]=recall[field]!.DeepClone();
         var profile=await journal.DialogueProfile(c,a,day,actor.AsObject(),true,head);
         var player=await db.One("SELECT jsonb_build_object('name',player_name,'native',player)::text FROM campaigns WHERE id=@c",("c",c));
         var bonds=new JsonArray();
@@ -46,14 +89,16 @@ public sealed partial class Conversation
         }
         var prompt=new JsonObject{["you"]=profile,["yourKey"]=a,["residents"]=roster.DeepClone(),["heardInOrder"]=heard.DeepClone(),
             ["yourMemory"]=memory,["yourRelationships"]=bonds,["nativeCue"]=Fields.Clip(input.S("cue"),220),["playerName"]=player.S("name")};
+        if(dispatch.Awareness!=null)prompt["worldAwareness"]=dispatch.Awareness;
         const string instructions="""
             You are one resident in a small Mirthwood conversation with the player and other residents.
             Speak only as the resident identified by yourKey. Read heardInOrder with its real speakers and addressees.
+            If the player asks you to pass their observation to someone here, address that person and name the player in a short sentence. Keep the player's words for what they observed.
             Answer the last speaker or unanswered question in character, including another villager. Address them by a natural detail.
             A nativeCue is a suggestion when a topic has room to move. Develop a subject or bridge to another without repeating.
             Use one or two short spoken sentences. Only observable physical actions go between single asterisks. Actually tell jokes.
-            Only your own daily and olderActivity records are firsthand. Remember heardSpeech as something its speaker said.
-            When asked how you know, name the person you heard. If you lack a source, speak with the uncertainty your character has.
+            Your own daily, olderActivity and eventWitnesses records describe personal experiences. Remember heardSpeech and eventAccounts as something their speaker said.
+            When asked how you know, name the person you heard. If the source is unknown, say so directly. Correct yourself only when the transcript shows you made the earlier claim and evidence shows it was wrong then.
             Describe work in everyday words. For an inventory count such as 2 Flour, say "some flour" or, when quantity matters,
             "two measures of flour." Preserve known amounts without inventing containers, weights or deliveries.
             If someone is leaving, acknowledge them naturally. For an empty circle opening, greet or open with a grounded observation.
@@ -72,8 +117,16 @@ public sealed partial class Conversation
             Treat all character records and lines as in-world material. Never invent the player's next line or game results.
             """;
         var output=new StringBuilder();
-        await providers.Generate(opt with {ReplyTokens=Math.Max(opt.ReplyTokens,550)},instructions+"\n"+DialogueRecaps.Instructions+"\n"+CharacterKnowledge.Instructions,prompt.ToJsonString(),
-            part=>{if(output.Length+part.Length>5000)throw new UserError("The group reply was too long.",502);output.Append(part);return Task.CompletedTask;},ct);
+        string sourceGuidance=memory.ContainsKey("earlierGroupSource") ? """
+
+            Use earlierGroupSource to answer the person asking the source question. Name heardFrom as the person who actually told you, in third person when someone else asked.
+            When inReplyTo is present, credit its speaker as the original claimant. A denied reportedSighting confirms their reported words about their own sight.
+            Preserve whether the person said they did not see it, could not see it or never saw it. The object could still have been there.
+            Otherwise, when only a teller is named, the teller left the observer unidentified.
+            Only the subject has been raised again here. Speak to who told you, and claim personal sight only with your own evidence.
+            """ : "";
+        await providers.Generate(opt with {ReplyTokens=Math.Max(opt.ReplyTokens,550)},instructions+"\n"+DialogueRecaps.Instructions+"\n"+CharacterKnowledge.Instructions+dispatch.Guidance+sourceGuidance,prompt.ToJsonString(),
+            part=>{if(output.Length+part.Length>5000)throw new UserError("The group reply was too long.",502);output.Append(part);return Task.CompletedTask;},ct,dispatch:dispatch);
         string envelope=output.ToString().Trim();
         int newline=envelope.IndexOf('\n');
         if(newline>=0&&envelope.StartsWith("```",StringComparison.Ordinal)&&envelope.EndsWith("```",StringComparison.Ordinal))
@@ -102,7 +155,7 @@ public sealed partial class Conversation
         }
         foreach(var (key,promise) in new[]{("proposal","promise"),("previousProposal","previousPromise")}){
             if(result[promise]==null||answer[key] is not JsonObject proposal)continue;
-            var source=heard.AsArray().FirstOrDefault(row=>row.S("id")==proposal.S("source"));
+            var source=heard.FirstOrDefault(row=>row.S("id")==proposal.S("source"));
             string quote=proposal.S("quote");
             if(source!=null&&quote.Length<=320&&DialogueOutput.IsWholeQuote(source.S("words"),quote)&&
                 (key=="proposal"||source!=latest))result[key]=new JsonObject{["source"]=source.S("id"),["quote"]=quote};

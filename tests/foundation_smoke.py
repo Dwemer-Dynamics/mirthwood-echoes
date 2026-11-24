@@ -57,6 +57,10 @@ class Model(http.server.BaseHTTPRequestHandler):
         if "Mirthwood quest" in packet["messages"][0]["content"]:
             context=json.loads(player)
             sample_key="quest/"+("opening" if context["opening"] else context["latestPlayerSpeech"])
+        elif '"heardInOrder":' in player:
+            sample_key="group speaker"
+        elif '"cue":' in player and '"card":' in player:
+            sample_key="passing speaker"
         wire=self.samples.get(sample_key,json.dumps({"reply":"The mill is open.","commitments":marks}))
         self.send_response(200)
         self.send_header("Content-Type", "application/json" if self.mode == "json" else "text/event-stream")
@@ -76,7 +80,7 @@ class Model(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"data: [DONE]\n\n")
 
 
-def fixture_save(saves, slot, creation, day=10):
+def fixture_save(saves, slot, creation, day=10, visitor=False):
     def row(owner, component, payload):
         return {"guid": owner + "-" + component + "-abc", "scene": "Village", "data": json.dumps(payload)}
     def info(name, ident):
@@ -85,6 +89,8 @@ def fixture_save(saves, slot, creation, day=10):
                row("East-NPC", "NPCController", info("Miller", "twin")), row("West-NPC", "NPCController", info("Miller", "twin")),
                row("East-NPC", "Inventory", {"future-key": [14, None, {"nested": False}]}),
                row("Clock", "DayNightCycle", {"dayNumber": day, "yearNumber": 0})]
+    if visitor:
+        records.append(row("Visitor-NPC","NPCController",info("Linn","linn")))
     path = saves / ("Slot" + str(slot) + ".savegame")
     path.write_text(json.dumps({"metaData": {"creationDate": creation}, "saveData": records}))
     return path
@@ -152,7 +158,7 @@ def main(package, workspace):
             assert module_status()["state"]=="missing"
             created = "2025-01-02T12:00:00"
             fixture_save(saves, 0, created)
-            fixture_save(saves, 1, "2025-01-03T12:00:00")
+            fixture_save(saves, 1, "2025-01-03T12:00:00", visitor=True)
             postgres("createdb", "-O", "mirthwood_echoes", database)
             codex_probe=tmp/"codex"
             codex_probe.write_text("""#!/usr/bin/python3
@@ -341,6 +347,8 @@ for line in sys.stdin:
                     check_context(api,Model,say,w,a,twin,checked)
                     from quest_dialogue import check_quest_guards
                     check_quest_guards(api,Model,say,twin,checked)
+                    from world_awareness import check_world_awareness
+                    check_world_awareness(api,Model,c2,a,twin,checked,base)
                     profile["endpoint"]=endpoint.replace("127.0.0.1","localhost")
                     api("/api/providers/openai_compatible",profile,"PUT",204)
                     assert api("/api/providers/openai_compatible")["hasKey"] is False
@@ -405,7 +413,7 @@ for line in sys.stdin:
                     api("/api/saves/refresh",{})
                     all_slots=api("/api/saves");assert len(all_slots)==4
                     for other in all_slots[2:]:
-                        assert len(api("/api/saves/"+other["id"]+"/characters"))==3
+                        assert len(api("/api/saves/"+other["id"]+"/characters"))==4
                     checked("legacy length-prefixed JSON and native binary component import")
                     late_save=fixture_save(saves,4,created,10)
                     api("/api/saves/refresh",{})

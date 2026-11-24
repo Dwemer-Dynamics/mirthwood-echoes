@@ -78,7 +78,7 @@ public sealed class Providers(Database db,IDataProtectionProvider protection,Htt
     }
     public static string Resolve(Profile p,string purpose)=>purpose switch {
         "conversation" when p.Conversation.Length>0=>p.Conversation,"memory" when p.Memory.Length>0=>p.Memory,_=>p.DefaultModel};
-    public async Task<string> Generate(Options options, string system,string player,Func<string,Task> emit,CancellationToken ct,string purpose="conversation",bool residentOpener=false)
+    public async Task<string> Generate(Options options, string system,string player,Func<string,Task> emit,CancellationToken ct,string purpose="conversation",bool residentOpener=false,DialogueDispatch? dispatch=null)
     {
         var provider=Find(options.Provider);
         var p=await Get(provider.Id);
@@ -87,7 +87,11 @@ public sealed class Providers(Database db,IDataProtectionProvider protection,Htt
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromSeconds(75));
         using var slot=await queue.Enter(provider.Id+"|"+model,purpose=="conversation",deadline.Token);
-        if(provider.Id=="codex_subscription") {await CodexDialogue.Stream(model,system,player,emit,deadline.Token,p.CodexHost,purpose=="conversation"?p.ConversationEffort:"",residentOpener);return model;}
+        if(provider.Id=="codex_subscription") {
+            dispatch?.Capture(db,provider.Id,model,system,player);
+            await CodexDialogue.Stream(model,system,player,emit,deadline.Token,p.CodexHost,purpose=="conversation"?p.ConversationEffort:"",residentOpener);
+            return model;
+        }
         var url=Url(provider.Id=="openai_compatible"?p.Endpoint:provider.Url);
         if(p.Secret=="" && provider.Id!="openai_compatible") throw new UserError("Save an API key for "+provider.Name+".",409);
         using var req=new HttpRequestMessage(HttpMethod.Post,url);
@@ -96,6 +100,7 @@ public sealed class Providers(Database db,IDataProtectionProvider protection,Htt
         if(provider.Id=="openrouter") req.Headers.Add("X-OpenRouter-Title",ModIdentity.Name);
         req.Content=new StringContent(JsonSerializer.Serialize(new {model,stream=true,max_tokens=options.ReplyTokens,
             messages=new[]{new {role="system",content=system},new {role="user",content=player}}}),Encoding.UTF8,"application/json");
+        dispatch?.Capture(db,provider.Id,model,system,player);
         using var res=await http.SendAsync(req,HttpCompletionOption.ResponseHeadersRead,deadline.Token);
         if(!res.IsSuccessStatusCode) throw new UserError(provider.Name+" returned HTTP "+(int)res.StatusCode+". Check the model, endpoint and credential.",502);
         if(res.Content.Headers.ContentType?.MediaType!="text/event-stream")
