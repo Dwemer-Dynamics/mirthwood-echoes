@@ -34,7 +34,9 @@ The **Server** switch above the four main sections starts or stops the Echoes ba
 
 Open **VOICE TTS** in the companion to hear the original cast. Choose your save to preview its automatic player voice, or audition any of the 32 voices. Move **Pitch** while the sample plays to hear the five levels from two semitones lower to two higher. **Save player voice** applies the selection. **Use default** clears a save’s override. Voice playback starts enabled.
 
-The cast includes six American men and six American women, plus two men and two women for each of the British, Spanish, German, Russian and Chinese English-accent casting directions. Residents and replacements draw a repeatable voice and pitch from their saved identities. Each voice has its own recordings for the game’s native chat reactions. Web previews and native reactions play from the installed release.
+The cast includes six American men and six American women, plus two men and two women for each of the British, Spanish, German, Russian and Chinese English-accent casting directions. Each campaign draws resident voices at random from separate male and female casts. Every voice in a cast goes to one resident before the next round begins. The same resident keeps that voice and pitch for chat reactions and spoken dialogue when you reload or switch saves. A newly spawned resident or replacement gets their own draw.
+
+Earlier versions calculated resident voices without saving the assignments. After upgrading, each resident draws their voice the first time Echoes resolves them. Echoes stores those assignments and the current round in `%LOCALAPPDATA%\MirthwoodEchoes\ResidentVoices`. Keep that folder with your saves when moving to another PC. A new cast voice joins the current round. If a resident’s voice is removed, they draw again on their next use. Player voice preferences and the narrator are separate.
 
 For live speech, start **Pocket-TTS (GPU / audio.cpp)** in Dwemer Distro. Echoes connects to port **8086** and supplies an original recording for the speaker. The player and resident speak their own words. A separate narrator reads actions enclosed in single asterisks. The complete line stays visible while an underline follows the word being spoken. For names outside the pronunciation dictionary, Echoes estimates the caption timing from the recording. With Dwemer offline, the complete reply appears as text.
 
@@ -139,6 +141,8 @@ The 0.1.2 upgrade retained the original PostgreSQL database identity, all 63 ros
 ## In-game test harness
 
 Run `scripts/Test-Game.ps1 -Mode Voices -IsolatedSaveSlot 0` with Dwemer available to check the native reactions and a spoken player, narrator and resident exchange. The probe reads back game audio channel positions, caption updates and the speaker’s assigned voice. From the checkout, `node tests/journal_browser.cjs .work/voice-browser --voices` checks sample playback and pitch in Edge and restores the previous player voice after testing the Save button.
+
+Run `dotnet run --project tests/resident_voice_pool -c Release -- <module-dll> <voice-pack-zip>` on Windows to check resident assignment against the built module and its cast. The regression uses temporary campaign folders and includes concurrent draws from separate processes.
 
 With Mirthwood closed, the following command opens a visible Echoes window as needed, launches Steam with a hash-verified copy of slot 0, runs the checks, closes that test process, and verifies the original save and backup. The harness closes a companion window it opened for an isolated run. Use the source checkout command below, or run the bundled `Test-Game.ps1` from the extracted release.
 
