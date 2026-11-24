@@ -746,6 +746,29 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
                                    "Who said the streamer was by the field?"), 6):
         selected = relay_question(seq, speaker, inquiry)[2]
         assert selected["source"] == unnamed and selected["heardFrom"] == "Linn" and "inReplyTo" not in selected
+    # A verbatim announcement can name the author of the words without naming a witness.
+    statement = "There was a copper streamer by the field."
+    order = f'Please tell Miller, in these words, “{statement}”'
+    quoted = f'Miller, Test player says, “{statement}”'
+    for instruction, delivery, eligible in (
+        (order, quoted, True),
+        (order, f'Miller, "{statement}"', True),
+        (f"Please tell Miller ‘{statement}’", quoted, True),
+        ("Please tell Miller what I saw.", f"Miller, Test player said {statement.lower()}", True),
+        (order, quoted.replace("by the field", "near the field"), False),
+        (order, quoted + " Keep it between us.", False),
+        (order.replace("Miller", "Twin"), quoted, False),
+    ):
+        world["cueHead"] = before_relay
+        group_line(1, "player", visitor, original_listeners, "Linn, I saw a copper streamer by the field. " + instruction)
+        announced = group_line(2, visitor, speaker, original_listeners, delivery)
+        inquiry = "Who told you there was a streamer by the field?"
+        source = relay_question(3, speaker, inquiry)[2]
+        expected = dict(source=announced, heardFrom="Linn", addressedToYou=True, subjectInCurrentLine=["field", "streamer"])
+        assert source == (expected if eligible else None), (instruction, delivery)
+        if eligible:
+            assert relay_question(4, speaker, "Who told you I saw the streamer by the field?")[2] is None
+            assert relay_question(5, twin, inquiry)[2] is None
     # In a widened group only the current question can carry the scope of a claimed sighting.
     for account, questions in (
         ("a joust at the mill in a dream",

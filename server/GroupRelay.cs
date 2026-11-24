@@ -25,7 +25,10 @@ internal static class GroupRelay
     // A stated preference about disclosure qualifies the invitation even when phrased as a pastime.
     static readonly Regex DisclosurePreference=new(@"\b(?:privacy|secrecy|anonym(?:ity|ous(?:ly)?)|discre(?:tion|et(?:ly)?)|incognito|nameless|un(?:named|identified|credited)|(?:my|our) (?:name|identity))\b",Options);
     static readonly Regex Words=new(@"[^\p{L}\p{Nd}]+");
-    static readonly Regex Reported=new(@"^(?:said|says|reported|told me|tells me|mentioned)(?: that)? (?:he|she|they) ",Options);
+    const string SpeechVerb=@"(?:said|says|reported|told me|tells me|mentioned)";
+    const string PoliteRequest=@"(?:(?:will|would|can|could) you (?:please )?|please )?";
+    static readonly Regex Reported=new("^"+SpeechVerb+@"(?: that)? (?:he|she|they) ",Options);
+    static readonly Regex NeutralStatement=new(@"^there (?:was|were) [\p{L}\p{Nd}]+(?:[ '-][\p{L}\p{Nd}]+)*\z",Options);
     // A collection can have a short common or proper name. An open-ended preference or
     // gerund can also be a request for discretion. Admit recognizable activities and interests.
     const string Modifier=@"(?:(?i:a|an|the) )?(?:\p{L}+ |(?:\p{Lu}\p{L}* ){2,3})?";
@@ -281,33 +284,60 @@ internal static class GroupRelay
         return false;
     }
 
+    // Keep the whole statement and its word boundaries. Only matching quotation marks,
+    // sentence-ending punctuation and typography can vary in a prescribed announcement.
+    static string? AnnouncementWords(string text,bool requireQuote)
+    {
+        text=text.Trim().TrimEnd('.','!').TrimEnd();
+        if(text.Length==0)return null;
+        char closing=text[0] switch { '"' => '"', '“' => '”', '\'' => '\'', '‘' => '’', _ => '\0' };
+        if(closing!='\0'){
+            if(text.Length<2 || text[^1]!=closing)return null;
+            text=text[1..^1].Trim().TrimEnd('.','!').TrimEnd();
+        }else if(requireQuote)return null;
+        string statement=Regex.Replace(text,@"\s+"," ").Replace('’','\'').ToLowerInvariant();
+        return NeutralStatement.IsMatch(statement)?statement:null;
+    }
+
     static Attribution RequestedAccount(JsonObject pair,string inquiry,bool asksAboutSight)
     {
         string teller=Plain((string)pair["teller"]!),recipient=Plain((string)pair["recipient"]!),claimant=Plain((string)pair["claimant"]!);
         string request=(string)pair["request"]!,delivered=(string)pair["delivered"]!;
-        var player=Sentences(request,preserveCase:true);
-        var resident=Sentences(delivered);
-        // The unqualified invitation applies to the immediately preceding first-person statement.
-        if(teller.Length==0||recipient.Length==0||claimant.Length==0||player.Length<2)return Attribution.Unrelated;
-        var name=Regex.Escape(recipient);
-        var invitation=WithoutAddress(player[^1],teller);
-        const string subject=@"(?:it|this|that|the news|what i (?:saw|heard|found|noticed|said))";
-        string transfer=$@"(?:tell {name} (?:about {subject}|{subject})|let {name} know(?: about {subject})?|(?:pass|relay) {subject}(?: along| on)? to {name}|share {subject} with {name})";
-        if(!Regex.IsMatch(invitation,$@"^(?:(?:will|would|can|could) you (?:please )?|please )?{transfer}(?: please)?$",Options))return Attribution.Unrelated;
-        var original=WithoutAddress(player[^2],teller).ToLowerInvariant();
+        if(teller.Length==0||recipient.Length==0||claimant.Length==0)return Attribution.Unrelated;
+        string addressee=Regex.Escape((string)pair["recipient"]!);
+        var prescription=Regex.Match(request,@"(?:^|(?<=[.!?…;\r\n]))\s*"+PoliteRequest+"tell "+addressee+
+            @"(?:\s*,?\s+in these (?:exact )?words\s*[,:—–]?\s*|\s*[,:—–]?\s*(?=[""'“‘]))(?<quote>.+)\z",Options|RegexOptions.Singleline);
+        string requestScope=prescription.Success?request[..prescription.Index]:request;
+        var player=Sentences(requestScope,preserveCase:true);
+        int claimAt=player.Length-(prescription.Success?1:2);
+        if(claimAt<0)return Attribution.Unrelated;
+        if(!prescription.Success){
+            var name=Regex.Escape(recipient);
+            var invitation=WithoutAddress(player[^1],teller);
+            const string subject=@"(?:it|this|that|the news|what i (?:saw|heard|found|noticed|said))";
+            string transfer=$@"(?:tell {name} (?:about {subject}|{subject})|let {name} know(?: about {subject})?|(?:pass|relay) {subject}(?: along| on)? to {name}|share {subject} with {name})";
+            if(!Regex.IsMatch(invitation,"^"+PoliteRequest+transfer+@"(?: please)?$",Options))return Attribution.Unrelated;
+        }
+        var original=WithoutAddress(player[claimAt],teller).ToLowerInvariant();
         if(!original.StartsWith("i ",StringComparison.Ordinal))return Attribution.Unrelated;
-        var preface=player[..^2].Select(line=>WithoutAddress(line,teller)).ToArray();
+        var preface=player[..claimAt].Select(line=>WithoutAddress(line,teller)).ToArray();
         // Another permitted account of the subject remains a possible rival even when its
         // wording is too uncertain or private to identify its teller to the larger circle.
+        var resident=Sentences(delivered);
         if(resident.Length is <1 or >2 || Confidential(request)||Confidential(delivered)||delivered.Contains('?'))return Attribution.Unresolved;
-        if(HasUnboundClause(request,(string)pair["teller"]!,"please") ||
-           HasUnboundClause(delivered,(string)pair["recipient"]!,"you know"))return Attribution.Unresolved;
+        // A speech attribution names the author of the words. It does not name an eyewitness.
+        string announcementPrefix=$@"^\s*(?:{addressee}\s*[,:—–]\s*)?(?:{Regex.Escape((string)pair["claimant"]!)} {SpeechVerb}(?: that)?(?:\s*[,:—–]\s*|\s+))?";
+        var announcement=AnnouncementWords(Regex.Replace(delivered,announcementPrefix,"",Options),requireQuote:false);
+        if(prescription.Success && (announcement==null || announcement!=AnnouncementWords(prescription.Groups["quote"].Value,requireQuote:true)))
+            return Attribution.Unresolved;
+        if(HasUnboundClause(requestScope,(string)pair["teller"]!,"please") ||
+           announcement==null && HasUnboundClause(delivered,(string)pair["recipient"]!,"you know"))return Attribution.Unresolved;
         // Account for the whole request before identifying either person to a new audience.
         // A single-clause self-description can accompany the request. Other directions or
         // qualifications have unknown disclosure scope, even when the final invitation is clear.
         if(preface.Any(line=>DisclosurePreference.IsMatch(line)||ExtraClause.IsMatch(line)|| !(Pastime.IsMatch(line)||Interest.IsMatch(line))))return Attribution.Unresolved;
-        var retold=WithoutAddress(resident[0],recipient);
-        bool named=retold.StartsWith(claimant+" ",StringComparison.Ordinal);
+        var retold=announcement==null?WithoutAddress(resident[0],recipient):Plain(announcement);
+        bool named=announcement==null && retold.StartsWith(claimant+" ",StringComparison.Ordinal);
         var expected=Account(original[2..]);
         bool denied=Negative.IsMatch(expected);
         if(denied!=Negative.IsMatch(inquiry))return Attribution.Unresolved;
