@@ -45,6 +45,12 @@ internal static class GroupRelay
     static readonly Regex ClauseWord=new(@"\b(?:i|me|myself|you|yourself|we|us|they|them|he|him|she|her|someone|somebody|who|whom|which|both|am|is|are|was|were|have|has|had|do|does|did|can|could|will|would|may|might|shall|should|must)\b",Options);
     static readonly Regex PassiveSight=new(@"\b(?:(?:(?:that|which) )?(?:was |were |had been |has been |have been ))?"+SightPerfect+@"\b",Options);
     static readonly Regex PassivePlace=new(@"^(?:by|beside|near|close to|next to|at|in|on) (?:a|an|the|this|that) ",Options);
+    static readonly Regex ObjectQualifier=new(@" (?:of|by|near|at|in|on|off|as|to|from|for|with|without|about|around|along|before|after|above|below|behind|beneath|between|beyond|beside|under|over|across|through|inside|outside|that|which|who|whose)\b",Options);
+    static readonly Regex LeadingArticle=new(@"^(?:a|an|the) ",Options);
+    static readonly Regex ModifiedNoun=new(@"^\p{L}+ (?<noun>\p{L}+)$",Options);
+    static readonly Regex SightMargins=new(@"^(?:"+SightAdverb+@" )+|(?: "+SightAdverb+@")+$",Options);
+    static readonly Regex Existence=new(@"^there (?:was|were|is|are) (?<object>.+)$",Options);
+    static readonly Regex Located=new(@"^(?<object>.+?) (?:was|were|is|are) (?<place>.+)$",Options);
     static readonly Regex ContractedNegative=new(@"\b(did|could)n['’]t\b",Options);
     static readonly Regex Negative=new(@"\b(?:no|not|never|neither|none|nothing|nobody|[a-z]+n t)\b",Options);
     static readonly Regex DeniedSight=new(@"\b(?:(?<scope>did not|could not) (?:"+SightAdverb+" )*"+SightVerb+
@@ -141,14 +147,34 @@ internal static class GroupRelay
         return words.Length>0 && (" "+Terms(account)+" ").Contains(" "+words+" ",StringComparison.Ordinal);
     }
 
-    // Match the whole subject before its sight verb. In a relative clause the subject can
-    // follow the name of the thing discussed in the original account.
-    static bool ClaimantSubject(string prefix,string claimant,string account)
+    // Only the direct object can be the thing seen. "A map of the harbor" can be
+    // recalled as "the map". All qualifiers the question asserts must still agree.
+    static bool SameObservedObject(string asked,string recorded)
+    {
+        static (string noun,string details) Parts(string words){
+            string phrase=LeadingArticle.Replace(Proximity.Replace(words.Trim(),"near "),"",1);
+            var split=ObjectQualifier.Match(phrase);
+            return split.Success?(phrase[..split.Index],phrase[(split.Index+1)..]):(phrase,"");
+        }
+        if(!UnqualifiedObject(asked,recorded))return false;
+        var (noun,details)=Parts(asked);
+        var (original,qualifiers)=Parts(recorded);
+        if(noun.Length==0)return false;
+        if(details.Length>0 && details!=qualifiers &&
+           !(qualifiers.StartsWith(details+" ",StringComparison.Ordinal) &&
+             ObjectQualifier.Match(qualifiers,details.Length).Index==details.Length))return false;
+        // Shorten a simple modifier–noun pair such as "copper streamer". Taking the
+        // last word of a longer, unparsed phrase can turn its setting into its object.
+        return noun==original || ModifiedNoun.Match(original).Groups["noun"].Value==noun;
+    }
+
+    // In a relative clause the observed object can precede its observer and verb.
+    static bool ClaimantObserved(string prefix,string suffix,string claimant,string recordedObject)
     {
         var person=@"(?:i(?: myself)?|"+Regex.Escape(claimant)+@"(?: (?:himself|herself|themself|themselves))?)";
         var subject=Regex.Match(prefix,@"^(?:about (?<topic>.+?) (?:(?:that|which) )?)?(?:"+SightAdverb+" )*"+person+@"(?: "+SightAdverb+")*$",Options);
-        var topic=subject.Groups["topic"];
-        return subject.Success && (!topic.Success || ContainsTopic(account,topic.Value));
+        string words=(subject.Groups["topic"].Value+" "+SightMargins.Replace(suffix.Trim(),"")).Trim();
+        return subject.Success && SameObservedObject(words,recordedObject);
     }
 
     static bool DescribesTopic(string words,string account)
@@ -172,6 +198,11 @@ internal static class GroupRelay
     {
         string topic=TopicIntro.Replace(words,"",1),recordedObject=account[(account.IndexOf(' ')+1)..];
         if(RecordedTopic(topic,recordedObject))return true;
+        var existence=Existence.Match(topic);
+        if(existence.Success)return Sight.IsMatch(account) && SameObservedObject(existence.Groups["object"].Value,recordedObject);
+        var located=Located.Match(topic);
+        if(located.Success && PassivePlace.IsMatch(located.Groups["place"].Value))
+            return Sight.IsMatch(account) && SameObservedObject(located.Groups["object"].Value+" "+located.Groups["place"].Value,recordedObject);
         var passive=PassiveSight.Match(topic);
         if(!Sight.IsMatch(account) || !passive.Success || passive.Index==0)return false;
         string subject=topic[..passive.Index].TrimEnd(),place=topic[(passive.Index+passive.Length)..].TrimStart();
@@ -184,22 +215,28 @@ internal static class GroupRelay
         }
         if(place.Length>0 && !PassivePlace.IsMatch(place))return false;
         string described=(subject+" "+place).TrimEnd();
-        return RecordedTopic(described,recordedObject);
+        return SameObservedObject(described,recordedObject);
     }
 
     static bool ReportedAccountAgrees(string inquiry,string claimant,string account,bool named)
     {
-        var reported=ReportSubject.Match(inquiry).Groups["observer"];
-        if(!reported.Success)return OwnSight.IsMatch(inquiry) || EvidenceOnly.IsMatch(inquiry);
-        string clause=reported.Value;
+        var reported=ReportSubject.Match(inquiry);
+        string recordedObject=account[(account.IndexOf(' ')+1)..];
+        if(!reported.Success){
+            var own=OwnSight.Match(inquiry);
+            return EvidenceOnly.IsMatch(inquiry) || own.Success && (own.Groups["object"].Value is "it" or "this" or "that" ||
+                SameObservedObject(own.Groups["object"].Value,recordedObject));
+        }
+        string clause=reported.Groups["observer"].Value;
+        if(reported.Value.StartsWith("mention",StringComparison.Ordinal) && clause.EndsWith(" to you",StringComparison.Ordinal) &&
+           RecordedTopic(clause[..^7],recordedObject))return true;
         if(ReportTopic(clause,account,claimant,named))return true;
         if(!named)return false;
         // Every explicit assertion needs an identified claimant and a corroborated kind of
         // observation. An unfamiliar verb or auxiliary cannot vouch for another witness.
         var verbs=Sight.IsMatch(account)?CitedSight.Matches(clause):
             Regex.Matches(clause,@"\b"+Regex.Escape(account.Split(' ')[0])+@"\b",Options);
-        return verbs.Any(verb=>ClaimantSubject(clause[..verb.Index].TrimEnd(),claimant,account) &&
-            UnqualifiedObject(clause[(verb.Index+verb.Length)..],account));
+        return verbs.Any(verb=>ClaimantObserved(clause[..verb.Index].TrimEnd(),clause[(verb.Index+verb.Length)..],claimant,recordedObject));
     }
 
     // A teller may echo a separate detail volunteered before the report. Validate this whole
@@ -268,8 +305,8 @@ internal static class GroupRelay
             // to the original claimant (the player asking), with its scope intact.
             string before=inquiry[..asked.Index].TrimEnd(),after=inquiry[(asked.Index+asked.Length)..];
             var observer=ReportSubject.Match(before).Groups["observer"].Value;
-            if(Negative.IsMatch(before)||Negative.IsMatch(after)||!UnqualifiedObject(after,expected)||
-               !ClaimantSubject(observer,claimant,expected))return Attribution.Unresolved;
+            if(Negative.IsMatch(before)||Negative.IsMatch(after)||
+               !ClaimantObserved(observer,after,claimant,expected[denial.Length..]))return Attribution.Unresolved;
         }else{
             if(ExtraClause.IsMatch(expected) || !Sight.IsMatch(expected) &&
                 (asksAboutSight||!OtherObservation.IsMatch(expected)))return Attribution.Unresolved;

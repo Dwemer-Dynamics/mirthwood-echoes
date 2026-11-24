@@ -719,6 +719,22 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     found = relay_question(3, speaker, "Who told you about the notice by the field?")[2]
     assert found["source"] == delivered and found["inReplyTo"] == dict(source=claim, speaker="Test player")
     assert relay_question(4, speaker, "Who told you about the notice? Did you personally notice it?")[2] is None
+    # Seeing a map at the mill does not establish a visit to the place it depicts.
+    for verb, questions in (
+        ("saw", (("I saw the map of the harbor", True), ("the map of the harbor was seen by me", True),
+                 ("the harbor had been seen", False), ("I saw the mill", False), ("I saw the map with her at the mill", False))),
+        ("couldn't see", (("I couldn't see the map of the harbor", True), ("I couldn't see the harbor", False))),
+    ):
+        world["cueHead"] = before_relay
+        claim = group_line(1, "player", visitor, original_listeners, f"I {verb} a map of the harbor at the mill. Please tell Miller what I said.")
+        delivered = group_line(2, visitor, speaker, original_listeners, f"Miller, Test player {verb} a map of the harbor at the mill.")
+        for seq, (assertion, expected) in enumerate(questions, 3):
+            selected = relay_question(seq, speaker, f"Who told you that {assertion}?")[2]
+            if expected:
+                assert selected["source"] == delivered and selected["inReplyTo"] == dict(source=claim, speaker="Test player")
+                assert selected.get("reportedSighting") == ("denied" if verb == "couldn't see" else None)
+            else:
+                assert selected is None, assertion
     world["cueHead"] = before_relay
     group_line(1, "player", visitor, original_listeners, "I saw a copper streamer by the field. Please tell Miller about it.")
     unnamed = group_line(2, visitor, speaker, original_listeners, "Miller, there was a copper streamer by the field.")
@@ -726,6 +742,10 @@ def check_world_awareness(api, model, campaign, speaker, twin, checked, base):
     assert teller_only == dict(source=unnamed, heardFrom="Linn", addressedToYou=True, subjectInCurrentLine=["streamer"])
     assert relay_question(4, speaker, "Who told you there was no streamer by the field?")[2] is None
     assert relay_question(5, speaker, "Who told you the streamer by the field was seen by me?")[2] is None
+    for seq, inquiry in enumerate(("Who told you there was a streamer by the field?", "Who mentioned the streamer to you?",
+                                   "Who said the streamer was by the field?"), 6):
+        selected = relay_question(seq, speaker, inquiry)[2]
+        assert selected["source"] == unnamed and selected["heardFrom"] == "Linn" and "inReplyTo" not in selected
     world["cueHead"] = before_relay
     group_line(1, "player", visitor, original_listeners, "I did not see a copper streamer by the field. Please tell Miller about it.")
     denied = group_line(2, visitor, speaker, original_listeners, "Miller, Test player did not see a copper streamer by the field.")
